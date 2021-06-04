@@ -86,6 +86,7 @@ handle_cast(_Request, State) ->
 
 %% TODO create handle_connection_status function?
 handle_info(Msg = {connection_status, Source, Status}, State) ->
+    %% TODO check if node is in map
     send_info(Msg, State),
     State1 = set_node_status(Source, Status, State),
     case is_slot_map_ok(State1) andalso all_nodes_up(State1) of
@@ -107,7 +108,7 @@ handle_info({slot_info, Version, Response}, State) ->
         {ok, {error, Reason}} ->
             %% error sent from redis
             %exit(slot_info_error_from_redis); % TODO: handle
-            send_info({slot_info_error_from_redis, Reason}),
+            send_info({slot_info_error_from_redis, Reason}, State),
             {noreply, State};
         {ok, ClusterSlotsReply} ->
             NewMap = parse_cluster_slots(ClusterSlotsReply),
@@ -115,19 +116,37 @@ handle_info({slot_info, Version, Response}, State) ->
                 true ->
                     {noreply, State};
                 false ->
-                    send_info({slot_map_updated, NewMap}),
-                    {noreply, update_slot_map(NewMap, State)}
+                    State1 = connect_new_nodes(NewMap, State),
+                    %% The order here is important. We want to make sure to give listeners a
+                    %% chance to update their slot map before closing the connections to old
+                    %% nodes. We dont want messages to be routed to missing processes..
+                    send_info({slot_map_updated, ClusterSlotsReply}, State),
+                    State2 = disconnect_old_nodes(NewMap, State1),
+                    {noreply, State2}
             end
+    end;
+
+handle_info({timeout, TimerRef, time_to_update_slots}, State) ->
+    case State#st.timer_ref of
+        TimerRef ->
+            {noreply, start_periodic_slot_info_request(State#st{timer_ref = none})};
+        _ ->
+            {noreply, State}
     end.
 
 
 
-update_slot_map(NewMap, State) ->
-    throw(todo).
+connect_new_nodes(NewMap, State) ->
+    Addrs = [Addr || {_SlotStart, _SlotEnd, Addr} <- NewMap],
+    lists:foldl(fun start_client/2, State, Addrs).
 
-send_info(Msg) ->
-    apa = Msg,
-    ok.
+disconnect_old_nodes(NewMap, State) ->
+    New = [Addr || {_SlotStart, _SlotEnd, Addr} <- NewMap],
+    Old = maps:keys(State#st.nodes),
+    Remove = Old -- New,
+    lists:foldl(fun stop_client/2, State, Remove).
+
+
 
 parse_cluster_slots(ClusterSlotsReply) ->
 
@@ -160,7 +179,7 @@ start_periodic_slot_info_request(State = #st{timer_ref = none}) ->
             send_slot_info_request(Node, State),
             Tref = erlang:start_timer(State#st.update_wait,
                                       self(),
-                                      update_slot_map),
+                                      time_to_update_slots),
             State#st{timer_ref = Tref}
     end;
 start_periodic_slot_info_request(State) ->
@@ -172,7 +191,8 @@ stop_periodic_slot_info_request(State) ->
         none ->
             State;
         Tref ->
-            timer:cancel(Tref)
+            timer:cancel(Tref),
+            State#st{timer_ref = none}
     end.
 
 %% update_slot_map(State) ->
@@ -220,7 +240,7 @@ set_node_status({Pid, Addr, _Id}, Status, State) ->
         {Addr, {_, Pid}} ->
             State#st{default_node = {Addr, {Status, Pid}}};
         _ ->
-            exit({ State#st.default_node, Pid, Addr}),
+    %        exit({ State#st.default_node, Pid, Addr}),
             State#st{nodes = maps:put(Addr, {Status, Pid}, State#st.nodes)}
     end.
 
@@ -272,17 +292,19 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-new_client(Host, Port, State) ->
-    Addr = {Host, Port},
+start_client(Addr, State) ->
     case maps:is_key(Addr, State#st.nodes) of
         true ->
             State;
         false ->
+            {Host, Port} = Addr,
             Opts = [{info_pid, self()}] ++ State#st.client_opts,
             Pid = redis_client:start_link(Host, Port, Opts),
             State#st{nodes = maps:put(Addr, {init, Pid}, State#st.nodes)}
     end.
 
+stop_client(Addr, State) ->
+    error(todo).
 
 %% update_slot_map(Node, State) ->
 %%     Now = erlang:monotonic_time(milli_seconds),

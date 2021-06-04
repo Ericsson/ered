@@ -45,6 +45,9 @@ t_cluster(_) ->
     
     receive apa -> apa after 5000 -> throw(tc_timeout) end.
 
+%% TEST blocked master, slot update other node
+
+
 t_split_data(_) ->
     timer:sleep(5000),
     Data = iolist_to_binary([<<"A">> || _ <- lists:seq(0,3000)]),
