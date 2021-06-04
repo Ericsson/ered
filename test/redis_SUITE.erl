@@ -41,11 +41,26 @@ t_cluster(_) ->
     %% apa = R,
     %% ct:log(info, "~w", [R]),
     receive apa -> apa after 5000 -> ok end,
-    {ok, P} = redis_cluster2:start_link(localhost, 30001, []), % todo localhost?
-    
+    {ok, P} = redis_cluster2:start_link(localhost, 30001, [{info_pid, self()}]),
+
+    {connection_status, _, connection_up} = get_msg(),
+    {slot_map_updated, ClusterSlotsReply} = get_msg(),
+    ct:pal("~p\n", [ClusterSlotsReply]),
+    {connection_status, _, connection_up} = get_msg(),
+    {connection_status, _, connection_up} = get_msg(),
+    {connection_status, _, connection_up} = get_msg(),
+
+    {connection_status, _, fully_connected} = get_msg(),
+    no_more_msgs(),
+
     receive apa -> apa after 5000 -> throw(tc_timeout) end.
 
 %% TEST blocked master, slot update other node
+%% TEST connect no redis instance
+%% TEST cluster move
+%% TEST incomplete map connection status
+%% TEST pipeline
+%% TEST command all
 
 
 t_split_data(_) ->
@@ -56,3 +71,15 @@ t_split_data(_) ->
     <<"OK">> = redis_connection:request(Conn1, [<<"set">>, <<"key1">>, Data]),
     Data = redis_connection:request(Conn1, [<<"get">>, <<"key1">>]),
     ok.
+
+
+
+
+get_msg() ->
+    get_msg(1000).
+
+get_msg(Timeout) ->
+    receive Msg -> Msg after Timeout -> timeout end.
+
+no_more_msgs() ->
+    timeout = get_msg(0).

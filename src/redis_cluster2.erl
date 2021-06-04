@@ -59,7 +59,7 @@ init([Host, Port, Opts]) ->
                  %% ({max_waiting, Val}, S)     -> S#state{waiting = q_new(Val)};
                  %% ({max_pending, Val}, S)     -> S#state{pending = q_new(Val)};
                  %% ({reconnect_wait, Val}, S)  -> S#state{reconnect_wait = Val};
-                 %% ({info_pid, Val}, S)        -> S#state{info_pid = Val};
+                  ({info_pid, Val}, S)        -> S#st{info_pid = Val};
                   ({client_opts, Val}, S)     -> S#st{client_opts = Val};
                   (Other, _)                  -> error({badarg, Other})
               end,
@@ -91,7 +91,7 @@ handle_info(Msg = {connection_status, Source, Status}, State) ->
     State1 = set_node_status(Source, Status, State),
     case is_slot_map_ok(State1) andalso all_nodes_up(State1) of
         true ->
-            %send_info({connection_status, self(), all_up}, State1),
+            send_info({connection_status, self(), fully_connected}, State1),
             {noreply, stop_periodic_slot_info_request(State1)};
         false ->
             {noreply, start_periodic_slot_info_request(State1)}
@@ -122,7 +122,8 @@ handle_info({slot_info, Version, Response}, State) ->
                     %% nodes. We dont want messages to be routed to missing processes..
                     send_info({slot_map_updated, ClusterSlotsReply}, State),
                     State2 = disconnect_old_nodes(NewMap, State1),
-                    {noreply, State2}
+                    {noreply, State2#st{slot_map_version = Version + 1,
+                                        slot_map = NewMap}}
             end
     end;
 
@@ -165,7 +166,9 @@ parse_cluster_slots(ClusterSlotsReply) ->
     %%    <<"848879a1027f7a95ea058f3ca13a08bf4a70d7db">>],
     %%   [<<"127.0.0.1">>,30005,
     %%    <<"6ef9ab5fc9b66b63b469c5f53978a237e65d42ce">>]]]
-    SlotMap = [{SlotStart, SlotEnd, {Ip, Port}}
+
+    %% TODO: Maybe wrap this in a try catch if we get garbage?
+    SlotMap = [{SlotStart, SlotEnd, {binary_to_list(Ip), Port}}
                || [SlotStart, SlotEnd, [Ip, Port |_] | _] <- ClusterSlotsReply],
     lists:sort(SlotMap).
 
@@ -177,9 +180,7 @@ start_periodic_slot_info_request(State = #st{timer_ref = none}) ->
             State;
         [Node|_] ->
             send_slot_info_request(Node, State),
-            Tref = erlang:start_timer(State#st.update_wait,
-                                      self(),
-                                      time_to_update_slots),
+            Tref = erlang:start_timer(State#st.update_wait, self(), time_to_update_slots),
             State#st{timer_ref = Tref}
     end;
 start_periodic_slot_info_request(State) ->
@@ -246,16 +247,41 @@ set_node_status({Pid, Addr, _Id}, Status, State) ->
 
 %% TODO change to node down?
 all_nodes_up(State) ->
-    lists:all([Status == connection_up || {Status, Pid} <- maps:values(State#st.nodes)]).
+    lists:all(fun({Status, _Pid}) -> Status == connection_up end, maps:values(State#st.nodes)).
+%    lists:all([Status == connection_up || {Status, Pid} <- maps:values(State#st.nodes)]).
 
     %% Pred = fun(_Add, {Status, _Pid}) -> Status /= connection_up end,
     %% maps:filter(Pred, State#st.nodes) == #{}.
 
+%% is_slot_map_ok(State) ->
+%%     lists:all(fun({_Slot, Node}) -> Node /= unmapped end, State#st.slot_map)
+%%         andalso State#st.slot_map /= [].
+
+%% is_continuous(16383, []) ->
+%%     true;
+%% is_continuous(Prev, [{Start, Stop} | Rest]) ->
+%%     case Prev + 1 of
+%%         Start ->
+%%             is_continuous(Stop, Rest);
+%%         _Else ->
+%%             false
+%%     end.
+
 is_slot_map_ok(State) ->
-    lists:all(fun({_Slot, Node}) -> Node /= unmapped end, State#st.slot_map)
-        andalso State#st.slot_map /= [].
-
-
+    %% check so that the slot map covers all slots. the slot map is sorted so it
+    %% should be a continuous range
+    R = lists:foldl(fun({Start, Stop, _Addr}, Expect) ->
+                            case Start of
+                                Expect ->
+                                    Stop+1;
+                                _Else ->
+                                    false
+                            end
+                    end,
+                    0,
+                    State#st.slot_map),
+    %% check so last slot is ok
+    R == 16384.
 
 % MERGE?
 %% handle_info({Source, connection_up}, State) ->
