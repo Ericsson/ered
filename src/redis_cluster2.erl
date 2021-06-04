@@ -9,10 +9,14 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3, format_status/2]).
 
--record(st, {default_node, % will be used as default for slot map updates unless down
+
+-type addr() :: {inet:socket_address(), inet:port_number()}.
+-type node_state() :: {pid(), init | connection_up | connection_down}.
+
+-record(st, {default_node :: {addr(), node_state()}, % will be used as default for slot map updates unless down
              update_delay = 1000, % 1s delay between slot map update requests
              client_opts = [],
-             nodes = #{},
+             nodes = #{} :: #{addr() => node_state()},  %  socket address {IP, Port} => {Pid, init | up | down}
 %             node_ids = #{},
              info_pid = none,
              slot_map = [],
@@ -20,6 +24,14 @@
              timer_ref = none,
              update_wait = 500
             }).
+
+
+% TODO
+
+% [ ] setting to allow partial slot maps?
+% [ ] DNS change?
+% [ ] add node if to info
+
 
 % node_id = #{id => sock_addr}
 % node_addr = #{sock_addr => pid}
@@ -53,8 +65,10 @@ init([Host, Port, Opts]) ->
               end,
               #st{},
               Opts),
-    Pid = redis_client:start_link(Host, Port, [{info_pid, self()}] ++ State#st.client_opts),
-    {ok, State#st{default_node = {init, Pid}}}.
+    {ok, Pid} = redis_client:start_link(Host, Port, [{info_pid, self()}] ++ State#st.client_opts),
+    Addr = {Host, Port},
+    NodeState = {init, Pid},
+    {ok, State#st{default_node = {Addr, NodeState}}}.
 
 
 %% handle_info({Pid, Addr, Id}, connection_up, State) ->
@@ -76,12 +90,11 @@ handle_info(Msg = {connection_status, Source, Status}, State) ->
     State1 = set_node_status(Source, Status, State),
     case is_slot_map_ok(State1) andalso all_nodes_up(State1) of
         true ->
-            send_info({connection_status, self(), all_up}, State1),
+            %send_info({connection_status, self(), all_up}, State1),
             {noreply, stop_periodic_slot_info_request(State1)};
         false ->
             {noreply, start_periodic_slot_info_request(State1)}
-    end.
-
+    end;
 
 handle_info({slot_info, Version, Response}, State) ->
     case Response of
@@ -93,21 +106,49 @@ handle_info({slot_info, Version, Response}, State) ->
             {noreply, State};
         {ok, {error, Reason}} ->
             %% error sent from redis
-            exit(slot_info_error_from_redis); % TODO: handle
-        {ok, SlotMap} ->
-            NewMap = convert_slot_map(SlotMap),
+            %exit(slot_info_error_from_redis); % TODO: handle
+            send_info({slot_info_error_from_redis, Reason}),
+            {noreply, State};
+        {ok, ClusterSlotsReply} ->
+            NewMap = parse_cluster_slots(ClusterSlotsReply),
             case NewMap == State#st.slot_map of
                 true ->
                     {noreply, State};
                 false ->
-                    send_info({slot_map_updated, SlotMap}),
+                    send_info({slot_map_updated, NewMap}),
                     {noreply, update_slot_map(NewMap, State)}
             end
     end.
 
 
+
 update_slot_map(NewMap, State) ->
-    
+    throw(todo).
+
+send_info(Msg) ->
+    apa = Msg,
+    ok.
+
+parse_cluster_slots(ClusterSlotsReply) ->
+
+    %% [[10923,16383,
+    %%   [<<"127.0.0.1">>,30003,
+    %%    <<"3d87c864459cb190be1a272e6096435e87721c94">>],
+    %%   [<<"127.0.0.1">>,30006,
+    %%    <<"12d0ac6c30fcbec08555831bf81afe8d5c0c1d4b">>]],
+    %%  [0,5460,
+    %%   [<<"127.0.0.1">>,30001,
+    %%    <<"1127e053184e563727ee7d10f1f4851127f6f064">>],
+    %%   [<<"127.0.0.1">>,30004,
+    %%    <<"2dc6838de2543a104b623bd986013e24e7260eb6">>]],
+    %%  [5461,10922,
+    %%   [<<"127.0.0.1">>,30002,
+    %%    <<"848879a1027f7a95ea058f3ca13a08bf4a70d7db">>],
+    %%   [<<"127.0.0.1">>,30005,
+    %%    <<"6ef9ab5fc9b66b63b469c5f53978a237e65d42ce">>]]]
+    SlotMap = [{SlotStart, SlotEnd, {Ip, Port}}
+               || [SlotStart, SlotEnd, [Ip, Port |_] | _] <- ClusterSlotsReply],
+    lists:sort(SlotMap).
 
 
 start_periodic_slot_info_request(State = #st{timer_ref = none}) ->
@@ -176,14 +217,19 @@ send_info(Msg, #st{info_pid = Pid}) ->
 
 set_node_status({Pid, Addr, _Id}, Status, State) ->
     case State#st.default_node of
-        {_, Pid} -> State#st{default_node = {Status, Pid}};
-        _        -> State#st{nodes = maps:put(Addr, {Status, Pid}, State#st.nodes)}
+        {Addr, {_, Pid}} ->
+            State#st{default_node = {Addr, {Status, Pid}}};
+        _ ->
+            exit({ State#st.default_node, Pid, Addr}),
+            State#st{nodes = maps:put(Addr, {Status, Pid}, State#st.nodes)}
     end.
 
 %% TODO change to node down?
 all_nodes_up(State) ->
-    Pred = fun(_Add, {Status, _Pid}) -> Status /= connection_up end,
-    maps:filter(Pred, State#st.nodes) == #{}.
+    lists:all([Status == connection_up || {Status, Pid} <- maps:values(State#st.nodes)]).
+
+    %% Pred = fun(_Add, {Status, _Pid}) -> Status /= connection_up end,
+    %% maps:filter(Pred, State#st.nodes) == #{}.
 
 is_slot_map_ok(State) ->
     lists:all(fun({_Slot, Node}) -> Node /= unmapped end, State#st.slot_map)

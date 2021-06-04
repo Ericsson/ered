@@ -21,7 +21,7 @@ init_per_suite(Config) ->
 			  {ok,Pid} = redis_client:start_link("127.0.0.1", Port, []),
 			  {ok, <<"PONG">>} = redis_client:request(Pid, <<"ping">>)
 		  end,
-		  [30001, 30002, 30003, 30004, 30005]),
+		  [30001, 30002, 30003, 30004, 30005, 30006]),
     os:cmd(" echo 'yes' | docker run --name redis-cluster --net=host -i redis redis-cli --cluster create 127.0.0.1:30001 127.0.0.1:30002 127.0.0.1:30003 127.0.0.1:30004 127.0.0.1:30005 127.0.0.1:30006 --cluster-replicas 1"),
     [].
 
@@ -36,7 +36,14 @@ end_per_suite(Config) ->
 
 
 t_cluster(_) ->
-    redis_cluster2:start_link("127.0.0.1", 30001, []).
+    %% io:format("hek", []),
+    %% R = os:cmd("redis-cli -p 30001 cluster slots"),
+    %% apa = R,
+    %% ct:log(info, "~w", [R]),
+    receive apa -> apa after 5000 -> ok end,
+    {ok, P} = redis_cluster2:start_link(localhost, 30001, []), % todo localhost?
+    
+    receive apa -> apa after 5000 -> throw(tc_timeout) end.
 
 t_split_data(_) ->
     timer:sleep(5000),
