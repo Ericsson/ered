@@ -52,8 +52,14 @@ t_cluster(_) ->
 
     {connection_status, _, fully_connected} = get_msg(),
     no_more_msgs(),
+    ok.
+    %{connection_status, _, connection_down} = get_msg(),
+    %% Kill a master
+    %os:cmd("redis-cli -p 30002 DEBUG SEGFAULT"),
+   
+    %{connection_status, _, connection_down} = get_msg(60000),
 
-    receive apa -> apa after 5000 -> throw(tc_timeout) end.
+    %receive apa -> apa after 60000 -> throw(tc_timeout) end.
 
 %% TEST blocked master, slot update other node
 %% TEST connect no redis instance
@@ -61,6 +67,7 @@ t_cluster(_) ->
 %% TEST incomplete map connection status
 %% TEST pipeline
 %% TEST command all
+%% TEST manual failover
 
 
 t_split_data(_) ->
