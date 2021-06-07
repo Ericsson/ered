@@ -11,7 +11,7 @@
 
 
 -type addr() :: {inet:socket_address(), inet:port_number()}.
--type node_state() :: {pid(), init | connection_up | connection_down}.
+-type node_state() :: {init | connection_up | connection_down, pid()}.
 
 -record(st, {default_node :: {addr(), node_state()}, % will be used as default for slot map updates unless down
              update_delay = 1000, % 1s delay between slot map update requests
@@ -116,12 +116,16 @@ handle_info({slot_info, Version, Response}, State) ->
                 true ->
                     {noreply, State};
                 false ->
-                    State1 = connect_new_nodes(NewMap, State),
-                    %% The order here is important. We want to make sure to give listeners a
-                    %% chance to update their slot map before closing the connections to old
-                    %% nodes. We dont want messages to be routed to missing processes..
-                    send_info({slot_map_updated, ClusterSlotsReply}, State),
-                    State2 = disconnect_old_nodes(NewMap, State1),
+                    Nodes = [Addr || {_SlotStart, _SlotEnd, Addr} <- NewMap],
+                    State1 = connect_nodes(Nodes, State),
+                    Old = maps:keys(State1#st.nodes),
+                    %% Nodes to be closed. Do not include when sending slot info but do wait to
+                    %% close the connection until the slot info is sent out. We want to make
+                    %% sure that slot maps are updated before closing otherwise messages might
+                    %% be routed to missing processes.
+                    Remove = Old -- Nodes,
+                    send_slot_info(Remove, ClusterSlotsReply, State1),
+                    State2 = disconnect_old_nodes(Remove, State1),
                     {noreply, State2#st{slot_map_version = Version + 1,
                                         slot_map = NewMap}}
             end
@@ -137,16 +141,15 @@ handle_info({timeout, TimerRef, time_to_update_slots}, State) ->
 
 
 
-connect_new_nodes(NewMap, State) ->
-    Addrs = [Addr || {_SlotStart, _SlotEnd, Addr} <- NewMap],
-    lists:foldl(fun start_client/2, State, Addrs).
+connect_nodes(Nodes, State) ->
+    lists:foldl(fun start_client/2, State, Nodes).
 
-disconnect_old_nodes(NewMap, State) ->
-    New = [Addr || {_SlotStart, _SlotEnd, Addr} <- NewMap],
-    Old = maps:keys(State#st.nodes),
-    Remove = Old -- New,
+send_slot_info(Remove, ClusterSlotsReply, State) ->
+    NodeProcs = maps:map(fun(_K, {_Status, Pid}) -> Pid end, maps:without(Remove, State#st.nodes)),
+    send_info({slot_map_updated, {ClusterSlotsReply, NodeProcs}}, State).
+
+disconnect_old_nodes(Remove, State) ->
     lists:foldl(fun stop_client/2, State, Remove).
-
 
 
 parse_cluster_slots(ClusterSlotsReply) ->
@@ -323,7 +326,7 @@ start_client(Addr, State) ->
         false ->
             {Host, Port} = Addr,
             Opts = [{info_pid, self()}] ++ State#st.client_opts,
-            Pid = redis_client:start_link(Host, Port, Opts),
+            {ok, Pid} = redis_client:start_link(Host, Port, Opts),
             State#st{nodes = maps:put(Addr, {init, Pid}, State#st.nodes)}
     end.
 
