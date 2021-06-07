@@ -40,8 +40,9 @@ t_cluster(_) ->
     %% R = os:cmd("redis-cli -p 30001 cluster slots"),
     %% apa = R,
     %% ct:log(info, "~w", [R]),
+    Pid = self(),
     receive apa -> apa after 5000 -> ok end,
-    {ok, P} = redis_cluster2:start_link(localhost, 30001, [{info_pid, self()}]),
+    {ok, P} = redis_cluster2:start_link(localhost, 30001, [{info_cb, fun(Msg) -> Pid ! Msg end}]),
 
     {connection_status, _, connection_up} = get_msg(),
     {slot_map_updated, ClusterSlotsReply} = get_msg(),

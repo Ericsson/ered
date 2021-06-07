@@ -18,7 +18,7 @@
              client_opts = [],
              nodes = #{} :: #{addr() => node_state()},  %  socket address {IP, Port} => {Pid, init | up | down}
 %             node_ids = #{},
-             info_pid = none,
+             info_cb = none,
              slot_map = [],
              slot_map_version = 0,
              timer_ref = none,
@@ -59,7 +59,7 @@ init([Host, Port, Opts]) ->
                  %% ({max_waiting, Val}, S)     -> S#state{waiting = q_new(Val)};
                  %% ({max_pending, Val}, S)     -> S#state{pending = q_new(Val)};
                  %% ({reconnect_wait, Val}, S)  -> S#state{reconnect_wait = Val};
-                  ({info_pid, Val}, S)        -> S#st{info_pid = Val};
+                  ({info_cb, Val}, S)        -> S#st{info_cb = Val};
                   ({client_opts, Val}, S)     -> S#st{client_opts = Val};
                   (Other, _)                  -> error({badarg, Other})
               end,
@@ -230,11 +230,9 @@ pick_node(State) ->
 %%             [Pid || {connection_up, Pid} <- lists:sorted(maps:to_list(State#st.nodes))]
 %%     end.
 
-send_info(Msg, #st{info_pid = Pid}) ->
-    case Pid of
-        none -> ok;
-        _ -> Pid ! Msg
-    end.
+send_info(Msg, #st{info_cb = Fun}) ->
+    [Fun(Msg) || Fun /= none],
+    ok.
 
 set_node_status({Pid, Addr, _Id}, Status, State) ->
     case State#st.default_node of
