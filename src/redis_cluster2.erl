@@ -111,7 +111,7 @@ handle_info({slot_info, Version, Response}, State) ->
             send_info({slot_info_error_from_redis, Reason}, State),
             {noreply, State};
         {ok, ClusterSlotsReply} ->
-            NewMap = parse_cluster_slots(ClusterSlotsReply),
+            NewMap = redis_lib:parse_cluster_slots(ClusterSlotsReply),
             case NewMap == State#st.slot_map of
                 true ->
                     {noreply, State};
@@ -150,30 +150,6 @@ send_slot_info(Remove, ClusterSlotsReply, State) ->
 
 disconnect_old_nodes(Remove, State) ->
     lists:foldl(fun stop_client/2, State, Remove).
-
-
-parse_cluster_slots(ClusterSlotsReply) ->
-
-    %% [[10923,16383,
-    %%   [<<"127.0.0.1">>,30003,
-    %%    <<"3d87c864459cb190be1a272e6096435e87721c94">>],
-    %%   [<<"127.0.0.1">>,30006,
-    %%    <<"12d0ac6c30fcbec08555831bf81afe8d5c0c1d4b">>]],
-    %%  [0,5460,
-    %%   [<<"127.0.0.1">>,30001,
-    %%    <<"1127e053184e563727ee7d10f1f4851127f6f064">>],
-    %%   [<<"127.0.0.1">>,30004,
-    %%    <<"2dc6838de2543a104b623bd986013e24e7260eb6">>]],
-    %%  [5461,10922,
-    %%   [<<"127.0.0.1">>,30002,
-    %%    <<"848879a1027f7a95ea058f3ca13a08bf4a70d7db">>],
-    %%   [<<"127.0.0.1">>,30005,
-    %%    <<"6ef9ab5fc9b66b63b469c5f53978a237e65d42ce">>]]]
-
-    %% TODO: Maybe wrap this in a try catch if we get garbage?
-    SlotMap = [{SlotStart, SlotEnd, {binary_to_list(Ip), Port}}
-               || [SlotStart, SlotEnd, [Ip, Port |_] | _] <- ClusterSlotsReply],
-    lists:sort(SlotMap).
 
 
 start_periodic_slot_info_request(State = #st{timer_ref = none}) ->

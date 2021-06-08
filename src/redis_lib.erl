@@ -1,6 +1,32 @@
 -module(redis_lib).
 
--export([hash/1]).
+-export([hash/1,
+        parse_cluster_slots/1]).
+
+
+parse_cluster_slots(ClusterSlotsReply) ->
+
+    %% [[10923,16383,
+    %%   [<<"127.0.0.1">>,30003,
+    %%    <<"3d87c864459cb190be1a272e6096435e87721c94">>],
+    %%   [<<"127.0.0.1">>,30006,
+    %%    <<"12d0ac6c30fcbec08555831bf81afe8d5c0c1d4b">>]],
+    %%  [0,5460,
+    %%   [<<"127.0.0.1">>,30001,
+    %%    <<"1127e053184e563727ee7d10f1f4851127f6f064">>],
+    %%   [<<"127.0.0.1">>,30004,
+    %%    <<"2dc6838de2543a104b623bd986013e24e7260eb6">>]],
+    %%  [5461,10922,
+    %%   [<<"127.0.0.1">>,30002,
+    %%    <<"848879a1027f7a95ea058f3ca13a08bf4a70d7db">>],
+    %%   [<<"127.0.0.1">>,30005,
+    %%    <<"6ef9ab5fc9b66b63b469c5f53978a237e65d42ce">>]]]
+
+    %% TODO: Maybe wrap this in a try catch if we get garbage?
+    SlotMap = [{SlotStart, SlotEnd, {binary_to_list(Ip), Port}}
+               || [SlotStart, SlotEnd, [Ip, Port |_] | _] <- ClusterSlotsReply],
+    lists:sort(SlotMap).
+
 
 hash(Key) ->
     crc16(0, Key) rem 16384.
