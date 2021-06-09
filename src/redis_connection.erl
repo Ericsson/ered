@@ -2,7 +2,6 @@
 
 -export([connect/2, connect/3, connect_async/3, request/2, request/3, request_async/3, request_async_raw/3]).
 
--export([format_request/1]).
 
 
 % record(recvst {socket, refs = [], push_cb}).
@@ -18,7 +17,7 @@ request(Connection, Data) ->
 request(Connection, Data, Timeout) ->
     link(Connection),
     Ref = make_ref(),
-    Connection ! {send, self(), Ref, format_request(Data)},
+    Connection ! {send, self(), Ref, redis_lib:format_request(Data)},
     receive {Ref, Value} ->
             unlink(Connection),
             Value
@@ -28,20 +27,12 @@ request(Connection, Data, Timeout) ->
     end.
 
 request_async(Connection, Data, Ref) ->
-    Connection ! {send, self(), Ref, format_request(Data)},
+    Connection ! {send, self(), Ref, redis_lib:format_request(Data)},
     ok.
 
 request_async_raw(Connection, Data, Ref) ->
     Connection ! {send, self(), Ref, Data},
     ok.
-
-format_request(Data) when is_binary(Data) ->
-    format_request([Data]);
-
-format_request(DataList) ->
-    iolist_to_binary(
-      ["*", integer_to_list(length(DataList)), "\r\n",
-       [["$", integer_to_list(size(Bin)), "\r\n", Bin, "\r\n"] || Bin <- DataList]]).
 
 connect(Host, Port) ->
     connect(Host, Port, []).

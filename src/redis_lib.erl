@@ -1,8 +1,19 @@
 -module(redis_lib).
 
--export([hash/1,
-        parse_cluster_slots/1]).
+-export([format_request/1,
+         parse_cluster_slots/1,
+         hash/1]).
 
+
+
+
+format_request(Data) when is_binary(Data) ->
+    format_request([Data]);
+
+format_request(DataList) ->
+    iolist_to_binary(
+      ["*", integer_to_list(length(DataList)), "\r\n",
+       [["$", integer_to_list(size(Bin)), "\r\n", Bin, "\r\n"] || Bin <- DataList]]).
 
 parse_cluster_slots(ClusterSlotsReply) ->
 
