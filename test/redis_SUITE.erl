@@ -24,6 +24,10 @@ init_per_suite(Config) ->
 		  end,
 		  [30001, 30002, 30003, 30004, 30005, 30006]),
     os:cmd(" echo 'yes' | docker run --name redis-cluster --net=host -i redis redis-cli --cluster create 127.0.0.1:30001 127.0.0.1:30002 127.0.0.1:30003 127.0.0.1:30004 127.0.0.1:30005 127.0.0.1:30006 --cluster-replicas 1"),
+
+    %% Wait for cluster to be fully up. If not then we get a "CLUSTERDOWN The cluster is down" error when sendong commands.
+    %% TODO set cluster-require-full-coverage to no and see if it helps
+    timer:sleep(5000),
     [].
 
 end_per_suite(Config) ->
@@ -66,11 +70,11 @@ t_cluster_start(_) ->
 
 t_normal_command(_) ->
     R = start_cluster(),
-    receive apa -> apa after 5000 -> ok end, %% TODO remove
     lists:foreach(fun(N) ->
                           {ok, <<"OK">>} = redis:command(R, [<<"SET">>, N, N], N)
                   end,
-                  [integer_to_binary(N) || N <- lists:seq(1,100)]).
+                  [integer_to_binary(N) || N <- lists:seq(1,100)]),
+    no_more_msgs().
 
 
 %% TEST blocked master, slot update other node
