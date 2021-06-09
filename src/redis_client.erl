@@ -3,7 +3,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/3, stop/1, request/2, request/3, request_cb/3]).
+-export([start_link/3, stop/1, request/2, request/3, request_cb/3, request_cb_raw/3]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,

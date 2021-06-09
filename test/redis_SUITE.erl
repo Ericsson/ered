@@ -6,7 +6,8 @@
 -compile([export_all]).
 
 all() ->
-    [t_cluster].
+    [t_cluster_start,
+     t_normal_command].
 %     t_split_data].
 
 init_per_suite(Config) ->
@@ -35,7 +36,7 @@ end_per_suite(Config) ->
 	   "docker stop redis-6; docker rm redis-6").
 
 
-t_cluster(_) ->
+t_cluster_start(_) ->
     %% io:format("hek", []),
     %% R = os:cmd("redis-cli -p 30001 cluster slots"),
     %% apa = R,
@@ -63,6 +64,15 @@ t_cluster(_) ->
 
     %receive apa -> apa after 60000 -> throw(tc_timeout) end.
 
+t_normal_command(_) ->
+    R = start_cluster(),
+    receive apa -> apa after 5000 -> ok end, %% TODO remove
+    lists:foreach(fun(N) ->
+                          {ok, <<"OK">>} = redis:command(R, [<<"SET">>, N, N], N)
+                  end,
+                  [integer_to_binary(N) || N <- lists:seq(1,100)]).
+
+
 %% TEST blocked master, slot update other node
 %% TEST connect no redis instance
 %% TEST cluster move
@@ -83,6 +93,19 @@ t_split_data(_) ->
 
 
 
+
+start_cluster() ->
+    Pid = self(),
+    {ok, P} = redis:start_link(localhost, 30001, [{info_cb, fun(Msg) -> Pid ! Msg end}]),
+    {connection_status, _, connection_up} = get_msg(),
+    {slot_map_updated, _ClusterSlotsReply} = get_msg(),
+    {connection_status, _, connection_up} = get_msg(),
+    {connection_status, _, connection_up} = get_msg(),
+    {connection_status, _, connection_up} = get_msg(),
+
+    {connection_status, _, fully_connected} = get_msg(),
+    no_more_msgs(),
+    P.
 
 get_msg() ->
     get_msg(1000).

@@ -4,7 +4,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/3, command/4]).
+-export([start_link/3, command/3, command/4]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -22,8 +22,12 @@
 start_link(Host, Port, Opts) ->
     gen_server:start_link(?MODULE, [Host, Port, Opts], []).
 
+command(ServerRef, Command, Key) ->
+    command(ServerRef, Command, Key, infinity).
+
 command(ServerRef, Command, Key, Timeout) ->
-    gen_server:call(ServerRef, {command, Command, Key}, Timeout).
+    C = redis_lib:format_request(Command),
+    gen_server:call(ServerRef, {command, C, Key}, Timeout).
 
 %%%===================================================================
 %%% gen_server callbacks
