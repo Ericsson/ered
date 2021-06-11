@@ -4,7 +4,11 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/3, command/3, command/4]).
+-export([start_link/3,
+         command/3, command/4,
+         command_all/2, command_all/3,
+         command_client/2, command_client/3,
+         get_clients/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -13,7 +17,7 @@
 
 -record(st, {cluster_pid :: pid(),
              slots :: binary(),
-             connections = {} :: tuple() % of pid()
+             clients = {} :: tuple() % of pid()
             }).
 
 %%%===================================================================
@@ -28,6 +32,25 @@ command(ServerRef, Command, Key) ->
 command(ServerRef, Command, Key, Timeout) ->
     C = redis_lib:format_request(Command),
     gen_server:call(ServerRef, {command, C, Key}, Timeout).
+
+command_all(ServerRef, Command) ->
+    command_all(ServerRef, Command, infinity).
+
+command_all(ServerRef, Command, Timeout) ->
+    %% Send command in sequence to all instances.
+    %% This could be done in parallel but but keeping it easy and
+    %% aligned with eredis_cluster for now
+    Cmd = redis_lib:format_request(Command),
+    [redis_client:request_raw(ClientRef, Cmd, Timeout) || ClientRef <- get_clients(ServerRef)].
+
+command_client(ClientRef, Command) ->
+    command_client(ClientRef, Command, infinity).
+
+command_client(ClientRef, Command, Timeout) ->
+    redis_client:request(ClientRef, Command, Timeout).
+
+get_clients(ServerRef) ->
+    gen_server:call(ServerRef, get_clients).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -48,18 +71,18 @@ init([Host, Port, Opts]) ->
 
 
 handle_call({slot_map_updated, {ClusterMap, AddrToPid}}, _From, State) ->
-    %% The idea is to store the connection pids in a tuple and then
+    %% The idea is to store the client pids in a tuple and then
     %% have a binary where each byte corresponds to a slot and the
     %% value maps to a index in the tuple.
 
-    %% Create a list of indices, one for each connection pid
+    %% Create a list of indices, one for each client pid
     Ixs = lists:seq(1, maps:size(AddrToPid)),
     %% Combine the indices with the Addresses to create a lookup from Addr -> Ix
     AddrToIx = maps:from_list(lists:zip(maps:keys(AddrToPid), Ixs)),
 
     Slots = create_lookup_table(ClusterMap, AddrToIx),
-    Connections = create_connection_pid_tuple(AddrToPid, AddrToIx),
-    {reply, ok, State#st{slots = Slots, connections = Connections}};
+    Clients = create_client_pid_tuple(AddrToPid, AddrToIx),
+    {reply, ok, State#st{slots = Slots, clients = Clients}};
 
 handle_call({command, Command, Key}, From, State) ->
     Slot = redis_lib:hash(Key),
@@ -67,11 +90,50 @@ handle_call({command, Command, Key}, From, State) ->
         0 ->
             {reply, {error, unmapped_slot}, State};
         Ix ->
-            Connection = element(Ix, State#st.connections),
+            Client = element(Ix, State#st.clients),
             Fun = fun(Reply) -> gen_server:reply(From, Reply) end,
-            redis_client:request_cb_raw(Connection, Command, Fun),
+            redis_client:request_cb_raw(Client, Command, Fun),
             {noreply, State}
-    end.
+    end;
+
+handle_call(get_clients, From, State) ->
+    {reply, tuple_to_list(State#st.clients), State}.
+
+
+%% handle_call({command_all, Command}, From, State) ->
+%%     Clients = tuple_to_list(State#st.clients),
+%%     Pid = spawn_link(
+%%             fun() ->
+%%                     %% TODO add timeout?
+%%                     Result = [receive {Client, Reply} -> Reply end || Client <- Clients],
+%%                     gen_server:reply(From, Result)
+%%             end),
+%%     lists:foreach(
+%%       fun(Client) ->
+%%               Fun = fun(Reply) -> Pid ! {Client, Reply} end,
+%%               redis_client:request_cb_raw(Client, Command, Fun)
+%%       end,
+%%       Clients),
+%%     {noreply, State}.
+
+
+%% handle_call({eval_all, Fun}, From, State) ->
+%%     Clients = tuple_to_list(State#st.clients),
+%%     Pid = spawn_link(
+%%             fun() ->
+%%                     %% TODO add timeout?
+%%                     Result = [receive {Client, Reply} -> Reply end || Client <- Clients],
+%%                     gen_server:reply(From, Result)
+%%             end),
+%%     lists:foreach(
+%%       fun(Client) ->
+%%               Reply = Fun(Client),
+%%               Pid ! {Client, Reply}
+%%       end,
+%%       Clients),
+%%     {noreply, State}.
+
+
 
 
 handle_cast(_Request, State) ->
@@ -105,7 +167,7 @@ info_cb(Pid, Msg) ->
             ignore
     end.
 
-create_connection_pid_tuple(AddrToPid, AddrToIx) ->
+create_client_pid_tuple(AddrToPid, AddrToIx) ->
     %% Create a list with tuples where the first element is the index and the second is the pid
     IxPid = [{maps:get(Addr, AddrToIx), Pid} || {Addr, Pid} <- maps:to_list(AddrToPid)],
     %% Sort the list and remove the index to get the pids in the right order

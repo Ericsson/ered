@@ -7,7 +7,9 @@
 
 all() ->
     [t_cluster_start,
-     t_normal_command].
+     t_command,
+     t_command_all,
+     t_command_client].
 %     t_split_data].
 
 init_per_suite(Config) ->
@@ -68,7 +70,7 @@ t_cluster_start(_) ->
 
     %receive apa -> apa after 60000 -> throw(tc_timeout) end.
 
-t_normal_command(_) ->
+t_command(_) ->
     R = start_cluster(),
     lists:foreach(fun(N) ->
                           {ok, <<"OK">>} = redis:command(R, [<<"SET">>, N, N], N)
@@ -77,12 +79,35 @@ t_normal_command(_) ->
     no_more_msgs().
 
 
+t_command_all(_) ->
+    R = start_cluster(),
+    [{ok, <<"PONG">>}, {ok, <<"PONG">>}, {ok, <<"PONG">>}] = redis:command_all(R, [<<"PING">>]),
+    no_more_msgs().
+
+
+t_command_client(_) ->
+    R = start_cluster(),
+    lists:foreach(fun(N) ->
+                          {ok, <<"OK">>} = redis:command(R, [<<"SET">>, N, N], N)
+                  end,
+                  [integer_to_binary(N) || N <- lists:seq(1,100)]),
+    Keys = lists:foldl(fun(Client, Acc) ->
+                               scan_helper(Client, <<"0">>, Acc)
+                       end,
+                       [],
+                       redis:get_clients(R)),
+    Match = lists:seq(1,100),
+    Match = lists:sort([binary_to_integer(N) || N <- lists:flatten(Keys)]),
+    no_more_msgs().
+
+        
+
+    
 %% TEST blocked master, slot update other node
 %% TEST connect no redis instance
 %% TEST cluster move
 %% TEST incomplete map connection status
 %% TEST pipeline
-%% TEST command all
 %% TEST manual failover
 
 
@@ -119,3 +144,13 @@ get_msg(Timeout) ->
 
 no_more_msgs() ->
     timeout = get_msg(0).
+
+scan_helper(Client, Curs0, Acc0) ->
+    {ok, [Curs1, Keys]} = redis:command_client(Client, [<<"SCAN">>, Curs0]),
+    Acc1 = [Keys|Acc0],
+    case Curs1 of
+        <<"0">> ->
+            Acc1;
+        _ ->
+            scan_helper(Client, Curs1, Acc1)
+    end.

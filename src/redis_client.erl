@@ -3,7 +3,16 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/3, stop/1, request/2, request/3, request_cb/3, request_cb_raw/3]).
+
+
+
+-export([start_link/3,
+         stop/1,
+         request/2,
+         request/3,
+         request_raw/3,
+         request_cb/3,
+         request_cb_raw/3]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -33,7 +42,10 @@ request(ServerRef, Request) ->
     request(ServerRef, Request, infinity).
 
 request(ServerRef, Request, Timeout) ->
-    gen_server:call(ServerRef, {request, redis_lib:format_request(Request)}, Timeout).
+    request_raw(ServerRef, redis_lib:format_request(Request), Timeout).
+
+request_raw(ServerRef, Request, Timeout) ->
+    gen_server:call(ServerRef, {request, Request}, Timeout).
 
 request_cb(ServerRef, Request, CallbackFun) ->
     request_cb_raw(ServerRef, redis_lib:format_request(Request), CallbackFun).
