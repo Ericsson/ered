@@ -119,7 +119,7 @@ get_timeout(SendTime, Timeout) ->
     end.
 
 send_loop(Socket, RecvPid, BatchSize) ->
-    {Refs, Datas} = lists:unzip([{{Pid, Ref}, Data} || {send, Pid, Ref, Data} <- receive_multiple(BatchSize)]),
+    {Refs, Datas} = lists:unzip([{{Pid, Ref}, Data} || {send, Pid, Ref, {redis_command, Data}} <- receive_multiple(BatchSize)]),
     Time = erlang:monotonic_time(millisecond),
     case gen_tcp:send(Socket, Datas) of
         ok ->

@@ -41,7 +41,7 @@ command_all(ServerRef, Command, Timeout) ->
     %% This could be done in parallel but but keeping it easy and
     %% aligned with eredis_cluster for now
     Cmd = redis_lib:format_request(Command),
-    [redis_client:request_raw(ClientRef, Cmd, Timeout) || ClientRef <- get_clients(ServerRef)].
+    [redis_client:request(ClientRef, Cmd, Timeout) || ClientRef <- get_clients(ServerRef)].
 
 command_client(ClientRef, Command) ->
     command_client(ClientRef, Command, infinity).
@@ -92,7 +92,7 @@ handle_call({command, Command, Key}, From, State) ->
         Ix ->
             Client = element(Ix, State#st.clients),
             Fun = fun(Reply) -> gen_server:reply(From, Reply) end,
-            redis_client:request_cb_raw(Client, Command, Fun),
+            redis_client:request_cb(Client, Command, Fun),
             {noreply, State}
     end;
 

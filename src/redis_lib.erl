@@ -5,15 +5,17 @@
          hash/1]).
 
 
-
+format_request(Command = {redis_command, _}) ->
+    Command;
 
 format_request(Data) when is_binary(Data) ->
     format_request([Data]);
 
 format_request(DataList) ->
-    iolist_to_binary(
-      ["*", integer_to_list(length(DataList)), "\r\n",
-       [["$", integer_to_list(size(Bin)), "\r\n", Bin, "\r\n"] || Bin <- DataList]]).
+    Len = integer_to_list(length(DataList)),
+    Elements = [["$", integer_to_list(size(Bin)), "\r\n", Bin, "\r\n"] || Bin <- DataList],
+    Command = iolist_to_binary(["*", Len, "\r\n", Elements]),
+    {redis_command, Command}.
 
 parse_cluster_slots(ClusterSlotsReply) ->
 
