@@ -34,7 +34,7 @@ request_t() ->
 
 fail_connect_t() ->
     {ok,Pid} = redis_client:start_link("127.0.0.1", 0, [{info_pid, self()}]),
-    {Pid, {connection_down,{connect_error,econnrefused}}} = get_msg(),
+    {connect_error,econnrefused} = expect_connection_down(Pid),
     % make sure there are no more connection down messages
     timeout = receive _ -> ok after 500 -> timeout end.
 
@@ -59,9 +59,9 @@ fail_parse_t() ->
     spawn_link(fun() ->
 		       Pid ! redis_client:request(Client, <<"ping">>)
 	       end),
-    {Client, connection_up} = get_msg(),
-    {Client, {connection_down,{parse_error,{invalid_data,<<"&pong">>}}}} = get_msg(),
-    {Client, connection_up} = get_msg(),
+    expect_connection_up(Client),
+    {parse_error,{invalid_data,<<"&pong">>}} = expect_connection_down(Client),
+    expect_connection_up(Client),
     {ok, <<"pong">>} = get_msg().
 
 
@@ -77,9 +77,9 @@ server_close_socket_t() ->
 		       receive ok -> ok end
 	       end),
     {ok, Client} = redis_client:start_link("127.0.0.1", Port, [{info_pid, self()}]),
-    {Client, connection_up} = get_msg(),
-    {Client, {connection_down,{recv_error, closed}}} = get_msg(),
-    {Client, connection_up} = get_msg().
+    expect_connection_up(Client),
+    {recv_error, closed} = expect_connection_down(Client),
+    expect_connection_up(Client).
 
 
 bad_request_t() ->
@@ -90,7 +90,7 @@ bad_request_t() ->
 		       receive ok -> ok end
 	       end),
     {ok, Client} = redis_client:start_link("127.0.0.1", Port, [{info_pid, self()}]),
-    {Client, connection_up} = get_msg(),
+    expect_connection_up(Client),
     ?_assertException(error, badarg, redis_client:request(Client, bad_request)).
 
 
@@ -119,7 +119,7 @@ server_buffer_full_t() ->
 		       receive ok -> ok end
 	       end),
     {ok, Client} = redis_client:start_link("127.0.0.1", Port, [{info_pid, self()}, {max_waiting, 5}, {max_pending, 5}]),
-    {Client, connection_up} = get_msg(),
+    expect_connection_up(Client),
 
     Pid = self(),
     [redis_client:request_cb(Client, <<"ping">>, fun(Reply) -> Pid ! {N, Reply} end) || N <- lists:seq(1,11)],
@@ -151,14 +151,14 @@ server_buffer_full_reconnect_t() ->
 
 	       end),
     {ok, Client} = redis_client:start_link("127.0.0.1", Port, [{info_pid, self()}, {max_waiting, 5}, {max_pending, 5}]),
-    {Client, connection_up} = get_msg(),
+    expect_connection_up(Client),
 
     Pid = self(),
     [redis_client:request_cb(Client, <<"ping">>, fun(Reply) -> Pid ! {N, Reply} end) || N <- lists:seq(1,11)],
     {6, {error, queue_overflow}} = get_msg(),
-    {Client, {connection_down,{recv_error, closed}}} = get_msg(),
+    {recv_error, closed} = expect_connection_down(Client),
     [{N, {error, queue_overflow}} = get_msg() || N <- [1,2,3,4,5]],
-    {Client, connection_up} = get_msg(),
+    expect_connection_up(Client),
     [{N, {ok, <<"pong">>}} = get_msg() || N <- [7,8,9,10,11]].
 
 
@@ -186,14 +186,31 @@ send_timeout_t() ->
     {ok, Client} = redis_client:start_link("127.0.0.1", Port, [{info_pid, self()},
 							       {connection_opts, [{response_timeout, 100}]}
 							       ]),
-    {Client, connection_up} = get_msg(),
+    expect_connection_up(Client),
     Pid = self(),
     redis_client:request_cb(Client, <<"ping">>, fun(Reply) -> Pid ! {reply, Reply} end),
     % this should come after max 1000ms
-    {Client, {connection_down, {recv_error,timeout}}} = get_msg(200),
-    {Client, connection_up} = get_msg(),
+    {recv_error,timeout} = expect_connection_down(Client, 200),
+    expect_connection_up(Client),
     {reply, {ok, <<"pong">>}} = get_msg(),
     no_more_msgs().
+
+
+expect_connection_up(Client) ->
+    expect_connection_up(Client, infinity).
+
+expect_connection_up(Client, Timeout) ->
+    %% {connection_status, {<0.258.0>,{"127.0.0.1",55339},undefined}, connection_up}
+    {connection_status, {Client,Addr,_undefined}, connection_up} = get_msg(Timeout).
+
+expect_connection_down(Client) ->
+    expect_connection_down(Client, infinity).
+
+expect_connection_down(Client, Timeout) ->
+    %% {connection_status, {<0.250.0>,{"127.0.0.1",0},undefined}, {connection_down, {connect_error,econnrefused}}}
+    {connection_status, {Client,Addr,_undefined}, {connection_down, Reason}} = get_msg(Timeout),
+    Reason.
+
 
 
 get_msg() ->
