@@ -63,11 +63,9 @@ connect_async(Addr, Port, Opts) ->
 
 recv_loop(Socket, PushCB, Timeout) ->
     fun Loop({ParseResult, Requests}) ->
-            Loop(try
-                     case ParseResult of
-                         {need_more, Bytes, ParserState} -> read_socket(Bytes, ParserState, Requests, Socket, Timeout);
-                         {done, Value, ParserState} -> handle_result(Value, ParserState, Requests, PushCB)
-                     end
+            Loop(try ParseResult of
+                     {need_more, Bytes, ParserState} -> read_socket(Bytes, ParserState, Requests, Socket, Timeout);
+                     {done, Value, ParserState} -> handle_result(Value, ParserState, Requests, PushCB)
                  catch % handle done, parse error, recv error
                      throw:Error -> exit(Error)
                  end)
@@ -123,6 +121,7 @@ send_loop(Socket, RecvPid, BatchSize) ->
     Time = erlang:monotonic_time(millisecond),
     case gen_tcp:send(Socket, Datas) of
         ok ->
+            %% send to recv proc to fetch the response
             RecvPid ! {requests, Refs, Time};
         {error, Reason} ->
             % Give recv_loop time to finish processing
