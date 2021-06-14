@@ -9,7 +9,8 @@ all() ->
     [t_cluster_start,
      t_command,
      t_command_all,
-     t_command_client].
+     t_command_client,
+     t_command_pipeline].
 %     t_split_data].
 
 init_per_suite(Config) ->
@@ -98,6 +99,13 @@ t_command_client(_) ->
                        redis:get_clients(R)),
     Match = lists:seq(1,100),
     Match = lists:sort([binary_to_integer(N) || N <- lists:flatten(Keys)]),
+    no_more_msgs().
+
+
+t_command_pipeline(_) ->
+    R = start_cluster(),
+    Cmds = [[<<"SET">>, <<"{k}1">>, <<"1">>], [<<"SET">>, <<"{k}2">>, <<"2">>]],
+    {ok, [<<"OK">>, <<"OK">>]} = redis:command(R, Cmds, <<"k">>),
     no_more_msgs().
 
         

@@ -11,11 +11,21 @@ format_request(Command = {redis_command, _, _}) ->
 format_request(Data) when is_binary(Data) ->
     format_request([Data]);
 
-format_request(DataList) ->
-    Len = integer_to_list(length(DataList)),
-    Elements = [["$", integer_to_list(size(Bin)), "\r\n", Bin, "\r\n"] || Bin <- DataList],
-    Command = iolist_to_binary(["*", Len, "\r\n", Elements]),
+format_request([]) ->
+    error({badarg, []});
+
+format_request(RawCommands = [E|_]) when is_list(E) ->
+    Commands = [format_command(RawCommand) || RawCommand <- RawCommands],
+    {redis_command, length(RawCommands), Commands};
+
+format_request(RawCommand) ->
+    Command = format_command(RawCommand),
     {redis_command, single, Command}.
+
+format_command(RawCommand) ->
+    Len = integer_to_list(length(RawCommand)),
+    Elements = [["$", integer_to_list(size(Bin)), "\r\n", Bin, "\r\n"] || Bin <- RawCommand],
+    iolist_to_binary(["*", Len, "\r\n", Elements]).
 
 parse_cluster_slots(ClusterSlotsReply) ->
 
