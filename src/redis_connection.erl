@@ -31,7 +31,7 @@ request_async(Connection, Data, Ref) ->
     ok.
 
 request_async_raw(Connection, Data, Ref) ->
-    Connection ! {send, self(), Ref, {redis_command, Data}},
+    Connection ! {send, self(), Ref, {redis_command, 1, Data}},
     ok.
 
 connect(Host, Port) ->
@@ -77,8 +77,10 @@ recv_loop(Socket, PushCB, Timeout) ->
 recv_loop({ParseResult, State}) ->
     Next = try
                case ParseResult of
-                   {need_more, BytesNeeded, ParserState} -> read_socket(BytesNeeded, ParserState, State);
-                   {done, Value, ParserState} -> handle_result(Value, ParserState, State)
+                   {need_more, BytesNeeded, ParserState} ->
+                       read_socket(BytesNeeded, ParserState, State);
+                   {done, Value, ParserState} ->
+                       handle_result(Value, ParserState, State)
                end
            catch % handle done, parse error, recv error
                throw:Error -> exit(Error)
@@ -109,11 +111,21 @@ handle_result({push, Value}, ParserState, State) ->
     PushCB(Value),
     {redis_parser:next(ParserState), State};
 handle_result(Value, ParserState, State) ->
-    {Pid, Ref, State1} = pop_waiting(State),
-    Pid ! {Ref, Value},
-    {redis_parser:next(ParserState), State1}.
-
-
+    {{N, Pid, Ref, Acc}, State1} = pop_waiting(State),
+    %% Check how many replies expected
+    case N of
+        single ->
+            Pid ! {Ref, Value},
+            {redis_parser:next(ParserState), State1};
+        1 ->
+            %% Last one, send the reply
+            Pid ! {Ref, lists:reverse([Value | Acc])},
+            {redis_parser:next(ParserState), State1};
+        _ ->
+            %% More left, save the reply and keep going
+            State2 = push_waiting({N-1, Pid, Ref, [Value | Acc]}, State1),
+            {redis_parser:next(ParserState), State2}
+    end.
 
 get_timeout(State) ->
     case State#recv_st.waiting_since of
@@ -128,8 +140,12 @@ get_timeout(State) ->
 
 pop_waiting(State) ->
     State1 = update_waiting(infinity, State),
-    [{Pid, Ref} | Rest] = State1#recv_st.waiting,
-    {Pid, Ref, State1#recv_st{waiting = Rest}}.
+    [WaitInfo | Rest] = State1#recv_st.waiting,
+    {WaitInfo, State1#recv_st{waiting = Rest}}.
+
+
+push_waiting(WaitInfo,State) ->
+    State#recv_st{waiting = [WaitInfo | State#recv_st.waiting]}.
 
 update_waiting(Timeout, State) when State#recv_st.waiting == [] ->
     case receive Msg -> Msg after Timeout -> timeout end of
@@ -145,7 +161,8 @@ update_waiting(_Timeout, State) ->
 
 
 send_loop(Socket, RecvPid, BatchSize) ->
-    {Refs, Datas} = lists:unzip([{{Pid, Ref}, Data} || {send, Pid, Ref, {redis_command, Data}} <- receive_multiple(BatchSize)]),
+    {Refs, Datas} = lists:unzip([{{N, Pid, Ref, []}, Data} ||
+                                    {send, Pid, Ref, {redis_command, N, Data}} <- receive_multiple(BatchSize)]),
     Time = erlang:monotonic_time(millisecond),
     case gen_tcp:send(Socket, Datas) of
         ok ->

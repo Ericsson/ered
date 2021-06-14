@@ -4,6 +4,9 @@
 
 -compile([export_all]).
 
+
+%% TODO this requires a running redis instance, move to common test
+
 %% push_test() ->
 %%     Pid = self(),
 %%     CB = fun(V) -> Pid ! V end,
