@@ -159,10 +159,10 @@ get_msg() ->
     get_msg(1000).
 
 get_msg(Timeout) ->
-    receive Msg -> Msg after Timeout -> timeout end.
+    receive Msg -> Msg after Timeout -> get_msg_timeout end.
 
 no_more_msgs() ->
-    timeout = get_msg(0).
+    get_msg_timeout = get_msg(0).
 
 scan_helper(Client, Curs0, Acc0) ->
     {ok, [Curs1, Keys]} = redis:command_client(Client, [<<"SCAN">>, Curs0]),
