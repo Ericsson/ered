@@ -53,7 +53,7 @@ start_link(Host, Port, Opts) ->
 %%% gen_server callbacks
 %%%===================================================================
 init([Host, Port, Opts]) ->
-
+    process_flag(trap_exit, true),
     State = lists:foldl(
               fun%% ({connection_opts, Val}, S) -> S#state{connection_opts = Val};
                  %% ({max_waiting, Val}, S)     -> S#state{waiting = q_new(Val)};
@@ -87,14 +87,19 @@ handle_cast(_Request, State) ->
 %% TODO create handle_connection_status function?
 handle_info(Msg = {connection_status, Source, Status}, State) ->
     %% TODO check if node is in map
-    send_info(Msg, State),
-    State1 = set_node_status(Source, Status, State),
-    case is_slot_map_ok(State1) andalso all_nodes_up(State1) of
+    case is_known_node(Source, State) of
         true ->
-            send_info({connection_status, self(), fully_connected}, State1),
-            {noreply, stop_periodic_slot_info_request(State1)};
+            send_info(Msg, State),
+            State1 = set_node_status(Source, Status, State),
+            case is_slot_map_ok(State1) andalso all_nodes_up(State1) of
+                true ->
+                    send_info({connection_status, self(), fully_connected}, State1),
+                    {noreply, stop_periodic_slot_info_request(State1)};
+                false ->
+                    {noreply, start_periodic_slot_info_request(State1)}
+            end;
         false ->
-            {noreply, start_periodic_slot_info_request(State1)}
+            {noreply, State}
     end;
 
 handle_info({slot_info, Version, Response}, State) ->
@@ -137,7 +142,10 @@ handle_info({timeout, TimerRef, time_to_update_slots}, State) ->
             {noreply, start_periodic_slot_info_request(State#st{timer_ref = none})};
         _ ->
             {noreply, State}
-    end.
+    end;
+
+handle_info({'EXIT', _Pid ,client_stopped}, State) ->
+    {noreply, State}.
 
 
 
@@ -213,12 +221,20 @@ send_info(Msg, #st{info_cb = Fun}) ->
     [Fun(Msg) || Fun /= none],
     ok.
 
+
+is_known_node({Pid, Addr, _Id}, State) ->
+    case State#st.default_node of
+        {Addr, {_, Pid}} ->
+            true;
+        _ ->
+            maps:is_key(Addr, State#st.nodes)
+    end.
+
 set_node_status({Pid, Addr, _Id}, Status, State) ->
     case State#st.default_node of
         {Addr, {_, Pid}} ->
             State#st{default_node = {Addr, {Status, Pid}}};
         _ ->
-    %        exit({ State#st.default_node, Pid, Addr}),
             State#st{nodes = maps:put(Addr, {Status, Pid}, State#st.nodes)}
     end.
 
@@ -307,7 +323,11 @@ start_client(Addr, State) ->
     end.
 
 stop_client(Addr, State) ->
-    error(todo).
+    %% It should not be possible to get an error here I think..
+    {{_NodeState, Pid}, NewNodes} = maps:take(Addr, State#st.nodes),
+    redis_client:stop(Pid),
+    State#st{nodes = NewNodes}.
+
 
 %% update_slot_map(Node, State) ->
 %%     Now = erlang:monotonic_time(milli_seconds),

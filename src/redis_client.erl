@@ -32,8 +32,8 @@
 start_link(Host, Port, Opts) ->
     gen_server:start_link(?MODULE, [Host, Port, Opts], []).
 
-stop(_ServerRef) ->
-    todo.
+stop(ServerRef) ->
+    gen_server:stop(ServerRef, client_stopped, infinity).
 
 request(ServerRef, Request) ->
     request(ServerRef, Request, infinity).
@@ -91,7 +91,13 @@ handle_info({'EXIT', _Pid, Reason}, State) ->
 handle_info(do_reconnect, State) ->
     {noreply, start_connect(State)}.
 
-terminate(_Reason, _State) ->
+terminate(Reason, #state{waiting = Waiting, pending = Pending}) ->
+    %% This could be done more gracefully by killing the connection process if up
+    %% and waiting for trailing request replies and incoming requests. This would
+    %% mean introducing a separate stop function and a stopped state.
+    %% For now just cancel all requests and die
+    [reply_request(Request, {error, Reason}) ||  Request <- q_to_list(Pending)],
+    [reply_request(Request, {error, Reason}) ||  Request <- q_to_list(Waiting)],
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -219,6 +225,9 @@ q_out_last({Size, Max, Q}) ->
         {empty, _Q} -> empty;
         {{value, Val}, NewQ} -> {Val, {Size-1, Max, NewQ}}
     end.
+
+q_to_list({_Size, _Max, Q}) ->
+    queue:to_list(Q).
 
 reply_request({request, _, Fun}, Reply) ->
     Fun(Reply).

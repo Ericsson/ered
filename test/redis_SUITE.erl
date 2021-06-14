@@ -10,7 +10,8 @@ all() ->
      t_command,
      t_command_all,
      t_command_client,
-     t_command_pipeline].
+     t_command_pipeline,
+     t_hard_failover].
 %     t_split_data].
 
 init_per_suite(Config) ->
@@ -108,8 +109,18 @@ t_command_pipeline(_) ->
     {ok, [<<"OK">>, <<"OK">>]} = redis:command(R, Cmds, <<"k">>),
     no_more_msgs().
 
-        
-
+t_hard_failover(_) ->
+    R = start_cluster(),
+    %% TODO do not hardcode port
+    os:cmd("redis-cli -p 30002 DEBUG SEGFAULT"),
+    [{ok, <<"PONG">>}, {error,client_stopped}, {ok, <<"PONG">>}] = redis:command_all(R, [<<"PING">>]),
+    %% TODO, improve these messages, too long, maybe a map?
+    {connection_status,{_Pid,{"127.0.0.1",30002},undefined}, {connection_down,{recv_error,closed}}} = get_msg(),
+    {slot_map_updated, _ClusterSlotsReply} = get_msg(),
+    {connection_status, _, connection_up} = get_msg(),
+    {connection_status, _, fully_connected} = get_msg(),
+    [{ok, <<"PONG">>}, {ok, <<"PONG">>}, {ok, <<"PONG">>}] = redis:command_all(R, [<<"PING">>]),
+    no_more_msgs().
     
 %% TEST blocked master, slot update other node
 %% TEST connect no redis instance
