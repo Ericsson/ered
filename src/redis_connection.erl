@@ -31,7 +31,7 @@ request_async(Connection, Data, Ref) ->
     ok.
 
 request_async_raw(Connection, Data, Ref) ->
-    Connection ! {send, self(), Ref, Data},
+    Connection ! {send, self(), Ref, {redis_command, Data}},
     ok.
 
 connect(Host, Port) ->
@@ -91,7 +91,7 @@ read_socket(BytesNeeded, ParserState, State) ->
     case gen_tcp:recv(State1#recv_st.socket, BytesNeeded, WaitTime) of
         {ok, Data} ->
             {redis_parser:continue(Data, ParserState), State1};
-        {error, timeout} when State1#recv_st.waiting_since == undefined ->
+        {error, timeout} when State1#recv_st.waiting == [] ->
             %% no requests pending, try again
             read_socket(BytesNeeded, ParserState, State1);
         {error, Reason} ->
