@@ -54,7 +54,7 @@ trailing_reply_test() ->
     process_flag(trap_exit, true),
     receive sent_big_nasty -> ok end,
     %timer:sleep(500),
-    redis_connection:request_async_raw(Conn1, undefined, apa),
+    redis_connection:request_async_raw(Conn1, undefined, apa), 
 
     % 
     %% redis_connection:request_async(Conn1, [<<"ping">>, <<Data>>], ping2),

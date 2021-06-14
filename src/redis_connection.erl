@@ -61,60 +61,88 @@ connect_async(Addr, Port, Opts) ->
       end).
 
 
-recv_loop(Socket, PushCB, Timeout) ->
-    fun Loop({ParseResult, Requests}) ->
-            Loop(try ParseResult of
-                     {need_more, Bytes, ParserState} -> read_socket(Bytes, ParserState, Requests, Socket, Timeout);
-                     {done, Value, ParserState} -> handle_result(Value, ParserState, Requests, PushCB)
-                 catch % handle done, parse error, recv error
-                     throw:Error -> exit(Error)
-                 end)
-    end({redis_parser:next(redis_parser:init()), {_Requests=[], _Time=undefined}}).
+-record(recv_st, {socket,
+                  push_cb,
+                  timeout,
+                  waiting = [],
+                  waiting_since}).
 
-read_socket(Bytes, ParserState, Requests, Socket, Timeout) ->
-    {_, ReqTime} = UpdatedRequests = update_requests(nonblock, Requests),
-    case gen_tcp:recv(Socket, Bytes, get_timeout(ReqTime, Timeout)) of
+
+recv_loop(Socket, PushCB, Timeout) ->
+    ParseInit = redis_parser:next(redis_parser:init()),
+    State = #recv_st{socket = Socket, push_cb = PushCB, timeout = Timeout},
+    recv_loop({ParseInit, State}).
+
+
+recv_loop({ParseResult, State}) ->
+    Next = try
+               case ParseResult of
+                   {need_more, BytesNeeded, ParserState} -> read_socket(BytesNeeded, ParserState, State);
+                   {done, Value, ParserState} -> handle_result(Value, ParserState, State)
+               end
+           catch % handle done, parse error, recv error
+               throw:Error -> exit(Error)
+           end,
+    recv_loop(Next).
+
+read_socket(BytesNeeded, ParserState, State) ->
+    State1 = update_waiting(0, State),
+    WaitTime = get_timeout(State1),
+    case gen_tcp:recv(State1#recv_st.socket, BytesNeeded, WaitTime) of
         {ok, Data} ->
-            {redis_parser:continue(Data, ParserState), UpdatedRequests};
-        {error, timeout} when ReqTime == undefined ->
+            {redis_parser:continue(Data, ParserState), State1};
+        {error, timeout} when State1#recv_st.waiting_since == undefined ->
             %% no requests pending, try again
-            read_socket(Bytes, ParserState, UpdatedRequests, Socket, Timeout);
+            read_socket(BytesNeeded, ParserState, State1);
         {error, Reason} ->
             throw({recv_error, Reason})
     end.
 
-handle_result({push, Value = [Type|_]}, ParserState, Requests, PushCB)
+handle_result({push, Value = [Type|_]}, ParserState, State)
   when Type == <<"subscribe">>; Type == <<"psubscribe">>; Type == <<"unsubscribe">>; Type == <<"punsubscribe">> ->
     %% Pub/sub in resp3 is a bit quirky. The push is supposed to be out of bound data not connected to any request
     %% but for subscribe and unsubscribe requests the reply will come as a push. The reply for these commands
     %% need to be handled as a regular reply otherwise things get out of sync. This was tested on Redis 6.0.8.
-    handle_result(Value, ParserState, Requests, PushCB);
-handle_result({push, Value}, ParserState, Requests, PushCB) ->
+    handle_result(Value, ParserState, State);
+handle_result({push, Value}, ParserState, State) ->
+    PushCB = State#recv_st.push_cb,
     PushCB(Value),
-    {redis_parser:next(ParserState), Requests};
-handle_result(Value, ParserState, Requests, _PushCB) ->
-    {[{Pid, Ref} | Reqs], ReqTime} = update_requests(block, Requests),
+    {redis_parser:next(ParserState), State};
+handle_result(Value, ParserState, State) ->
+    {Pid, Ref, State1} = pop_waiting(State),
     Pid ! {Ref, Value},
-    {redis_parser:next(ParserState), {Reqs, ReqTime}}.
+    {redis_parser:next(ParserState), State1}.
 
 
-update_requests(Mode, {[], _}) ->
-    Timeout = case Mode of block -> infinity; nonblock -> 0 end,
-    case receive Msg -> Msg after Timeout -> timeout end of
-        {requests, Req, Time} -> {Req, Time};
-        timeout -> {[], undefined};
-        close_down -> throw(done)
-    end;
-update_requests(_, {Req, Time}) ->
-    {Req, Time}.
 
-get_timeout(undefined, Timeout) ->
-    Timeout;
-get_timeout(SendTime, Timeout) ->
-    case Timeout - (erlang:monotonic_time(millisecond) - SendTime) of
-        T when T < 0 -> 0;
-        T -> T
+get_timeout(State) ->
+    case State#recv_st.waiting_since of
+        undefined ->
+            State#recv_st.timeout;
+        Since ->
+            case State#recv_st.timeout - (erlang:monotonic_time(millisecond) - Since) of
+                T when T < 0 -> 0;
+                T -> T
+            end
     end.
+
+pop_waiting(State) ->
+    State1 = update_waiting(infinity, State),
+    [{Pid, Ref} | Rest] = State1#recv_st.waiting,
+    {Pid, Ref, State1#recv_st{waiting = Rest}}.
+
+update_waiting(Timeout, State) when State#recv_st.waiting == [] ->
+    case receive Msg -> Msg after Timeout -> timeout end of
+        {requests, Req, Time} ->
+            State#recv_st{waiting = Req, waiting_since = Time};
+        timeout ->
+            State#recv_st{waiting_since = undefined};
+        close_down ->
+            throw(done)
+    end;
+update_waiting(_Timeout, State) ->
+    State.
+
 
 send_loop(Socket, RecvPid, BatchSize) ->
     {Refs, Datas} = lists:unzip([{{Pid, Ref}, Data} || {send, Pid, Ref, {redis_command, Data}} <- receive_multiple(BatchSize)]),
