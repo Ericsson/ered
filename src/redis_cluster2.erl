@@ -49,9 +49,6 @@ start_link(Host, Port, Opts) ->
 
 update_slots(ServerRef, SlotMapVersion, Node) ->
     gen_server:cast(ServerRef, {trigger_map_update, SlotMapVersion, Node}).
-    
-%% trigger_map_update(Node) ->
-%%     gen_server:cast(?MODULE, {trigger_map_update, Node}).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -75,11 +72,6 @@ init([Host, Port, Opts]) ->
     {ok, State#st{default_node = {Addr, NodeState}}}.
 
 
-%% handle_info({Pid, Addr, Id}, connection_up, State) ->
-%%     State1 = State#st{nodes = maps:put(Addr, {connection_up, Pid, Id}, State#st.nodes}},
-%%     State2 = update_map(State1),
-%%     State3 = report_status(State2),
-%%     {noreply, State3};
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
@@ -219,9 +211,6 @@ stop_periodic_slot_info_request(State) ->
             State#st{timer_ref = none}
     end.
 
-%% update_slot_map(State) ->
-%%     Node = pick_node(State)
-%%     update_slot_map(Node, State).
 
 send_slot_info_request(Node, State) ->
     Pid = self(),
@@ -229,29 +218,12 @@ send_slot_info_request(Node, State) ->
     redis_client:request_cb(Node, [<<"CLUSTER">>, <<"SLOTS">>], Cb ).
 
 
-%% pick_node(State) ->
-%%     case State#st.default_node of
-%%         {connection_up, Pid} ->
-%%             [Pid];
-%%         _  ->
-%%             [Pid || {connection_up, Pid} <- lists:sorted(maps:to_list(State#st.nodes))]
-%%     end.
-
 
 pick_node(State) ->
     %% prioritize default node
     Nodes = [State#st.default_node | lists:sort(maps:to_list(State#st.nodes))],
     [Pid || {_Host, {connection_up, Pid}} <- Nodes].
 
-%% pick_node(State) ->
-%%     %% TODO: How to deal with default_node host name not ip? Can there be a race where there
-%%     %% are two connections to the same server? What if default is slave?
-%%     case maps:get(State#st.default_node, State#st.nodes, undefined) of
-%%         {connection_up, Pid} ->
-%%             [Pid];
-%%         _  ->
-%%             [Pid || {connection_up, Pid} <- lists:sorted(maps:to_list(State#st.nodes))]
-%%     end.
 
 send_info(Msg, #st{info_cb = Fun}) ->
     [Fun(Msg) || Fun /= none],
@@ -277,24 +249,6 @@ set_node_status({Pid, Addr, _Id}, Status, State) ->
 %% TODO change to node down?
 all_nodes_up(State) ->
     lists:all(fun({Status, _Pid}) -> Status == connection_up end, maps:values(State#st.nodes)).
-%    lists:all([Status == connection_up || {Status, Pid} <- maps:values(State#st.nodes)]).
-
-    %% Pred = fun(_Add, {Status, _Pid}) -> Status /= connection_up end,
-    %% maps:filter(Pred, State#st.nodes) == #{}.
-
-%% is_slot_map_ok(State) ->
-%%     lists:all(fun({_Slot, Node}) -> Node /= unmapped end, State#st.slot_map)
-%%         andalso State#st.slot_map /= [].
-
-%% is_continuous(16383, []) ->
-%%     true;
-%% is_continuous(Prev, [{Start, Stop} | Rest]) ->
-%%     case Prev + 1 of
-%%         Start ->
-%%             is_continuous(Stop, Rest);
-%%         _Else ->
-%%             false
-%%     end.
 
 is_slot_map_ok(State) ->
     %% check so that the slot map covers all slots. the slot map is sorted so it
@@ -311,31 +265,6 @@ is_slot_map_ok(State) ->
                     State#st.slot_map),
     %% check so last slot is ok
     R == 16384.
-
-% MERGE?
-%% handle_info({Source, connection_up}, State) ->
-%%     {Pid, Addr, Id} = Source,
-%%     report_status({connection_up, Addr, Id}, State),
-%%     State1 = set_node(Addr, {connection_up, Pid, Id}),
-%%     case {slot_map_state(State1), node_state(State1)} of
-%%      {ok, ok} ->
-%%          report_status(all_up, State1),
-%%          {noreply, stop_periodic_update_slot_map(State1)};
-%%      {_, _} ->
-%%          {noreply, start_periodic_update_slot_map(State1)}
-%%     end;
-
-%% handle_info({Source, connection_down}, State) ->
-%%     {Pid, Addr, Id} = Source,
-%%     report_status({connection_down, Addr, Id}, State),
-%%     State1 = set_node(Addr, {connection_down, Pid, Id}),
-%%     {noreply, start_periodic_update_slot_map(State1)}.
-
-
-
-%% handle_info({'EXIT', _Pid, Reason}, State) ->
-%%     {noreply, connection_error(Reason, State)};
-
 
 
 start_client(Addr, State) ->
@@ -356,18 +285,3 @@ stop_client(Addr, State) ->
     State#st{nodes = NewNodes}.
 
 
-%% update_slot_map(Node, State) ->
-%%     Now = erlang:monotonic_time(milli_seconds),
-%%     TimeSinceLast = Now - maps:get(Node, State#st.update_time, 0),
-%%     SleepTime = case State#st.update_delay - TimeSinceLast of
-%%                  X when X <= 0 -> 0;
-%%                  X -> X
-%%              end,
-%%     Pid = spawn_link(fun() ->
-%%                           timer:sleep(SleepTime),
-%%                           Connection = redis_connection:connect(Host, Port, [{connect_timeout, State#st.update_delay}]),
-%%                           Result = redis_connection:request(Connection, <<"CLUSTER", "SLOTS">>),
-%%                           exit({slot_map, Result})
-%%                   end),
-%%     St#st{proc_pid = Pid,
-%%        update_time = maps:put(Node, Now + SleepTime, State#st.update_time)}.
