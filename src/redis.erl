@@ -17,7 +17,9 @@
 
 -record(st, {cluster_pid :: pid(),
              slots :: binary(),
-             clients = {} :: tuple() % of pid()
+             clients = {} :: tuple(), % of pid()
+             slot_map_version = 0 :: non_neg_integer(),
+             addr_map = {}
             }).
 
 %%%===================================================================
@@ -70,7 +72,7 @@ init([Host, Port, Opts]) ->
     {ok, #st{cluster_pid = ClusterPid, slots = EmptySlots}}.
 
 
-handle_call({slot_map_updated, {ClusterMap, AddrToPid}}, _From, State) ->
+handle_call({slot_map_updated, {ClusterMap, AddrToPid, MapVersion}}, _From, State) ->
     %% The idea is to store the client pids in a tuple and then
     %% have a binary where each byte corresponds to a slot and the
     %% value maps to a index in the tuple.
@@ -82,21 +84,37 @@ handle_call({slot_map_updated, {ClusterMap, AddrToPid}}, _From, State) ->
 
     Slots = create_lookup_table(ClusterMap, AddrToIx),
     Clients = create_client_pid_tuple(AddrToPid, AddrToIx),
-    {reply, ok, State#st{slots = Slots, clients = Clients}};
+    {reply, ok, State#st{slots = Slots,
+                         clients = Clients,
+                         slot_map_version = MapVersion,
+                         addr_map = AddrToPid}};
 
 handle_call({command, Command, Key}, From, State) ->
     Slot = redis_lib:hash(Key),
+    Pid = self(),
     case binary:at(State#st.slots, Slot) of
         0 ->
             {reply, {error, unmapped_slot}, State};
         Ix ->
             Client = element(Ix, State#st.clients),
-            Fun = fun(Reply) -> gen_server:reply(From, Reply) end,
+            Fun = fun(Reply) ->
+                          case special_reply(Reply) of
+                              {moved, Addr} ->
+                                  redis_cluster2:update_slots(State#st.cluster_pid, State#st.slot_map_version, Client),
+                                  gen_server:cast(Pid, {forward_command, Command, From, Addr});
+                                  %gen_server:reply(From, Reply);
+                              % {ask, Addr} -> TODO
+                              % TRAGAIN
+                              % etc..
+                              normal ->
+                                  gen_server:reply(From, Reply)
+                          end
+                  end,
             redis_client:request_cb(Client, Command, Fun),
             {noreply, State}
     end;
 
-handle_call(get_clients, From, State) ->
+handle_call(get_clients, _From, State) ->
     {reply, tuple_to_list(State#st.clients), State}.
 
 
@@ -136,7 +154,16 @@ handle_call(get_clients, From, State) ->
 
 
 
-handle_cast(_Request, State) ->
+handle_cast({forward_command, Command, From, Addr}, State) ->
+    case maps:get(Addr, State#st.addr_map, not_found) of
+        not_found ->
+            %% TODO this will always be the case since we only keep clients open to the masters..
+            gen_server:reply(From, {error, {forward_to_addr_failed, Addr}});
+        Client ->
+            %% TODO special reply handling, move send logic to common help function
+            Fun = fun(Reply) -> gen_server:reply(From, Reply) end,
+            redis_client:request_cb(Client, Command, Fun)
+    end,
     {noreply, State}.
 
 
@@ -179,7 +206,7 @@ create_lookup_table(ClusterMap, AddrToIx) ->
     Slots = [{Start, End, maps:get(Addr,AddrToIx)} || {Start, End, Addr} <- redis_lib:parse_cluster_slots(ClusterMap)],
     create_lookup_table(0, Slots, <<>>).
 
-create_lookup_table(16383, _, Acc) ->
+create_lookup_table(16384, _, Acc) ->
     Acc;
 create_lookup_table(N, [], Acc) ->
     %% no more slots, rest are set to unmapped
@@ -193,3 +220,20 @@ create_lookup_table(N, L = [{Start, End, Val} | Rest], Acc) ->
         true  ->
             create_lookup_table(N, Rest, Acc)
     end.
+
+
+special_reply({ok, [Head|_Tail]}) ->
+    %% only consider the first element for pipeline for now.
+    %% if there are different slots in the pipeline and some are moved then
+    %% it will trigger more MOVED for the other slot when forwarded..
+    special_reply({ok, Head});
+special_reply({ok, {error, <<"MOVED ", Tail/binary>>}}) ->
+    %% looks like this ,<<"MOVED 14039 127.0.0.1:30006">>
+    %% TODO should this be wrapped in a try catch if MOVED is malformed?
+    [_Slot, AddrBin] = binary:split(Tail, <<" ">>),
+    [Host, Port] = binary:split(AddrBin, <<":">>),
+    {moved, {binary_to_list(Host), binary_to_integer(Port)}};
+special_reply(_) ->
+    normal.
+
+

@@ -3,7 +3,8 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/3]).
+-export([start_link/3,
+        update_slots/3]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -20,7 +21,7 @@
 %             node_ids = #{},
              info_cb = none,
              slot_map = [],
-             slot_map_version = 0,
+             slot_map_version = 1,
              timer_ref = none,
              update_wait = 500
             }).
@@ -46,6 +47,9 @@
 start_link(Host, Port, Opts) ->
     gen_server:start_link(?MODULE, [Host, Port, Opts], []).
 
+update_slots(ServerRef, SlotMapVersion, Node) ->
+    gen_server:cast(ServerRef, {trigger_map_update, SlotMapVersion, Node}).
+    
 %% trigger_map_update(Node) ->
 %%     gen_server:cast(?MODULE, {trigger_map_update, Node}).
 
@@ -80,13 +84,22 @@ handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
 
-handle_cast(_Request, State) ->
-    {noreply, State}.
-
+handle_cast({trigger_map_update, SlotMapVersion, Node}, State) ->
+    case SlotMapVersion == State#st.slot_map_version of
+        true ->
+            %% see so the node is up
+            case lists:member(Node, pick_node(State)) of
+                true ->
+                    {noreply, start_periodic_slot_info_request(Node, State)};
+                false ->
+                    {noreply, State}
+            end;
+        false  ->
+            {noreply, State}
+    end.
 
 %% TODO create handle_connection_status function?
 handle_info(Msg = {connection_status, Source, Status}, State) ->
-    %% TODO check if node is in map
     case is_known_node(Source, State) of
         true ->
             send_info(Msg, State),
@@ -139,7 +152,13 @@ handle_info({slot_info, Version, Response}, State) ->
 handle_info({timeout, TimerRef, time_to_update_slots}, State) ->
     case State#st.timer_ref of
         TimerRef ->
-            {noreply, start_periodic_slot_info_request(State#st{timer_ref = none})};
+            State1 = State#st{timer_ref = none},
+            case is_slot_map_ok(State1) andalso all_nodes_up(State1) of
+                false ->
+                    {noreply, start_periodic_slot_info_request(State1)};
+                true ->
+                    {noreply, State1}
+            end;
         _ ->
             {noreply, State}
     end;
@@ -147,32 +166,49 @@ handle_info({timeout, TimerRef, time_to_update_slots}, State) ->
 handle_info({'EXIT', _Pid ,client_stopped}, State) ->
     {noreply, State}.
 
+terminate(_Reason, _State) ->
+    ok.
 
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
+
+format_status(_Opt, Status) ->
+    Status.
+
+%%%===================================================================
+%%% Internal functions
+%%%===================================================================
 
 connect_nodes(Nodes, State) ->
     lists:foldl(fun start_client/2, State, Nodes).
 
 send_slot_info(Remove, ClusterSlotsReply, State) ->
     NodeProcs = maps:map(fun(_K, {_Status, Pid}) -> Pid end, maps:without(Remove, State#st.nodes)),
-    send_info({slot_map_updated, {ClusterSlotsReply, NodeProcs}}, State).
+    MapVersion = State#st.slot_map_version + 1,
+    send_info({slot_map_updated, {ClusterSlotsReply, NodeProcs, MapVersion}}, State).
 
 disconnect_old_nodes(Remove, State) ->
     lists:foldl(fun stop_client/2, State, Remove).
 
 
-start_periodic_slot_info_request(State = #st{timer_ref = none}) ->
+start_periodic_slot_info_request(State) ->
     case pick_node(State) of
         [] ->
             % try again when a node comes up
             State;
         [Node|_] ->
+            start_periodic_slot_info_request(Node, State)
+    end.
+
+start_periodic_slot_info_request(Node, State) ->
+    case State#st.timer_ref of
+        none ->
             send_slot_info_request(Node, State),
             Tref = erlang:start_timer(State#st.update_wait, self(), time_to_update_slots),
-            State#st{timer_ref = Tref}
-    end;
-start_periodic_slot_info_request(State) ->
-    State.
-
+            State#st{timer_ref = Tref};
+        _Else ->
+            State
+    end.
 
 stop_periodic_slot_info_request(State) ->
     case State#st.timer_ref of
@@ -300,17 +336,8 @@ is_slot_map_ok(State) ->
 %% handle_info({'EXIT', _Pid, Reason}, State) ->
 %%     {noreply, connection_error(Reason, State)};
 
-terminate(_Reason, _State) ->
-    ok.
 
-code_change(_OldVsn, State, _Extra) ->
-    {ok, State}.
 
-format_status(_Opt, Status) ->
-    Status.
-%%%===================================================================
-%%% Internal functions
-%%%===================================================================
 start_client(Addr, State) ->
     case maps:is_key(Addr, State#st.nodes) of
         true ->
@@ -344,4 +371,3 @@ stop_client(Addr, State) ->
 %%                   end),
 %%     St#st{proc_pid = Pid,
 %%        update_time = maps:put(Node, Now + SleepTime, State#st.update_time)}.
-

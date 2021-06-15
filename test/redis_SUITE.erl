@@ -11,7 +11,8 @@ all() ->
      t_command_all,
      t_command_client,
      t_command_pipeline,
-     t_hard_failover].
+   %  t_hard_failover,
+     t_manual_failover].
 %     t_split_data].
 
 init_per_suite(Config) ->
@@ -120,6 +121,20 @@ t_hard_failover(_) ->
     {connection_status, _, connection_up} = get_msg(),
     {connection_status, _, fully_connected} = get_msg(),
     [{ok, <<"PONG">>}, {ok, <<"PONG">>}, {ok, <<"PONG">>}] = redis:command_all(R, [<<"PING">>]),
+
+    %% TODO Restart 30002
+    no_more_msgs().
+
+t_manual_failover(_) ->
+    R = start_cluster(),
+    "OK\n" = os:cmd("redis-cli -p 30005 CLUSTER FAILOVER"),
+
+    lists:foreach(fun(N) ->
+%                          {ok, <<"OK">>} = redis:command(R, [<<"SET">>, N, N], N)
+                              {ok, _} = redis:command(R, [<<"SET">>, N, N], N)
+                  end,
+                  [integer_to_binary(N) || N <- lists:seq(1,100)]),
+    
     no_more_msgs().
     
 %% TEST blocked master, slot update other node
