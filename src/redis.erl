@@ -7,7 +7,7 @@
 -export([start_link/3,
          command/3, command/4,
          command_all/2, command_all/3,
-         command_client/2, command_client/3,
+         command_client/2, command_client/3, command_client_cb/3,
          get_clients/1]).
 
 %% gen_server callbacks
@@ -50,6 +50,9 @@ command_client(ClientRef, Command) ->
 
 command_client(ClientRef, Command, Timeout) ->
     redis_client:request(ClientRef, Command, Timeout).
+
+command_client_cb(ClientRef, Command, CallbackFun) ->
+    redis_client:request_cb(ClientRef, Command, CallbackFun).
 
 get_clients(ServerRef) ->
     gen_server:call(ServerRef, get_clients).

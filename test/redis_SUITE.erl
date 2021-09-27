@@ -11,11 +11,13 @@ all() ->
      t_command_all,
      t_command_client,
      t_command_pipeline,
+     t_scan_delete_keys].
    %  t_hard_failover,
-     t_manual_failover].
+   %  t_manual_failover].
 %     t_split_data].
 
 init_per_suite(Config) ->
+    %% TODO use port_command so we can get the exit code here?
     os:cmd("docker run --name redis-1 -d --net=host redis redis-server --cluster-enabled yes --port 30001;"
 	   "docker run --name redis-2 -d --net=host redis redis-server --cluster-enabled yes --port 30002;"
 	   "docker run --name redis-3 -d --net=host redis redis-server --cluster-enabled yes --port 30003;"
@@ -136,7 +138,124 @@ t_manual_failover(_) ->
                   [integer_to_binary(N) || N <- lists:seq(1,100)]),
     
     no_more_msgs().
+
+t_scan_delete_keys(_) ->
+    R = start_cluster(),
+    Clients = redis:get_clients(R),
+    [{ok, _} = redis:command_client(Client, [<<"FLUSHDB">>]) || Client <- Clients],
     
+    Keys = [iolist_to_binary([<<"key">>, integer_to_binary(N)]) || N <- lists:seq(1,10000)],
+    [{ok, _} = redis:command(R, [<<"SET">>, K, <<"dummydata">>], K) || K <- Keys],
+
+    Pid = self(),
+    [spawn_link(fun() -> Pid ! scan_delete(Client) end) || Client <- Clients],
+    [receive ok -> ok end || _ <- Clients],
+
+   % redis:command(R, [<<"UNLINK">>, <<"key1">>], <<"key1">>),
+
+    Size = [redis:command_client(Client,[<<"DBSIZE">>]) || Client <- Clients],
+    0 = lists:sum([N || {ok, N} <- Size]).
+
+
+
+
+scan_delete(Client) ->
+    scan_cmd(Client, <<"0">>),
+    fun Loop(_OutstandingUnlink=0, ScanDone=true) ->
+            ok;
+        Loop(OutstandingUnlink, ScanDone) ->
+            receive
+                {scan, {ok, [<<"0">> ,Keys]}} ->
+                    unlink_cmd(Client, Keys),
+                    Loop(OutstandingUnlink+1, _ScanDone=true);
+
+                {scan, {ok, [Cursor, Keys]}} ->
+                    scan_cmd(Client, Cursor),
+                    unlink_cmd(Client, Keys),
+                    Loop(OutstandingUnlink+1, ScanDone);
+
+                {unlink, {ok, N}} when is_integer(N) ->
+                    Loop(OutstandingUnlink-1, ScanDone);
+
+                Other ->
+                    exit({error, Other})
+            end
+    end(0, false).
+
+
+    
+%% scan_delete_loop(Redis, Client, _OutstandingUnlink=0, ScanDone=true) ->
+%%     ok;
+%% scan_delete_loop(Redis, Client, OutstandingUnlink, ScanDone) ->
+%%     receive
+%%         {scan, {ok, <<"0">>, Keys}} ->
+%%             unlink_cmd(Redis, Client, Keys),
+%%             scan_delete_loop(Redis, Client, OutstandingUnlink+1, _ScanDone=true);
+
+%%         {scan, {ok, Cursor, Keys}} ->
+%%             scan_cmd(Redis, Client, Cursor),
+%%             unlink_cmd(Redis, Client, Keys),
+%%             scan_delete_loop(Redis, Client, OutstandingUnlink+1, ScanDone);
+
+%%         {unlink, {ok, _}} ->
+%%             scan_delete_loop(Redis, Client, OutstandingUnlink-1, ScanDone);
+
+%%         Other ->
+%%             exit({error, Other})
+%%     end.
+
+
+
+%% scan_delete() ->
+%%     scan(<<"0">>),
+%%     fun Loop(<<"0">>, 0) ->
+%%             ok;
+%%         Loop(Apa, N) ->
+%%             receive
+%%                 %% {scan, {ok, <<"0">>, Keys}} ->
+%%                 %%    case redis:request(Redis,  [<<"UNLINK">> | Keys]) of
+%%                 %%        {ok, _} ->
+%%                 %%            do_nothing;
+%%                 %%        Other ->
+%%                 %%            exit(error, Other)
+%%                 %%    end;
+%%                 {scan, {ok, <<"0">>, Keys}} ->
+%%                     unlink_(Keys),
+%%                     Loop(done, N+1);
+%%                 {scan, {ok, Cursor, Keys}} ->
+%%                     scan(Cursor),
+%%                     unlink_(Keys),
+%%                     Loop(not_done, N+1);
+%%                 {unlink, {ok, _}} ->
+%%                     Loop(Cursor, N-1);
+%%                 Other ->
+%%                     exit(error, Other}
+%%             end
+%%     end().
+
+
+scan_cmd(Client, Cursor) ->
+    Pid = self(),
+    Callback = fun(Response) -> Pid ! {scan, Response} end,
+    redis:command_client_cb(Client, [<<"SCAN">>, Cursor, <<"COUNT">>, integer_to_binary(100)], Callback).
+
+unlink_cmd(Client, Keys) ->
+    Pid = self(),
+    Callback = fun(Response) -> Pid ! {unlink, Response} end,
+    redis:command_client_cb(Client, [<<"UNLINK">> | Keys], Callback).
+
+group_by_hash(Keys) ->
+    lists:foldl(fun(Key, Acc) ->
+                        Fun = fun(KeysForSlot) -> [Key|KeysForSlot] end,
+                        maps:update_with(redis_lib:hash(Key), Fun, _Init = [], Acc)
+                end,
+                #{},
+                Keys).
+ 
+
+
+
+
 %% TEST blocked master, slot update other node
 %% TEST connect no redis instance
 %% TEST cluster move
