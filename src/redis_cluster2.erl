@@ -14,7 +14,7 @@
 -type addr() :: {inet:socket_address(), inet:port_number()}.
 -type node_state() :: {init | connection_up | connection_down, pid()}.
 
--record(st, {default_node :: {addr(), node_state()}, % will be used as default for slot map updates unless down
+-record(st, {default_node, %:: {addr(), node_state()}, % will be used as default for slot map updates unless down
              update_delay = 1000, % 1s delay between slot map update requests
              client_opts = [],
              nodes = #{} :: #{addr() => node_state()},  %  socket address {IP, Port} => {Pid, init | up | down}
