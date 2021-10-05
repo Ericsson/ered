@@ -143,38 +143,39 @@ t_scan_delete_keys(_) ->
     R = start_cluster(),
     Clients = redis:get_clients(R),
     [{ok, _} = redis:command_client(Client, [<<"FLUSHDB">>]) || Client <- Clients],
-    
+
     Keys = [iolist_to_binary([<<"key">>, integer_to_binary(N)]) || N <- lists:seq(1,10000)],
     [{ok, _} = redis:command(R, [<<"SET">>, K, <<"dummydata">>], K) || K <- Keys],
 
+    Keys2 = [iolist_to_binary([<<"otherkey">>, integer_to_binary(N)]) || N <- lists:seq(1,100)],
+    [{ok, _} = redis:command(R, [<<"SET">>, K, <<"dummydata">>], K) || K <- Keys2],
+
+    %% selectivly delete the otherkey ones
+    %% (this will lead to some SCAN responses being empty, good case to test)
     Pid = self(),
     [spawn_link(fun() -> Pid ! scan_delete(Client) end) || Client <- Clients],
     [receive ok -> ok end || _ <- Clients],
 
-   % redis:command(R, [<<"UNLINK">>, <<"key1">>], <<"key1">>),
-
     Size = [redis:command_client(Client,[<<"DBSIZE">>]) || Client <- Clients],
-    0 = lists:sum([N || {ok, N} <- Size]).
+    10000 = lists:sum([N || {ok, N} <- Size]).
 
 
 
 
 scan_delete(Client) ->
     scan_cmd(Client, <<"0">>),
-    fun Loop(_OutstandingUnlink=0, ScanDone=true) ->
+    fun Loop(_OutstandingUnlink=0, _ScanDone=true) ->
             ok;
         Loop(OutstandingUnlink, ScanDone) ->
             receive
                 {scan, {ok, [<<"0">> ,Keys]}} ->
-                    unlink_cmd(Client, Keys),
-                    Loop(OutstandingUnlink+1, _ScanDone=true);
+                    Loop(OutstandingUnlink + unlink_cmd(Client, Keys), _ScanDone=true);
 
                 {scan, {ok, [Cursor, Keys]}} ->
                     scan_cmd(Client, Cursor),
-                    unlink_cmd(Client, Keys),
-                    Loop(OutstandingUnlink+1, ScanDone);
+                    Loop(OutstandingUnlink + unlink_cmd(Client, Keys), ScanDone);
 
-                {unlink, {ok, N}} when is_integer(N) ->
+                {unlink, {ok, Result}} when is_list(Result) ->
                     Loop(OutstandingUnlink-1, ScanDone);
 
                 Other ->
@@ -237,12 +238,15 @@ scan_delete(Client) ->
 scan_cmd(Client, Cursor) ->
     Pid = self(),
     Callback = fun(Response) -> Pid ! {scan, Response} end,
-    redis:command_client_cb(Client, [<<"SCAN">>, Cursor, <<"COUNT">>, integer_to_binary(100)], Callback).
+    redis:command_client_cb(Client, [<<"SCAN">>, Cursor, <<"COUNT">>, integer_to_binary(100), <<"MATCH">>, <<"otherkey*">>], Callback).
 
+unlink_cmd(Client, []) ->
+    0;
 unlink_cmd(Client, Keys) ->
     Pid = self(),
     Callback = fun(Response) -> Pid ! {unlink, Response} end,
-    redis:command_client_cb(Client, [<<"UNLINK">> | Keys], Callback).
+    redis:command_client_cb(Client, [[<<"UNLINK">>, Key] || Key <- Keys], Callback),
+    1.
 
 group_by_hash(Keys) ->
     lists:foldl(fun(Key, Acc) ->
