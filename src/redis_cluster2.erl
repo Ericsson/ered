@@ -251,6 +251,11 @@ all_nodes_up(State) ->
     lists:all(fun({Status, _Pid}) -> Status == connection_up end, maps:values(State#st.nodes)).
 
 is_slot_map_ok(State) ->
+    %% Need at least two nodes in the cluster. During some startup scenarios it
+    %% is possible to have a intermittent situation with only one node.
+    length(State#st.slot_map) >= 2 andalso all_slots_covered(State).
+
+all_slots_covered(State) ->
     %% check so that the slot map covers all slots. the slot map is sorted so it
     %% should be a continuous range
     R = lists:foldl(fun({Start, Stop, _Addr}, Expect) ->
