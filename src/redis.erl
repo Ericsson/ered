@@ -5,6 +5,7 @@
 
 %% API
 -export([start_link/3,
+         stop/1,
          command/3, command/4,
          command_all/2, command_all/3,
          command_client/2, command_client/3, command_client_cb/3,
@@ -27,6 +28,9 @@
 %%%===================================================================
 start_link(Host, Port, Opts) ->
     gen_server:start_link(?MODULE, [Host, Port, Opts], []).
+
+stop(ServerRef) ->
+    gen_server:stop(ServerRef).
 
 command(ServerRef, Command, Key) ->
     command(ServerRef, Command, Key, infinity).
@@ -139,7 +143,8 @@ handle_info(_Info, State) ->
     {noreply, State}.
 
 
-terminate(_Reason, _State) ->
+terminate(_Reason, State) ->
+    redis_cluster2:stop(State#st.cluster_pid),
     ok.
 
 

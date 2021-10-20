@@ -33,7 +33,7 @@ start_link(Host, Port, Opts) ->
     gen_server:start_link(?MODULE, [Host, Port, Opts], []).
 
 stop(ServerRef) ->
-    gen_server:stop(ServerRef, client_stopped, infinity).
+    gen_server:stop(ServerRef).
 
 request(ServerRef, Request) ->
     request(ServerRef, Request, infinity).
@@ -96,8 +96,9 @@ terminate(Reason, #state{waiting = Waiting, pending = Pending}) ->
     %% and waiting for trailing request replies and incoming requests. This would
     %% mean introducing a separate stop function and a stopped state.
     %% For now just cancel all requests and die
-    [reply_request(Request, {error, Reason}) ||  Request <- q_to_list(Pending)],
-    [reply_request(Request, {error, Reason}) ||  Request <- q_to_list(Waiting)],
+    Return = {error, {client_stopped, Reason}},
+    [reply_request(Request, Return) ||  Request <- q_to_list(Pending)],
+    [reply_request(Request, Return) ||  Request <- q_to_list(Waiting)],
     ok.
 
 code_change(_OldVsn, State, _Extra) ->

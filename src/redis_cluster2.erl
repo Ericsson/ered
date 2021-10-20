@@ -4,6 +4,7 @@
 
 %% API
 -export([start_link/3,
+         stop/1,
         update_slots/3]).
 
 %% gen_server callbacks
@@ -47,6 +48,9 @@
 start_link(Host, Port, Opts) ->
     gen_server:start_link(?MODULE, [Host, Port, Opts], []).
 
+stop(ServerRef) ->
+    gen_server:stop(ServerRef).
+
 update_slots(ServerRef, SlotMapVersion, Node) ->
     gen_server:cast(ServerRef, {trigger_map_update, SlotMapVersion, Node}).
 
@@ -54,7 +58,7 @@ update_slots(ServerRef, SlotMapVersion, Node) ->
 %%% gen_server callbacks
 %%%===================================================================
 init([Host, Port, Opts]) ->
-    process_flag(trap_exit, true),
+%    process_flag(trap_exit, true),
     State = lists:foldl(
               fun%% ({connection_opts, Val}, S) -> S#state{connection_opts = Val};
                  %% ({max_waiting, Val}, S)     -> S#state{waiting = q_new(Val)};
@@ -153,12 +157,14 @@ handle_info({timeout, TimerRef, time_to_update_slots}, State) ->
             end;
         _ ->
             {noreply, State}
-    end;
+    end.
 
-handle_info({'EXIT', _Pid ,client_stopped}, State) ->
-    {noreply, State}.
+%% handle_info({'EXIT', _Pid , normal}, State) ->
+%%     {noreply, State}.
 
-terminate(_Reason, _State) ->
+terminate(_Reason, State) ->
+    Nodes = [State#st.default_node | maps:to_list(State#st.nodes)],
+    [redis_client:stop(Pid) || {_Host, {_ClientState, Pid}} <- Nodes],
     ok.
 
 code_change(_OldVsn, State, _Extra) ->

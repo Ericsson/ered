@@ -11,10 +11,10 @@ all() ->
      t_command_all,
      t_command_client,
      t_command_pipeline,
-     t_scan_delete_keys].
-   %  t_hard_failover,
-   %  t_manual_failover].
-%     t_split_data].
+     t_scan_delete_keys,
+     t_hard_failover,
+     t_manual_failover,
+     t_split_data].
 
 init_per_suite(Config) ->
     %% TODO use port_command so we can get the exit code here?
