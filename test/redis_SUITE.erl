@@ -271,7 +271,7 @@ group_by_hash(Keys) ->
 t_split_data(_) ->
     timer:sleep(5000),
     Data = iolist_to_binary([<<"A">> || _ <- lists:seq(0,3000)]),
-    Conn1 = redis_connection:connect("127.0.0.1", 30001),
+    {ok, Conn1} = redis_connection:connect("127.0.0.1", 30001),
     redis_connection:request(Conn1, [<<"hello">>, <<"3">>]),
     <<"OK">> = redis_connection:request(Conn1, [<<"set">>, <<"key1">>, Data]),
     Data = redis_connection:request(Conn1, [<<"get">>, <<"key1">>]),

@@ -48,7 +48,7 @@ request_cb(ServerRef, Request, CallbackFun) ->
 %%% gen_server callbacks
 %%%===================================================================
 init([Host, Port, Opts]) ->
-    process_flag(trap_exit, true),
+    %% process_flag(trap_exit, true),
     State = lists:foldl(
               fun({connection_opts, Val}, S) -> S#state{connection_opts = Val};
                  ({max_waiting, Val}, S)     -> S#state{waiting = q_new(Val)};
@@ -69,6 +69,11 @@ handle_call({request, Request}, From, State) ->
 handle_cast(Request, State) ->
     {noreply, new_request(Request, State)}.
 
+handle_info({request_reply, Reply}, State = #state{pending = Pending}) ->
+          {Request, NewPending} = q_out(Pending),
+    reply_request(Request, {ok, Reply}),
+    {noreply, send_waiting(State#state{pending = NewPending})};
+
 handle_info({connected, _Pid}, State) ->
     %% TODO make async
     case init_connection(State) of
@@ -79,14 +84,14 @@ handle_info({connected, _Pid}, State) ->
             {noreply, send_waiting(State#state{connection_state = up})}
     end;
 
-handle_info({request_reply, Reply}, State = #state{pending = Pending}) ->
-          {Request, NewPending} = q_out(Pending),
-    reply_request(Request, {ok, Reply}),
-    {noreply, send_waiting(State#state{pending = NewPending})};
+handle_info({connect_error, _Pid, Reason}, State) ->
+    {noreply, connection_error({connect_error, Reason}, State)};
 
-
-handle_info({'EXIT', _Pid, Reason}, State) ->
+handle_info({socket_closed, _Pid, Reason}, State) ->
     {noreply, connection_error(Reason, State)};
+
+%% handle_info({'EXIT', _Pid, Reason}, State) ->
+%%     {noreply, connection_error(Reason, State)};
 
 handle_info(do_reconnect, State) ->
     {noreply, start_connect(State)}.

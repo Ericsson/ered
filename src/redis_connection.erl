@@ -39,7 +39,12 @@ connect(Host, Port) ->
 
 connect(Host, Port, Opts) ->
     Pid = connect_async(Host, Port, Opts),
-    receive {connected, Pid} -> Pid end.
+    receive
+        {connected, Pid} ->
+            {ok, Pid};
+        {connect_error, Pid, Reason} ->
+            {error, Reason}
+    end.
 
 connect_async(Addr, Port, Opts) ->
     [error({badarg, BadOpt}) || BadOpt <- proplists:get_keys(Opts) -- [batch_size, tcp_options, push_cb, response_timeout]],
@@ -50,17 +55,25 @@ connect_async(Addr, Port, Opts) ->
     Master = self(),
     spawn_link(
       fun() ->
+              SendPid = self(),
               case gen_tcp:connect(Addr, Port, TcpOptions) of
                   {ok, Socket} ->
-                      Master ! {connected, self()},
-                      Pid = spawn_link(fun() -> recv_loop(Socket, PushCb, Timeout) end),
-                      send_loop(Socket, Pid, BatchSize);
+                      Master ! {connected, SendPid},
+                      Pid = spawn_link(fun() ->
+                                               ExitReason = recv_loop(Socket, PushCb, Timeout),
+                                               %% Inform sending process about exit
+                                               SendPid ! ExitReason
+                                       end),
+                      ExitReason = send_loop(Socket, Pid, BatchSize),
+                      Master ! {socket_closed, SendPid, ExitReason};
                   {error, Reason} ->
-                      exit({connect_error, Reason})
+                      Master ! {connect_error, SendPid, Reason}
               end
       end).
 
-
+%% ++++++++++++++++++++++++++++++++++++++
+%% Receive logic
+%% ++++++++++++++++++++++++++++++++++++++
 -record(recv_st, {socket,
                   push_cb,
                   timeout,
@@ -71,21 +84,36 @@ connect_async(Addr, Port, Opts) ->
 recv_loop(Socket, PushCB, Timeout) ->
     ParseInit = redis_parser:next(redis_parser:init()),
     State = #recv_st{socket = Socket, push_cb = PushCB, timeout = Timeout},
-    recv_loop({ParseInit, State}).
-
+    try
+        recv_loop({ParseInit, State})
+    catch
+        % handle done, parse error, recv error
+        throw:Reason ->
+            {recv_exit, Reason}
+    end.
 
 recv_loop({ParseResult, State}) ->
-    Next = try
-               case ParseResult of
-                   {need_more, BytesNeeded, ParserState} ->
-                       read_socket(BytesNeeded, ParserState, State);
-                   {done, Value, ParserState} ->
-                       handle_result(Value, ParserState, State)
-               end
-           catch % handle done, parse error, recv error
-               throw:Error -> exit(Error)
+    Next = case ParseResult of
+               {need_more, BytesNeeded, ParserState} ->
+                   read_socket(BytesNeeded, ParserState, State);
+               {done, Value, ParserState} ->
+                   handle_result(Value, ParserState, State)
            end,
     recv_loop(Next).
+
+%% recv_loop({ParseResult, State}) ->
+%%     Next = try
+%%                case ParseResult of
+%%                    {need_more, BytesNeeded, ParserState} ->
+%%                        read_socket(BytesNeeded, ParserState, State);
+%%                    {done, Value, ParserState} ->
+%%                        handle_result(Value, ParserState, State)
+%%                end
+%%            catch % handle done, parse error, recv error
+%%                throw:Error ->
+%%                    State#recv_state.master_pid ! Error
+%%            end,
+%%     recv_loop(Next).
 
 read_socket(BytesNeeded, ParserState, State) ->
     State1 = update_waiting(0, State),
@@ -97,7 +125,7 @@ read_socket(BytesNeeded, ParserState, State) ->
             %% no requests pending, try again
             read_socket(BytesNeeded, ParserState, State1);
         {error, Reason} ->
-            throw({recv_error, Reason})
+            throw(Reason)
     end.
 
 handle_result({push, Value = [Type|_]}, ParserState, State)
@@ -159,34 +187,116 @@ update_waiting(Timeout, State) when State#recv_st.waiting == [] ->
 update_waiting(_Timeout, State) ->
     State.
 
+%% ++++++++++++++++++++++++++++++++++++++
+%% Send logic
+%% ++++++++++++++++++++++++++++++++++++++
+%% send_loop(Socket, RecvPid, BatchSize) ->
+%%     {Refs, Datas} = lists:unzip([{{N, Pid, Ref, []}, Data} ||
+%%                                     {send, Pid, Ref, {redis_command, N, Data}} <- receive_multiple(BatchSize)]),
+%%     Time = erlang:monotonic_time(millisecond),
+%%     case gen_tcp:send(Socket, Datas) of
+%%         ok ->
+%%             %% send to recv proc to fetch the response
+%%             RecvPid ! {requests, Refs, Time},
+%%             send_loop(Socket, RecvPid, BatchSize);
+%%         {error, Reason} ->
+%%             % Give recv_loop time to finish processing
+%%             process_flag(trap_exit, true),
+%%             % This will shut down recv_loop if it is waiting on socket
+%%             gen_tcp:shutdown(Socket, read_write),
+%%             % This will shut down recv_loop if it is waiting for a reference
+%%             RecvPid ! close_down,
+%%             % Ok, recv done, time to die
+%%             receive {'EXIT', _, _} -> ok end,
+%%             Reason
+%%     end.
+
+
+
+
+%% receive_messages() ->
+%%     receive_multiple(N)
+
+%% collect_data([], Acc) ->
+%%     {data, Acc};
+%% collect_data([{recv_exit, Reason}|_], _Acc) ->
+%%     {recv_exit, Reason};
+%% collect_data([{send, Pid, Ref, {redis_command, N, Data} | Msgs], {Refs, Data}}) ->
+%%     RefInfo = {N, Pid, Ref, []},
+%%     collect_data(Msgs, {RefIn
+
+%% receive_multiple(N) ->
+%%     %% Always get atleast one message
+%%     [receive Msg -> Msg end | receive_multiple_rest(N-1)].
+
+%% receive_multiple_rest(0) ->
+%%     [];
+%% receive_multiple_rest(N) ->
+%%     receive Msg ->
+%%             [Msg | receive_multiple_rest(N-1)]
+%%     after 0 ->
+%%             []
+%%     end.
+
 
 send_loop(Socket, RecvPid, BatchSize) ->
-    {Refs, Datas} = lists:unzip([{{N, Pid, Ref, []}, Data} ||
-                                    {send, Pid, Ref, {redis_command, N, Data}} <- receive_multiple(BatchSize)]),
-    Time = erlang:monotonic_time(millisecond),
-    case gen_tcp:send(Socket, Datas) of
-        ok ->
-            %% send to recv proc to fetch the response
-            RecvPid ! {requests, Refs, Time};
-        {error, Reason} ->
-            % Give recv_loop time to finish processing
-            process_flag(trap_exit, true),
-            % This will shut down recv_loop if it is waiting on socket
-            gen_tcp:shutdown(Socket, read_write),
-            % This will shut down recv_loop if it is waiting for a reference
-            RecvPid ! close_down,
-            % Ok, recv done, time to die
-            receive {'EXIT', _, _} -> exit({send_error, Reason}) end
-    end,
-    send_loop(Socket, RecvPid, BatchSize).
-
-
-receive_multiple(N) -> [receive Msg -> Msg end | receive_multiple_rest(N-1)].
-
-receive_multiple_rest(0) ->
-    [];
-receive_multiple_rest(N) ->
-    receive Msg -> [Msg | receive_multiple_rest(N-1)]
-    after 0 -> []
+    case receive_data(BatchSize) of
+        {recv_exit, Reason} ->
+            {recv_exit, Reason};
+        {data, {Refs, Data}} ->
+            Time = erlang:monotonic_time(millisecond),
+            case gen_tcp:send(Socket, Data) of
+                ok ->
+                    %% send to recv proc to fetch the response
+                    RecvPid ! {requests, Refs, Time},
+                    send_loop(Socket, RecvPid, BatchSize);
+                {error, Reason} ->
+                    %% Give recv_loop time to finish processing
+                    %% This will shut down recv_loop if it is waiting on socket
+                    gen_tcp:shutdown(Socket, read_write),
+                    %% This will shut down recv_loop if it is waiting for a reference
+                    RecvPid ! close_down,
+                    %% Ok, recv done, time to die
+                    receive {recv_exit, _Reason} -> ok end,
+                    {send_exit, Reason}
+            end
     end.
+
+
+
+
+receive_data(N) ->
+    receive_data(N, infinity, []).
+
+receive_data(0, _Time, Acc) ->
+    {data, lists:unzip(lists:reverse(Acc))};
+receive_data(N, Time, Acc) ->
+    receive
+        Msg ->
+            case Msg of
+                {recv_exit, Reason} ->
+                    {recv_exit, Reason};
+                {send, Pid, Ref, {redis_command, Count, Data}} ->
+                    RefInfo = {Count, Pid, Ref, []},
+                    Acc1 = [{RefInfo, Data} | Acc],
+                    receive_data(N, 0, Acc1)
+            end
+    after Time ->
+            receive_data(0, 0, Acc)
+    end.
+
+
+%%     %% Always get atleast one message
+%%     [receive Msg -> Msg end | receive_multiple_rest(N-1)].
+
+%% receive_multiple_rest(0) ->
+%%     [];
+%% receive_multiple_rest(N) ->
+%%     receive Msg ->
+%%             [Msg | receive_multiple_rest(N-1)]
+%%     after Time ->
+%%             []
+%%     end.
+
+
 

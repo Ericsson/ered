@@ -26,7 +26,7 @@
 
 split_data_test() ->
     Data = iolist_to_binary([<<"A">> || _ <- lists:seq(0,3000)]),
-    Conn1 = redis_connection:connect("127.0.0.1", 6379),
+    {ok, Conn1} = redis_connection:connect("127.0.0.1", 6379),
     redis_connection:request(Conn1, [<<"hello">>, <<"3">>]),
     <<"OK">> = redis_connection:request(Conn1, [<<"set">>, <<"key1">>, Data]),
     Data = redis_connection:request(Conn1, [<<"get">>, <<"key1">>]).
@@ -50,11 +50,11 @@ trailing_reply_test() ->
 	       end),
     {port, Port} = receive_msg(),
     %% increase receive buffer to fit the whole nasty data package
-    Conn1 = redis_connection:connect("127.0.0.1", Port, [{batch_size, 1},
-							 {tcp_options, [{recbuf, 524288}]}]),
+    {ok, Conn1} = redis_connection:connect("127.0.0.1", Port, [{batch_size, 1},
+                                                               {tcp_options, [{recbuf, 524288}]}]),
     ?debugFmt("~w", [Conn1]),
     redis_connection:request_async(Conn1, [<<"ping">>], ping1),
-    process_flag(trap_exit, true),
+%    process_flag(trap_exit, true),
     receive sent_big_nasty -> ok end,
     redis_connection:request_async_raw(Conn1, undefined, apa),
     %% make sure the ping is received before the connection is shut down
@@ -63,7 +63,8 @@ trailing_reply_test() ->
 
     receive {ping1, _} -> ok after 2000 -> exit(waiting_for_ping) end,
     ?debugMsg("got ping"),
-    {'EXIT', Conn1, {send_error, einval}} = receive Msg -> Msg end,
+%    {'EXIT', Conn1, {send_error, einval}} = receive Msg -> Msg end,
+    {socket_closed, Conn1, {send_exit, einval}} = receive Msg -> Msg end,
     ensure_empty().
 
 
