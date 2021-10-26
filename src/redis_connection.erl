@@ -3,6 +3,11 @@
 -export([connect/2, connect/3, connect_async/3, request/2, request/3, request_async/3, request_async_raw/3]).
 
 
+%% -type option() ::
+%%         {batch_size, non_neg_integer()} |
+%%         {tcp_options, [inet:inet_backend() | connect_option()]} |
+%%         {push_cb, fun(
+%%          {response_timeout, non_neg_integer()}
 
 % record(recvst {socket, refs = [], push_cb}).
 % f(P), P = redis:connect("192.168.1.5", 6379), redis:request(P, <<"ping\r\n">>).
