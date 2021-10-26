@@ -33,6 +33,7 @@
 % [ ] setting to allow partial slot maps?
 % [ ] DNS change?
 % [ ] add node if to info
+% [ ] Resolve DNS addr
 
 
 % node_id = #{id => sock_addr}
@@ -100,13 +101,7 @@ handle_info(Msg = {connection_status, Source, Status}, State) ->
         true ->
             send_info(Msg, State),
             State1 = set_node_status(Source, Status, State),
-            case is_slot_map_ok(State1) andalso all_nodes_up(State1) of
-                true ->
-                    send_info({connection_status, self(), fully_connected}, State1),
-                    {noreply, stop_periodic_slot_info_request(State1)};
-                false ->
-                    {noreply, start_periodic_slot_info_request(State1)}
-            end;
+            {noreply, check_if_all_is_ok(State1)};
         false ->
             {noreply, State}
     end;
@@ -125,12 +120,12 @@ handle_info({slot_info, Version, Response}, State) ->
             send_info({slot_info_error_from_redis, Reason}, State),
             {noreply, State};
         {ok, ClusterSlotsReply} ->
-            NewMap = redis_lib:parse_cluster_slots(ClusterSlotsReply),
+            NewMap = lists:sort(ClusterSlotsReply),
             case NewMap == State#st.slot_map of
                 true ->
                     {noreply, State};
                 false ->
-                    Nodes = [Addr || {_SlotStart, _SlotEnd, Addr} <- NewMap],
+                    Nodes = [Addr || {_SlotStart, _SlotEnd, Addr} <- redis_lib:parse_cluster_slots(NewMap)],
                     State1 = connect_nodes(Nodes, State),
                     Old = maps:keys(State1#st.nodes),
                     %% Nodes to be closed. Do not include when sending slot info but do wait to
@@ -140,8 +135,8 @@ handle_info({slot_info, Version, Response}, State) ->
                     Remove = Old -- Nodes,
                     send_slot_info(Remove, ClusterSlotsReply, State1),
                     State2 = disconnect_old_nodes(Remove, State1),
-                    {noreply, State2#st{slot_map_version = Version + 1,
-                                        slot_map = NewMap}}
+                    State3 = State2#st{slot_map_version = Version + 1, slot_map = NewMap},
+                    {noreply, check_if_all_is_ok(State3)}
             end
     end;
 
@@ -149,7 +144,7 @@ handle_info({timeout, TimerRef, time_to_update_slots}, State) ->
     case State#st.timer_ref of
         TimerRef ->
             State1 = State#st{timer_ref = none},
-            case is_slot_map_ok(State1) andalso all_nodes_up(State1) of
+            case is_slot_map_ok(State1) andalso all_master_nodes_up(State1) of
                 false ->
                     {noreply, start_periodic_slot_info_request(State1)};
                 true ->
@@ -176,6 +171,14 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+check_if_all_is_ok(State) ->
+    case is_slot_map_ok(State) andalso all_master_nodes_up(State) of
+        true ->
+            send_info({connection_status, self(), fully_connected}, State),
+            stop_periodic_slot_info_request(State);
+        false ->
+            start_periodic_slot_info_request(State)
+    end.
 
 connect_nodes(Nodes, State) ->
     lists:foldl(fun start_client/2, State, Nodes).
@@ -253,8 +256,12 @@ set_node_status({Pid, Addr, _Id}, Status, State) ->
     end.
 
 %% TODO change to node down?
-all_nodes_up(State) ->
-    lists:all(fun({Status, _Pid}) -> Status == connection_up end, maps:values(State#st.nodes)).
+all_master_nodes_up(State) ->
+    MasterNodes = maps:with(redis_lib:slotmap_master_nodes(State#st.slot_map), State#st.nodes),
+    lists:all(fun({Status, _Pid}) -> Status == connection_up end, maps:values(MasterNodes)).
+
+%% all_nodes_up(State) ->
+%%     lists:all(fun({Status, _Pid}) -> Status == connection_up end, maps:values(State#st.nodes)).
 
 is_slot_map_ok(State) ->
     %% Need at least two nodes in the cluster. During some startup scenarios it
@@ -264,7 +271,7 @@ is_slot_map_ok(State) ->
 all_slots_covered(State) ->
     %% check so that the slot map covers all slots. the slot map is sorted so it
     %% should be a continuous range
-    R = lists:foldl(fun({Start, Stop, _Addr}, Expect) ->
+    R = lists:foldl(fun([Start, Stop| _Rest], Expect) ->
                             case Start of
                                 Expect ->
                                     Stop+1;
