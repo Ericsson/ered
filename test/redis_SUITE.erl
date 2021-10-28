@@ -12,7 +12,7 @@ all() ->
      t_command_client,
      t_command_pipeline,
      t_scan_delete_keys,
-%     t_hard_failover,
+     t_hard_failover,
      t_manual_failover,
      t_split_data].
 
@@ -32,7 +32,7 @@ init_per_suite(Config) ->
 		  [30001, 30002, 30003, 30004, 30005, 30006]),
     os:cmd(" echo 'yes' | docker run --name redis-cluster --net=host -i redis redis-cli --cluster create 127.0.0.1:30001 127.0.0.1:30002 127.0.0.1:30003 127.0.0.1:30004 127.0.0.1:30005 127.0.0.1:30006 --cluster-replicas 1"),
 
-    %% Wait for cluster to be fully up. If not then we get a "CLUSTERDOWN The cluster is down" error when sendong commands.
+    %% Wait for cluster to be fully up. If not then we get a "CLUSTERDOWN The cluster is down" error when sending commands.
     %% TODO set cluster-require-full-coverage to no and see if it helps
     timer:sleep(5000),
     [].
@@ -102,7 +102,7 @@ t_command_client(_) ->
                        [],
                        redis:get_clients(R)),
     Match = lists:seq(1,100),
-    Match = lists:sort([binary_to_integer(N) || N <- lists:flatten(Keys)]),
+     Match = lists:sort([binary_to_integer(N) || N <- lists:flatten(Keys)]),
     no_more_msgs().
 
 
@@ -186,57 +186,6 @@ scan_delete(Client) ->
     end(0, false).
 
 
-    
-%% scan_delete_loop(Redis, Client, _OutstandingUnlink=0, ScanDone=true) ->
-%%     ok;
-%% scan_delete_loop(Redis, Client, OutstandingUnlink, ScanDone) ->
-%%     receive
-%%         {scan, {ok, <<"0">>, Keys}} ->
-%%             unlink_cmd(Redis, Client, Keys),
-%%             scan_delete_loop(Redis, Client, OutstandingUnlink+1, _ScanDone=true);
-
-%%         {scan, {ok, Cursor, Keys}} ->
-%%             scan_cmd(Redis, Client, Cursor),
-%%             unlink_cmd(Redis, Client, Keys),
-%%             scan_delete_loop(Redis, Client, OutstandingUnlink+1, ScanDone);
-
-%%         {unlink, {ok, _}} ->
-%%             scan_delete_loop(Redis, Client, OutstandingUnlink-1, ScanDone);
-
-%%         Other ->
-%%             exit({error, Other})
-%%     end.
-
-
-
-%% scan_delete() ->
-%%     scan(<<"0">>),
-%%     fun Loop(<<"0">>, 0) ->
-%%             ok;
-%%         Loop(Apa, N) ->
-%%             receive
-%%                 %% {scan, {ok, <<"0">>, Keys}} ->
-%%                 %%    case redis:request(Redis,  [<<"UNLINK">> | Keys]) of
-%%                 %%        {ok, _} ->
-%%                 %%            do_nothing;
-%%                 %%        Other ->
-%%                 %%            exit(error, Other)
-%%                 %%    end;
-%%                 {scan, {ok, <<"0">>, Keys}} ->
-%%                     unlink_(Keys),
-%%                     Loop(done, N+1);
-%%                 {scan, {ok, Cursor, Keys}} ->
-%%                     scan(Cursor),
-%%                     unlink_(Keys),
-%%                     Loop(not_done, N+1);
-%%                 {unlink, {ok, _}} ->
-%%                     Loop(Cursor, N-1);
-%%                 Other ->
-%%                     exit(error, Other}
-%%             end
-%%     end().
-
-
 scan_cmd(Client, Cursor) ->
     Pid = self(),
     Callback = fun(Response) -> Pid ! {scan, Response} end,
@@ -269,14 +218,14 @@ group_by_hash(Keys) ->
 %% TEST pipeline
 %% TEST manual failover
 %% TEST non-contiguous slots
+%% TEST TCP close from Redis, no alarm
 
+%% Test to send and receive a big data packet. The read should be split
 t_split_data(_) ->
-    timer:sleep(5000),
     Data = iolist_to_binary([<<"A">> || _ <- lists:seq(0,3000)]),
-    {ok, Conn1} = redis_connection:connect("127.0.0.1", 30001),
-    redis_connection:request(Conn1, [<<"hello">>, <<"3">>]),
-    <<"OK">> = redis_connection:request(Conn1, [<<"set">>, <<"key1">>, Data]),
-    Data = redis_connection:request(Conn1, [<<"get">>, <<"key1">>]),
+    R = start_cluster(),
+    {ok, <<"OK">>} = redis:command(R, [<<"SET">>, <<"key1">>, Data], <<"key1">>),
+    {ok, Data} = redis:command(R, [<<"GET">>, <<"key1">>], <<"key1">>),
     ok.
 
 
@@ -297,20 +246,6 @@ start_cluster() ->
     {connection_status, _, fully_connected} = get_msg(),
     no_more_msgs(),
     P.
-
-
-%% start_cluster() ->
-%%     Pid = self(),
-%%     {ok, P} = redis:start_link(localhost, 30001, [{info_cb, fun(Msg) -> Pid ! Msg end}]),
-%%     {connection_status, _, connection_up} = get_msg(),
-%%     {slot_map_updated, _ClusterSlotsReply} = get_msg(),
-%%     {connection_status, _, connection_up} = get_msg(),
-%%     {connection_status, _, connection_up} = get_msg(),
-%%     {connection_status, _, connection_up} = get_msg(),
-
-%%     {connection_status, _, fully_connected} = get_msg(),
-%%     no_more_msgs(),
-%%     P.
 
 
 get_msg() ->
