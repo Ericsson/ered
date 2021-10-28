@@ -34,6 +34,7 @@
 % [ ] DNS change?
 % [ ] add node if to info
 % [ ] Resolve DNS addr
+% [ ] Add master-replica distinction in connection status/ connection status for replica
 
 
 % node_id = #{id => sock_addr}
@@ -95,16 +96,34 @@ handle_cast({trigger_map_update, SlotMapVersion, Node}, State) ->
             {noreply, State}
     end.
 
+%% %% TODO create handle_connection_status function?
+%% handle_info(Msg = {connection_status, Source, Status}, State) ->
+%%     case is_known_node(Source, State) of
+%%         true ->
+%%             send_info(Msg, State),
+%%             State1 = set_node_status(Source, Status, State),
+%%             case is_master_node(Source, State) of
+%%                 true ->
+%%                     {noreply, check_if_all_is_ok(State1)};
+%%                 false ->
+%%                     {noreply, State1}
+%%             end;
+%%         false ->
+%%             {noreply, State}
+%%     end;
+
 %% TODO create handle_connection_status function?
 handle_info(Msg = {connection_status, Source, Status}, State) ->
     case is_known_node(Source, State) of
         true ->
             send_info(Msg, State),
             State1 = set_node_status(Source, Status, State),
-            {noreply, check_if_all_is_ok(State1)};
+            {noreply, handle_connection_status(Source, Status, State1)};
         false ->
             {noreply, State}
     end;
+
+
 
 handle_info({slot_info, Version, Response}, State) ->
     case Response of
@@ -125,7 +144,8 @@ handle_info({slot_info, Version, Response}, State) ->
                 true ->
                     {noreply, State};
                 false ->
-                    Nodes = [Addr || {_SlotStart, _SlotEnd, Addr} <- redis_lib:parse_cluster_slots(NewMap)],
+                    %Nodes = [Addr || {_SlotStart, _SlotEnd, Addr} <- redis_lib:parse_cluster_slots(NewMap)],
+                    Nodes = redis_lib:slotmap_all_nodes(NewMap),
                     State1 = connect_nodes(Nodes, State),
                     Old = maps:keys(State1#st.nodes),
                     %% Nodes to be closed. Do not include when sending slot info but do wait to
@@ -171,6 +191,28 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+handle_connection_status(Source, connection_up, State) ->
+    case is_slot_map_ok(State) andalso all_master_nodes_up(State) of
+        true ->
+            case is_master_node(Source, State) of
+                true ->
+                    send_info({connection_status, self(), fully_connected}, State),
+                    stop_periodic_slot_info_request(State);
+                false ->
+                    State
+            end;
+        false ->
+            start_periodic_slot_info_request(State)
+    end;
+handle_connection_status(Source, {connection_down, _Reason}, State) ->
+    case is_master_node(Source, State) of
+        true ->
+            start_periodic_slot_info_request(State);
+        false ->
+            State
+    end.
+
+
 check_if_all_is_ok(State) ->
     case is_slot_map_ok(State) andalso all_master_nodes_up(State) of
         true ->
@@ -238,6 +280,11 @@ send_info(Msg, #st{info_cb = Fun}) ->
     [Fun(Msg) || Fun /= none],
     ok.
 
+
+is_master_node({_Pid, Addr, _Id}, State) ->
+    MasterNodes = redis_lib:slotmap_master_nodes(State#st.slot_map),
+    io:format("~p -> ~p\n", [Addr, MasterNodes]),
+    lists:member(Addr, MasterNodes).
 
 is_known_node({Pid, Addr, _Id}, State) ->
     case State#st.default_node of

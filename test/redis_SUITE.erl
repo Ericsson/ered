@@ -12,7 +12,7 @@ all() ->
      t_command_client,
      t_command_pipeline,
      t_scan_delete_keys,
-     t_hard_failover,
+%     t_hard_failover,
      t_manual_failover,
      t_split_data].
 
@@ -132,12 +132,14 @@ t_manual_failover(_) ->
     "OK\n" = os:cmd("redis-cli -p 30005 CLUSTER FAILOVER"),
 
     lists:foreach(fun(N) ->
-%                          {ok, <<"OK">>} = redis:command(R, [<<"SET">>, N, N], N)
-                              {ok, _} = redis:command(R, [<<"SET">>, N, N], N)
+%% %                          {ok, <<"OK">>} = redis:command(R, [<<"SET">>, N, N], N)
+                          {ok, _} = redis:command(R, [<<"SET">>, N, N], N)
                   end,
                   [integer_to_binary(N) || N <- lists:seq(1,100)]),
-    
-    no_more_msgs().
+    % {connection_status, _, {connection_down, _}} =  get_msg(),
+    {slot_map_updated, _ClusterSlotsReply} = get_msg(),
+    {connection_status, _, fully_connected} = get_msg().
+
 
 t_scan_delete_keys(_) ->
     R = start_cluster(),
@@ -266,7 +268,7 @@ group_by_hash(Keys) ->
 %% TEST incomplete map connection status
 %% TEST pipeline
 %% TEST manual failover
-
+%% TEST non-contiguous slots
 
 t_split_data(_) ->
     timer:sleep(5000),
@@ -285,13 +287,31 @@ start_cluster() ->
     {ok, P} = redis:start_link(localhost, 30001, [{info_cb, fun(Msg) -> Pid ! Msg end}]),
     {connection_status, _, connection_up} = get_msg(),
     {slot_map_updated, _ClusterSlotsReply} = get_msg(),
-    {connection_status, _, connection_up} = get_msg(),
-    {connection_status, _, connection_up} = get_msg(),
-    {connection_status, _, connection_up} = get_msg(),
+    ok = receive {connection_status, _, connection_up} -> ok after 1000 -> timeout end,
+    ok = receive {connection_status, _, connection_up} -> ok after 1000 -> timeout end,
+    ok = receive {connection_status, _, connection_up} -> ok after 1000 -> timeout end,
+    ok = receive {connection_status, _, connection_up} -> ok after 1000 -> timeout end,
+    ok = receive {connection_status, _, connection_up} -> ok after 1000 -> timeout end,
+    ok = receive {connection_status, _, connection_up} -> ok after 1000 -> timeout end,
 
     {connection_status, _, fully_connected} = get_msg(),
     no_more_msgs(),
     P.
+
+
+%% start_cluster() ->
+%%     Pid = self(),
+%%     {ok, P} = redis:start_link(localhost, 30001, [{info_cb, fun(Msg) -> Pid ! Msg end}]),
+%%     {connection_status, _, connection_up} = get_msg(),
+%%     {slot_map_updated, _ClusterSlotsReply} = get_msg(),
+%%     {connection_status, _, connection_up} = get_msg(),
+%%     {connection_status, _, connection_up} = get_msg(),
+%%     {connection_status, _, connection_up} = get_msg(),
+
+%%     {connection_status, _, fully_connected} = get_msg(),
+%%     no_more_msgs(),
+%%     P.
+
 
 get_msg() ->
     get_msg(1000).

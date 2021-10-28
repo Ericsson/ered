@@ -6,6 +6,7 @@
          parse_cluster_slots/1,
          slotmap_master_slots/1,
          slotmap_master_nodes/1,
+         slotmap_all_nodes/1,
          hash/1]).
 
 
@@ -77,16 +78,21 @@ slotmap_master_slots(ClusterSlotsReply) ->
     %%    <<"6ef9ab5fc9b66b63b469c5f53978a237e65d42ce">>]]]
 
     %% TODO: Maybe wrap this in a try catch if we get garbage?
-    SlotMap = [{SlotStart, SlotEnd, {binary_to_list(Ip), Port}}
-               || [SlotStart, SlotEnd, [Ip, Port |_] | _] <- ClusterSlotsReply],
+    SlotMap = [{SlotStart, SlotEnd, node_info(Master)}
+               || [SlotStart, SlotEnd, Master | _] <- ClusterSlotsReply],
     lists:sort(SlotMap).
 
 slotmap_master_nodes(ClusterSlotsReply) ->
-    Nodes = [{binary_to_list(Ip), Port}
-             || [_SlotStart, _SlotEnd, [Ip, Port |_] | _] <- ClusterSlotsReply],
+    Nodes = [node_info(Master) || [_SlotStart, _SlotEnd, Master | _] <- ClusterSlotsReply],
     lists:sort(Nodes).
 
 
+slotmap_all_nodes(ClusterSlotsReply) ->
+    AllNodes = [lists:map(fun node_info/1, Nodes) || [_SlotStart, _SlotEnd | Nodes] <- ClusterSlotsReply],
+    lists:sort(lists:append(AllNodes)).
+
+node_info([Ip, Port |_]) ->
+    {binary_to_list(Ip), Port}.
 
 hash(Key) ->
     crc16(0, Key) rem 16384.

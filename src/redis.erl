@@ -84,13 +84,14 @@ handle_call({slot_map_updated, {ClusterMap, AddrToPid, MapVersion}}, _From, Stat
     %% have a binary where each byte corresponds to a slot and the
     %% value maps to a index in the tuple.
 
+    MasterAddrToPid = maps:with(redis_lib:slotmap_master_nodes(ClusterMap), AddrToPid),
     %% Create a list of indices, one for each client pid
-    Ixs = lists:seq(1, maps:size(AddrToPid)),
+    Ixs = lists:seq(1, maps:size(MasterAddrToPid)),
     %% Combine the indices with the Addresses to create a lookup from Addr -> Ix
-    AddrToIx = maps:from_list(lists:zip(maps:keys(AddrToPid), Ixs)),
+    AddrToIx = maps:from_list(lists:zip(maps:keys(MasterAddrToPid), Ixs)),
 
     Slots = create_lookup_table(ClusterMap, AddrToIx),
-    Clients = create_client_pid_tuple(AddrToPid, AddrToIx),
+    Clients = create_client_pid_tuple(MasterAddrToPid, AddrToIx),
     {reply, ok, State#st{slots = Slots,
                          clients = Clients,
                          slot_map_version = MapVersion,
