@@ -102,7 +102,7 @@ t_command_client(_) ->
                        [],
                        redis:get_clients(R)),
     Match = lists:seq(1,100),
-     Match = lists:sort([binary_to_integer(N) || N <- lists:flatten(Keys)]),
+    Match = lists:sort([binary_to_integer(N) || N <- lists:flatten(Keys)]),
     no_more_msgs().
 
 
@@ -129,16 +129,53 @@ t_hard_failover(_) ->
 
 t_manual_failover(_) ->
     R = start_cluster(),
-    "OK\n" = os:cmd("redis-cli -p 30005 CLUSTER FAILOVER"),
+    %% "OK\n" = os:cmd("redis-cli -p 30005 CLUSTER FAILOVER"),
+    SlotMaps = redis:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>]),
+    ct:pal("~p\n", [SlotMaps]),
+    [Client|_] = redis:get_clients(R),
+    {ok, SlotMap} = redis:command_client(Client, [<<"CLUSTER">>, <<"SLOTS">>]),
 
+    ct:pal("~p\n", [SlotMap]),
+    %% Get the port of a replica node
+    [[_SlotStart, _SlotEnd, _Master, [_Ip, Port |_] | _] | _] = SlotMap,
+%    "OK\n" = os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " CLUSTER FAILOVER"),
+
+    %% sometimes the manual failover is not successful so loop until it is
+    fun Loop() ->
+            "OK\n" = os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " CLUSTER FAILOVER"),
+            fun Wait(0) ->
+                    Loop();
+                Wait(N) ->
+                    timer:sleep(500),
+                    Role = os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " ROLE"),
+                    ct:pal("~p\n", [Role]),
+                    case lists:prefix("master", Role) of
+                        true ->
+                            true;
+                        false ->
+                            Wait(N-1)
+                    end
+            end(10)
+    end(),
+
+    %% ct:pal("~p\n", [Port]),
+    %% ct:pal("~p\n", [os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " ROLE")]),
+    %% timer:sleep(500),
+    %% ct:pal("~p\n", [os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " ROLE")]),
+    %% timer:sleep(500),
+    %% ct:pal("~p\n", [os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " ROLE")]),
+    %% ct:pal("~p\n", [os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " config get cluster-node-timeout")]),
+
+    %% Wait for failover to start, otherwise the commands might be sent to early to detect
     lists:foreach(fun(N) ->
-%% %                          {ok, <<"OK">>} = redis:command(R, [<<"SET">>, N, N], N)
                           {ok, _} = redis:command(R, [<<"SET">>, N, N], N)
                   end,
-                  [integer_to_binary(N) || N <- lists:seq(1,100)]),
-    % {connection_status, _, {connection_down, _}} =  get_msg(),
+                  [integer_to_binary(N) || N <- lists:seq(1,1000)]),
+    ct:pal("~p\n", [os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " ROLE")]),
     {slot_map_updated, _ClusterSlotsReply} = get_msg(),
     {connection_status, _, fully_connected} = get_msg().
+
+
 
 
 t_scan_delete_keys(_) ->
