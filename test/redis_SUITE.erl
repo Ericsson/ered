@@ -18,12 +18,13 @@ all() ->
 
 init_per_suite(Config) ->
     %% TODO use port_command so we can get the exit code here?
-    os:cmd("docker run --name redis-1 -d --net=host redis redis-server --cluster-enabled yes --port 30001;"
-	   "docker run --name redis-2 -d --net=host redis redis-server --cluster-enabled yes --port 30002;"
-	   "docker run --name redis-3 -d --net=host redis redis-server --cluster-enabled yes --port 30003;"
-	   "docker run --name redis-4 -d --net=host redis redis-server --cluster-enabled yes --port 30004;"
-	   "docker run --name redis-5 -d --net=host redis redis-server --cluster-enabled yes --port 30005;"
-	   "docker run --name redis-6 -d --net=host redis redis-server --cluster-enabled yes --port 30006;"),
+    R =  os:cmd("docker run --name redis-1 -d --net=host --restart=on-failure redis redis-server --cluster-enabled yes --port 30001 --cluster-node-timeout 2000;"
+                "docker run --name redis-2 -d --net=host --restart=on-failure redis redis-server --cluster-enabled yes --port 30002 --cluster-node-timeout 2000;"
+                "docker run --name redis-3 -d --net=host --restart=on-failure redis redis-server --cluster-enabled yes --port 30003 --cluster-node-timeout 2000;"
+                "docker run --name redis-4 -d --net=host --restart=on-failure redis redis-server --cluster-enabled yes --port 30004 --cluster-node-timeout 2000;"
+                "docker run --name redis-5 -d --net=host --restart=on-failure redis redis-server --cluster-enabled yes --port 30005 --cluster-node-timeout 2000;"
+                "docker run --name redis-6 -d --net=host --restart=on-failure redis redis-server --cluster-enabled yes --port 30006 --cluster-node-timeout 2000;"),
+    ct:pal(R),
     timer:sleep(1000),
     lists:foreach(fun(Port) ->
 			  {ok,Pid} = redis_client:start_link("127.0.0.1", Port, []),
@@ -112,20 +113,101 @@ t_command_pipeline(_) ->
     {ok, [<<"OK">>, <<"OK">>]} = redis:command(R, Cmds, <<"k">>),
     no_more_msgs().
 
+%% t_hard_failover(_) ->
+%%     R = start_cluster(),
+%%     ct:pal("~p\n", [redis:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>])]),
+%%     %% TODO do not hardcode port
+%%     ct:pal(os:cmd("docker ps")),
+%%     ct:pal(os:cmd("docker stop redis-2")),
+%%     timer:sleep(5000),
+%%     ct:pal("~p\n", [redis:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>])]),
+    
+%%     ct:pal(os:cmd("docker ps")),
+%%     ct:pal(os:cmd("docker start redis-2")),
+%%     ct:pal(os:cmd("docker ps")),
+%%     timer:sleep(5000),
+        
+%% %    {connection_status,{_Pid,{"127.0.0.1",30002},undefined}, {connection_down,{recv_exit,closed}}} = get_msg(10000),
+%%     ct:pal(os:cmd("docker ps")),
+%%     ct:pal("~p\n", [redis:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>])]).
+
 t_hard_failover(_) ->
     R = start_cluster(),
-    %% TODO do not hardcode port
-    os:cmd("redis-cli -p 30002 DEBUG SEGFAULT"),
-    [{ok, <<"PONG">>}, {error,client_stopped}, {ok, <<"PONG">>}] = redis:command_all(R, [<<"PING">>]),
-    %% TODO, improve these messages, too long, maybe a map?
-    {connection_status,{_Pid,{"127.0.0.1",30002},undefined}, {connection_down,{recv_error,closed}}} = get_msg(),
-    {slot_map_updated, _ClusterSlotsReply} = get_msg(),
-    {connection_status, _, connection_up} = get_msg(),
-    {connection_status, _, fully_connected} = get_msg(),
-    [{ok, <<"PONG">>}, {ok, <<"PONG">>}, {ok, <<"PONG">>}] = redis:command_all(R, [<<"PING">>]),
+    Port = get_master_port(R),
+    Pod = get_pod_name_from_port(Port),
+    ct:pal("~p\n", [redis:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>])]),
+    ct:pal(os:cmd("docker stop " ++ Pod)),
+    {connection_status,{_Pid,{"127.0.0.1", Port},undefined}, {connection_down,{recv_exit,closed}}} = get_msg(3000),
+    {slot_map_updated, _ClusterSlotsReply} = get_msg(3000),
+    {connection_status, _, fully_connected} = get_msg(3000),
+    apa =  get_msg(10000),
+    
+        
 
-    %% TODO Restart 30002
-    no_more_msgs().
+    ct:pal("~p\n", [redis:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>])]),
+    
+    ct:pal(os:cmd("docker ps")),
+    ct:pal(os:cmd("docker start redis-2")),
+    ct:pal(os:cmd("docker ps")),
+    timer:sleep(5000),
+        
+%    {connection_status,{_Pid,{"127.0.0.1",30002},undefined}, {connection_down,{recv_exit,closed}}} = get_msg(10000),
+    ct:pal(os:cmd("docker ps")),
+    ct:pal("~p\n", [redis:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>])]).
+
+
+get_master_port(R) ->
+    [Client|_] = redis:get_clients(R),
+    {ok, SlotMap} = redis:command_client(Client, [<<"CLUSTER">>, <<"SLOTS">>]),
+    [[_SlotStart, _SlotEnd, [_Ip, Port |_] | _] | _] = SlotMap,
+    Port.
+
+get_pod_name_from_port(Port) ->
+    N = lists:last(integer_to_list(Port)),
+    "redis-" ++ [N].
+
+    %ct:pal("~p\n", [redis:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>])]),
+    %% [{ok, <<"PONG">>}, {error,{client_stopped, normal}}, {ok, <<"PONG">>}] = redis:command_all(R, [<<"PING">>]),
+    %% %% TODO, improve these messages, too long, maybe a map?
+    %% {connection_status,{_Pid,{"127.0.0.1",30002},undefined}, {connection_down,{recv_exit,closed}}} = get_msg(),
+    %% {slot_map_updated, _ClusterSlotsReply} = get_msg(),
+    %% {connection_status, _, fully_connected} = get_msg(),
+
+    
+    %% [{ok, <<"PONG">>}, {ok, <<"PONG">>}, {ok, <<"PONG">>}] = redis:command_all(R, [<<"PING">>]),
+    %% timer:sleep(5000),
+    %% SlotMaps = redis:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>]),
+    %% ct:pal("~p\n", [SlotMaps]),
+    %% ct:pal(os:cmd("docker ps")),
+    %% {connection_status, _, connection_up} = get_msg(10000),
+    %% %% TODO Restart 30002
+    %% no_more_msgs().
+
+
+%% t_hard_failover(_) ->
+%%     R = start_cluster(),
+%%     %% TODO do not hardcode port
+%%     ct:pal(os:cmd("docker ps")),
+%%     os:cmd("redis-cli -p 30002 DEBUG SEGFAULT"),
+%%     {connection_status,{_Pid,{"127.0.0.1",30002},undefined}, {connection_down,{recv_exit,closed}}} = get_msg(10000),
+%%     ct:pal("~p\n", [redis:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>])]),
+
+%%     timer:sleep(1000),
+%%     ct:pal("~p\n", [redis:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>])]),
+%%     [{ok, <<"PONG">>}, {error,{client_stopped, normal}}, {ok, <<"PONG">>}] = redis:command_all(R, [<<"PING">>]),
+%%     %% TODO, improve these messages, too long, maybe a map?
+%%     {connection_status,{_Pid,{"127.0.0.1",30002},undefined}, {connection_down,{recv_exit,closed}}} = get_msg(),
+%%     {slot_map_updated, _ClusterSlotsReply} = get_msg(),
+%%     {connection_status, _, fully_connected} = get_msg(),
+
+%%     [{ok, <<"PONG">>}, {ok, <<"PONG">>}, {ok, <<"PONG">>}] = redis:command_all(R, [<<"PING">>]),
+%%     timer:sleep(5000),
+%%     SlotMaps = redis:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>]),
+%%     ct:pal("~p\n", [SlotMaps]),
+%%     ct:pal(os:cmd("docker ps")),
+%%     {connection_status, _, connection_up} = get_msg(10000),
+%%     %% TODO Restart 30002
+%%     no_more_msgs().
 
 t_manual_failover(_) ->
     R = start_cluster(),
@@ -138,7 +220,6 @@ t_manual_failover(_) ->
     ct:pal("~p\n", [SlotMap]),
     %% Get the port of a replica node
     [[_SlotStart, _SlotEnd, _Master, [_Ip, Port |_] | _] | _] = SlotMap,
-%    "OK\n" = os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " CLUSTER FAILOVER"),
 
     %% sometimes the manual failover is not successful so loop until it is
     fun Loop() ->
@@ -158,14 +239,6 @@ t_manual_failover(_) ->
             end(10)
     end(),
 
-    %% ct:pal("~p\n", [Port]),
-    %% ct:pal("~p\n", [os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " ROLE")]),
-    %% timer:sleep(500),
-    %% ct:pal("~p\n", [os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " ROLE")]),
-    %% timer:sleep(500),
-    %% ct:pal("~p\n", [os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " ROLE")]),
-    %% ct:pal("~p\n", [os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " config get cluster-node-timeout")]),
-
     %% Wait for failover to start, otherwise the commands might be sent to early to detect
     lists:foreach(fun(N) ->
                           {ok, _} = redis:command(R, [<<"SET">>, N, N], N)
@@ -174,7 +247,7 @@ t_manual_failover(_) ->
     ct:pal("~p\n", [os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " ROLE")]),
     {slot_map_updated, _ClusterSlotsReply} = get_msg(),
     {connection_status, _, fully_connected} = get_msg().
-
+%% TODO no_more_msgs
 
 
 
