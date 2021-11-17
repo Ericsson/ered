@@ -28,6 +28,8 @@
             }).
 
 
+
+
 % TODO
 
 % [ ] setting to allow partial slot maps?
@@ -83,6 +85,7 @@ handle_call(_Request, _From, State) ->
     {reply, Reply, State}.
 
 handle_cast({trigger_map_update, SlotMapVersion, Node}, State) ->
+    io:format("~w\n", [{trigger_map_update, SlotMapVersion, Node}]),
     case SlotMapVersion == State#st.slot_map_version of
         true ->
             %% see so the node is up
@@ -276,6 +279,90 @@ pick_node(State) ->
     [Pid || {_Host, {connection_up, Pid}} <- Nodes].
 
 
+
+
+% socket error {node_type => master|replica}
+
+% connect failed
+% connect ok
+% connect wait timeout
+
+
+% slot map updated
+% slot map error
+
+% all master nodes ok
+% all master nodes not ok
+
+% queue overflow
+% queue level below watermark
+
+
+-type info_msg() ::
+
+        #{msg_type := connection_closed,
+          reason := any(),
+          node_type := master|replica,
+          ip := inet:socket_address(),
+          port := inet:port()} |
+
+        #{msg_type := connect_error,
+          reason := any(),
+          node_type := master|replica,
+          ip := inet:socket_address(),
+          port := inet:port()} |
+
+        #{msg_type := connect_ok,
+          node_type := master|replica,
+          ip := inet:socket_address(),
+          port := inet:port()} |
+
+        #{msg_type := node_flagged_as_down,
+          node_type := master|replica,
+          ip := inet:socket_address(),
+          port := inet:port()}.
+
+
+
+-type node_info(Reason, ErrorCode) ::
+        #{msg_type := node_info,
+          reason := Reason,
+          error_code:= ErrorCode,
+          node_type := master|replica,
+          ip := inet:socket_address(),
+          port := inet:port()}.
+
+-type info_msg2() ::
+        node_info(connect_succsesful, none) |
+
+        node_info(socket_closed, any()) |
+
+        node_info(connect_error, any()) |
+
+        node_info(flagged_as_down, gone_too_long) |
+
+        node_info(queue_below_watermark, none) |
+
+        node_info(queue_overflow, none) |
+
+        #{msg_type := slot_map_updated,
+          slot_map := ClusterSlotsReply :: any(),
+          map_version := non_neg_integer()} |
+
+        #{msg_type := slot_map_error_response,
+          response := RedisReply :: any()} |
+
+        #{msg_type := cluster_ok} |
+
+        #{msg_type := cluster_not_ok,
+          reason := master_node_down | master_node_queue_full}.
+
+
+% all master nodes not ok
+
+
+
+
 send_info(Msg, #st{info_cb = Fun}) ->
     [Fun(Msg) || Fun /= none],
     ok.
@@ -283,7 +370,6 @@ send_info(Msg, #st{info_cb = Fun}) ->
 
 is_master_node({_Pid, Addr, _Id}, State) ->
     MasterNodes = redis_lib:slotmap_master_nodes(State#st.slot_map),
-    io:format("~p -> ~p\n", [Addr, MasterNodes]),
     lists:member(Addr, MasterNodes).
 
 is_known_node({Pid, Addr, _Id}, State) ->

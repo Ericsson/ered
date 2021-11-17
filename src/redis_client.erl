@@ -20,11 +20,15 @@
                 connection_opts = [],
                 waiting = q_new(5000),
                 pending = q_new(128),
-                connection_state = initial, % initial, up, down
+                connection_state = initial, % initial, up, down, pending
                 reconnect_wait = 1000,
                 connection_pid = none,
                 info_pid = none,
-                resp_version = 2}).
+                resp_version = 2,
+                pending_timeout = 3000 :: non_neg_integer(),
+                pending_timer = make_ref() :: reference() % initialize to dummy ref, its a valid argument but wont cancel any timer
+               }
+       ).
 
 %%%===================================================================
 %%% API
@@ -56,6 +60,7 @@ init([Host, Port, Opts]) ->
                  ({reconnect_wait, Val}, S)  -> S#state{reconnect_wait = Val};
                  ({info_pid, Val}, S)        -> S#state{info_pid = Val};
                  ({resp_version, Val}, S)    -> S#state{resp_version = Val};
+                 ({pending_timeout, Val}, S) -> S#state{pending_timeout = Val};
                  (Other, _)                  -> error({badarg, Other})
               end,
               #state{host = Host, port = Port},
@@ -80,6 +85,7 @@ handle_info({connected, _Pid}, State) ->
         {error, Reason} ->
             {noreply, connection_error({connection_init_failed, Reason}, State)};
         _ ->
+            erlang:cancel_timer(State#state.pending_timer),
             report_connection_status(connection_up, State),
             {noreply, send_waiting(State#state{connection_state = up})}
     end;
@@ -94,16 +100,25 @@ handle_info({socket_closed, _Pid, Reason}, State) ->
 %%     {noreply, connection_error(Reason, State)};
 
 handle_info(do_reconnect, State) ->
-    {noreply, start_connect(State)}.
+    {noreply, start_connect(State)};
 
-terminate(Reason, #state{waiting = Waiting, pending = Pending}) ->
+handle_info(pending_timeout, State) ->
+    case State#state.connection_state of
+        pending ->
+            %% TODO trigger info event
+            State1 = reply_all({error, node_down}, State),
+            {noreply, State1#state{connection_state = down}};
+        _ ->
+            {noreply, State}
+    end.
+
+
+terminate(Reason, State) ->
     %% This could be done more gracefully by killing the connection process if up
     %% and waiting for trailing request replies and incoming requests. This would
     %% mean introducing a separate stop function and a stopped state.
     %% For now just cancel all requests and die
-    Return = {error, {client_stopped, Reason}},
-    [reply_request(Request, Return) ||  Request <- q_to_list(Pending)],
-    [reply_request(Request, Return) ||  Request <- q_to_list(Waiting)],
+    reply_all({error, {client_stopped, Reason}}, State),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -115,6 +130,12 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+reply_all(Reply, State = #state{waiting = Waiting, pending = Pending}) ->
+    [reply_request(Request, Reply) || Request <- q_to_list(Pending)],
+    [reply_request(Request, Reply) || Request <- q_to_list(Waiting)],
+    State#state{waiting = q_clear(Waiting), pending = q_clear(Pending)}.
+
+
 start_connect(State) ->
     #state{host = Host, port = Port, connection_opts = Opts} = State,
     Pid = redis_connection:connect_async(Host, Port, Opts),
@@ -131,13 +152,15 @@ init_connection(State) ->
 
 connection_error(Reason, State) ->
     case State#state.connection_state of
-        down ->
-            timer:send_after(State#state.reconnect_wait, do_reconnect),
+        S when S == down; S == pending ->
+            erlang:send_after(State#state.reconnect_wait, self(), do_reconnect),
             State;
-        _  ->
+        _ -> %% initial, up
             report_connection_status({connection_down, Reason}, State),
-            start_connect(
-              cancel_pending_requests(State#state{connection_state = down}))
+            State2 = cancel_pending_requests(State),
+            start_connect(State2#state{connection_state = pending,
+                                       pending_timer = erlang:send_after(State#state.pending_timeout, self(), pending_timeout)
+                                      })
     end.
 
 
@@ -157,6 +180,9 @@ cancel_pending_requests(State) ->
 
 
 %%%%%%
+new_request(Request, #state{connection_state = down}) ->
+    reply_request(Request, {error, node_down});
+
 new_request(Request, State = #state{connection_state = up}) ->
     #state{waiting = Waiting, pending = Pending, connection_pid = Conn} = State,
     case send_request(Request, Pending, Conn) of
@@ -235,6 +261,9 @@ q_out_last({Size, Max, Q}) ->
 q_to_list({_Size, _Max, Q}) ->
     queue:to_list(Q).
 
+q_clear({_, Max, _}) ->
+    q_new(Max).
+
 reply_request({request, _, Fun}, Reply) ->
     Fun(Reply).
 
@@ -244,6 +273,7 @@ get_request_payload({request, Request, _Fun}) ->
 %% report_connection_state_info(State) ->
 
 report_connection_status(Status, State = #state{host = Host, port = Port}) ->
+    io:format("~w\n", [{State, Status}]),
     Msg = {connection_status, {self(), {Host, Port}, _Id = undefined}, Status},
     send_info(Msg, State).
 
