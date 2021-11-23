@@ -15,17 +15,35 @@
 -type addr() :: {inet:socket_address()|inet:hostname(), inet:port_number()}.
 -type node_state() :: {init|connection_up|connection_down, pid()}.
 
--record(st, {default_node :: undefined | {addr(), node_state()}, % will be used as default for slot map updates unless down
+-record(st, {% default_node :: undefined | {addr(), node_state()}, % will be used as default for slot map updates unless down
              update_delay = 1000, % 1s delay between slot map update requests
              client_opts = [],
-             nodes = #{} :: #{addr() => node_state()},  %  socket address {IP, Port} => {Pid, init | up | down}
+             nodes = #{} :: #{addr() => #node_st{}},  %  socket address {IP, Port} => {Pid, init | up | down}
 %             node_ids = #{},
              info_cb = none,
              slot_map = [],
              slot_map_version = 1,
-             timer_ref = none,
-             update_wait = 500
+             slot_timer_ref = none,
+             update_slot_wait = 500,
+             resolve_addr_wait = 5000,
+             resolve_timer_ref = none,
             }).
+
+-record(node_st,
+        {
+         state = init :: init | connection_up | connection_down,
+         pid :: undefined | pid(),
+         is_initial = false :: boolean()
+        }).
+
+
+
+client_pid: Addr -> Pid
+role: Addr -> master | slave
+
+initial: Addr -> true
+up: Addr -> true
+
 
 
 
@@ -61,7 +79,9 @@ update_slots(ServerRef, SlotMapVersion, Node) ->
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
-init([Host, Port, Opts]) ->
+
+%inet:ip_address() | inet:hostname()
+init([Addrs, Opts]) ->
 %    process_flag(trap_exit, true),
     State = lists:foldl(
               fun%% ({connection_opts, Val}, S) -> S#state{connection_opts = Val};
@@ -69,23 +89,124 @@ init([Host, Port, Opts]) ->
                  %% ({max_pending, Val}, S)     -> S#state{pending = q_new(Val)};
                  %% ({reconnect_wait, Val}, S)  -> S#state{reconnect_wait = Val};
                   ({info_cb, Val}, S)        -> S#st{info_cb = Val};
+                  ({update_slot_wait, Val}, S)        -> S#st{update_slot_wait = Val};
+                  ({resolve_addr_wait, Val}, S)        -> S#st{resolve_addr_wait = Val};
                   ({client_opts, Val}, S)     -> S#st{client_opts = Val};
                   (Other, _)                  -> error({badarg, Other})
               end,
               #st{},
               Opts),
-    {ok, Pid} = redis_client:start_link(Host, Port, [{info_pid, self()}] ++ State#st.client_opts),
-    Addr = {Host, Port},
-    NodeState = {init, Pid},
-    {ok, State#st{default_node = {Addr, NodeState}}}.
+    case Addrs of
+        [] ->
+            {stop, no_initial_nodes};
+        _  ->
+            {ok, cluster_status(State#st{initial_addrs = Addrs})}
+    end.
 
 
-handle_call(_Request, _From, State) ->
-    Reply = ok,
-    {reply, Reply, State}.
+resolve_initial_addrs(State) ->
+    %% default is ipv4, check options for ipv6 or local
+    [Familiy|_] = [Opt || Opt <- State#st.client_opts, lists:member(Otp, [inet, inet6, local])] ++ [inet],
+    lists:flatmap(fun(Host, Port) ->
+                          %% TODO: Should this be done async? Not sure if we can hang here..
+                          case inet:getaddrs(Host, Family) of
+                              {ok, IpAddrs} ->
+                                  [{Ip, Port} || Ip <- IpAddrs];
+                              {error, Reason} ->
+                                  send_msg({cant_resolve_address, {Addr, Reason}}),
+                                  []
+                          end
+                  end,
+                  State#st.initial_addrs).
+
+
+%% connect_initial_nodes(State) ->
+%%     Addrs = resolve_initial_addrs(State),
+%%     State1 = lists:foldl(fun start_client/1, State, Addrs),
+%%     State1#st{initial = maps:from_list([{Addr, true} || Addr <- Addrs])}.
+
+
+connect_initial_nodes(State = #st{resolve_timer_ref = none}) ->
+    case resolve_initial_addrs(State) of
+        [] ->
+            erlang:start_timer(State#st.resolve_addr_wait, self(), time_to_connect_initial),
+            State#st{initial = #{}};
+        Addrs ->
+            State1 = lists:foldl(fun start_client/1, State, Addrs),
+            State1#st{initial = maps:from_list([{Addr, true} || Addr <- Addrs])}
+    end;
+connect_initial_nodes(State) ->
+    State.
+
+
+
+%% cluster_status(State) ->
+%%     case maps:size(State#st.clients) == 0 of
+%%         0 ->
+%%             State1 = connect_initial_nodes(State),
+%%             case maps:size(State#st.clients) of
+%%                 0 ->
+%%                     cluster_not_ok(State1);
+%%                 _  ->
+%%                     State1
+%%             end;
+%%         _ ->
+%%             case is_slot_map_ok(State) andalso all_master_nodes_up(State) of
+%%                 true ->
+%%                     cluster_ok(State);
+%%                 _ ->
+%%                     cluster_not_ok(State)
+%%             end
+%%     end.
+
+
+%% check_cluster_status(State) ->
+%%     case is_slot_map_ok(State) andalso all_master_nodes_up(State) of
+%%         true ->
+%%             cluster_ok(State);
+%%         _ ->
+%%             cluster_not_ok(State)
+%%     end.
+
+
+%% cluster_ok(State) ->
+    
+
+
+%%     case connect_initial_nodes(State) of
+%%         {error, Reason} ->
+            
+
+%%         {[], Errors} ->
+            
+
+%%     State1 = connect_initial_nodes(State),
+%%     case maps:size(State#st.clients) of
+%%         0 ->
+%%             report_cluster_down(State, 
+%%             cluster_down() 
+%%         _  ->
+%%             State1
+%%     end.
+
+
+%%     _ ->
+%%             case is_slot_map_ok(State) andalso all_master_nodes_up(State) of
+%%                 true ->
+%%                     cluster_ok(State);
+%%                 _ ->
+%%                     cluster_not_ok(State)
+%%             end
+%%     end.
+
+
+
+
+%% handle_call(_Request, _From, State) ->
+%%     Reply = ok,
+%%     {reply, Reply, State}.
 
 handle_cast({trigger_map_update, SlotMapVersion, Node}, State) ->
-    io:format("~w\n", [{trigger_map_update, SlotMapVersion, Node}]),
     case SlotMapVersion == State#st.slot_map_version of
         true ->
             %% see so the node is up
@@ -149,8 +270,8 @@ handle_info({slot_info, Version, Response}, State) ->
                 false ->
                     %Nodes = [Addr || {_SlotStart, _SlotEnd, Addr} <- redis_lib:parse_cluster_slots(NewMap)],
                     Nodes = redis_lib:slotmap_all_nodes(NewMap),
-                    State1 = connect_nodes(Nodes, State),
                     Old = maps:keys(State1#st.nodes),
+                    State1 = connect_nodes(Nodes, State),
                     %% Nodes to be closed. Do not include when sending slot info but do wait to
                     %% close the connection until the slot info is sent out. We want to make
                     %% sure that slot maps are updated before closing otherwise messages might
@@ -164,9 +285,9 @@ handle_info({slot_info, Version, Response}, State) ->
     end;
 
 handle_info({timeout, TimerRef, time_to_update_slots}, State) ->
-    case State#st.timer_ref of
+    case State#st.slot_timer_ref of
         TimerRef ->
-            State1 = State#st{timer_ref = none},
+            State1 = State#st{slot_timer_ref = none},
             case is_slot_map_ok(State1) andalso all_master_nodes_up(State1) of
                 false ->
                     {noreply, start_periodic_slot_info_request(State1)};
@@ -175,7 +296,11 @@ handle_info({timeout, TimerRef, time_to_update_slots}, State) ->
             end;
         _ ->
             {noreply, State}
-    end.
+    end;
+
+handle_info({timeout, TimerRef, time_to_connect_initial}, State) ->
+    {noreply, connect_initial_nodes(State#st{resolve_timer_ref = none})}.
+
 
 %% handle_info({'EXIT', _Pid , normal}, State) ->
 %%     {noreply, State}.
@@ -194,6 +319,16 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+%% handle_connection_status(Source, Status, State) ->
+%%     case {is_master_node(Source, State), Status} of
+%%         {true, connection_down} ->
+%%             start_periodic_slot_info_request(State);
+%%         {true, connection_up} ->
+%%             check_if_all_is_ok(State);
+%%         _ ->
+%%             State
+%%     end.
+
 handle_connection_status(Source, connection_up, State) ->
     case is_slot_map_ok(State) andalso all_master_nodes_up(State) of
         true ->
@@ -247,22 +382,22 @@ start_periodic_slot_info_request(State) ->
     end.
 
 start_periodic_slot_info_request(Node, State) ->
-    case State#st.timer_ref of
+    case State#st.slot_timer_ref of
         none ->
             send_slot_info_request(Node, State),
-            Tref = erlang:start_timer(State#st.update_wait, self(), time_to_update_slots),
-            State#st{timer_ref = Tref};
+            Tref = erlang:start_timer(State#st.update_slot_wait, self(), time_to_update_slots),
+            State#st{slot_timer_ref = Tref};
         _Else ->
             State
     end.
 
 stop_periodic_slot_info_request(State) ->
-    case State#st.timer_ref of
+    case State#st.slot_timer_ref of
         none ->
             State;
         Tref ->
-            timer:cancel(Tref),
-            State#st{timer_ref = none}
+            erlang:cancel_timer(Tref),
+            State#st{slot_timer_ref = none}
     end.
 
 
@@ -417,7 +552,6 @@ all_slots_covered(State) ->
     %% check so last slot is ok
     R == 16384.
 
-
 start_client(Addr, State) ->
     case maps:is_key(Addr, State#st.nodes) of
         true ->
@@ -426,13 +560,32 @@ start_client(Addr, State) ->
             {Host, Port} = Addr,
             Opts = [{info_pid, self()}] ++ State#st.client_opts,
             {ok, Pid} = redis_client:start_link(Host, Port, Opts),
-            State#st{nodes = maps:put(Addr, {init, Pid}, State#st.nodes)}
+            State#st{nodes = maps:put(Addr, Pid, State#st.clients)}
     end.
+
+
+%% start_initial_client(Addr, State) ->
+%%     start_client(Addr, State, _Initial=true).
+
+%% start_client() ->
+%%     start_client(Addr, State, _Initial=false).
+
+%% start_client(Addr, State, Initial) ->
+%%     case maps:is_key(Addr, State#st.nodes) of
+%%         true ->
+%%             State;
+%%         false ->
+%%             {Host, Port} = Addr,
+%%             Opts = [{info_pid, self()}] ++ State#st.client_opts,
+%%             {ok, Pid} = redis_client:start_link(Host, Port, Opts),
+%%             NodeSt = #node_st{pid = Pid, initial = Initial},
+%%             State#st{nodes = maps:put(Addr, NodeSt, State#st.nodes)} %
+%%     end.
 
 stop_client(Addr, State) ->
     %% It should not be possible to get an error here I think..
-    {{_NodeState, Pid}, NewNodes} = maps:take(Addr, State#st.nodes),
-    redis_client:stop(Pid),
-    State#st{nodes = NewNodes}.
+    {Node, OtherNodes} = maps:take(Addr, State#st.nodes),
+    redis_client:stop(Node#node_st.pid),
+    State#st{nodes = OtherNodes}.
 
 

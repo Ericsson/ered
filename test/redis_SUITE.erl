@@ -319,6 +319,14 @@ group_by_hash(Keys) ->
  
 
 
+%% 6> inet_db:add_host({127,0,0,2}, [apa]).  
+
+%% 33> inet_db:set_lookup([file]). 
+%% ok
+%% 34> inet_tcp:getaddrs(apa).                    
+%% {ok,[{127,0,0,2}]}
+%% 35> 
+
 
 
 %% TEST blocked master, slot update other node
