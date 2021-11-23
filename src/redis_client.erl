@@ -119,6 +119,7 @@ terminate(Reason, State) ->
     %% mean introducing a separate stop function and a stopped state.
     %% For now just cancel all requests and die
     reply_all({error, {client_stopped, Reason}}, State),
+    report_connection_status({connection_down, {client_stopped, Reason}}, State),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
