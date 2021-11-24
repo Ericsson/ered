@@ -274,7 +274,6 @@ get_request_payload({request, Request, _Fun}) ->
 %% report_connection_state_info(State) ->
 
 report_connection_status(Status, State = #state{host = Host, port = Port}) ->
-    io:format("~w\n", [{State, Status}]),
     Msg = {connection_status, {self(), {Host, Port}, _Id = undefined}, Status},
     send_info(Msg, State).
 

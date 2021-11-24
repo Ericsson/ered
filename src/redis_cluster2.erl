@@ -148,7 +148,7 @@ handle_info({slot_info, Version, Response}, State) ->
                     NewNodes = maps:merge(KeepNodes, NewOpenNodes),
                     send_info({slot_map_updated, {ClusterSlotsReply, NewNodes, Version + 1}}, State),
 
-                    %% Important to wait with closing nodes until the slot infor is sent out. We
+                    %% Important to wait with closing nodes until the slot info is sent out. We
                     %% want to make sure that slot maps are updated before closing otherwise
                     %% messages might be routed to missing processes.
                     [redis_client:stop(ClientPid) || ClientPid <- maps:values(Remove)],
@@ -294,29 +294,30 @@ pick_node(State) ->
 % queue level below watermark
 
 
--type info_msg() ::
+%% -type node_type() = master | replica
+%% -type info_msg() ::
 
-        #{msg_type := connection_closed,
-          reason := any(),
-          node_type := master|replica,
-          ip := inet:socket_address(),
-          port := inet:port()} |
+%%         #{msg_type := connection_closed,
+%%           reason := any(),
+%%           node_type := node_type(),
+%%           ip := inet:socket_address(),
+%%           port := inet:port()} |
 
-        #{msg_type := connect_error,
-          reason := any(),
-          node_type := master|replica,
-          ip := inet:socket_address(),
-          port := inet:port()} |
+%%         #{msg_type := connect_error,
+%%           reason := any(),
+%%           node_type := node_type(),
+%%           ip := inet:socket_address(),
+%%           port := inet:port()} |
 
-        #{msg_type := connect_ok,
-          node_type := master|replica,
-          ip := inet:socket_address(),
-          port := inet:port()} |
+%%         #{msg_type := connect_ok,
+%%           node_type := node_type(),
+%%           ip := inet:socket_address(),
+%%           port := inet:port()} |
 
-        #{msg_type := node_flagged_as_down,
-          node_type := master|replica,
-          ip := inet:socket_address(),
-          port := inet:port()}.
+%%         #{msg_type := node_flagged_as_down,
+%%           node_type := node_type(),
+%%           ip := inet:socket_address(),
+%%           port := inet:port()}.
 
 
 
@@ -324,7 +325,8 @@ pick_node(State) ->
         #{msg_type := node_info,
           reason := Reason,
           error_code:= ErrorCode,
-          node_type := master|replica,
+          % node_type := master|replica,
+          is_master := boolean()
           ip := inet:socket_address(),
           port := inet:port()}.
 
@@ -351,7 +353,7 @@ pick_node(State) ->
         #{msg_type := cluster_ok} |
 
         #{msg_type := cluster_not_ok,
-          reason := master_node_down | master_node_queue_full}.
+          reason := master_node_down | master_node_queue_full | bad_slot_map}.
 
 
 % all master nodes not ok
