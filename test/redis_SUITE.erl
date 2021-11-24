@@ -16,6 +16,7 @@ all() ->
      t_manual_failover,
      t_split_data].
 
+
 init_per_suite(Config) ->
     %% TODO use port_command so we can get the exit code here?
     R =  os:cmd("docker run --name redis-1 -d --net=host --restart=on-failure redis redis-server --cluster-enabled yes --port 30001 --cluster-node-timeout 2000;"
@@ -109,20 +110,33 @@ t_hard_failover(_) ->
     Pod = get_pod_name_from_port(Port),
     ct:pal("~p\n", [redis:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>])]),
     ct:pal(os:cmd("docker stop " ++ Pod)),
-    {connection_status,{_Pid,{"127.0.0.1", Port},undefined}, {connection_down,{recv_exit,closed}}} = get_msg(3000),
-    {slot_map_updated, _ClusterSlotsReply} = get_msg(3000),
-    {connection_status, _, fully_connected} = get_msg(3000),
+
+    connection_down([{localhost, Port}, {"127.0.0.1", Port}], {recv_exit,closed}),
+
+    {slot_map_updated, _ClusterSlotsReply} = get_msg(5000),
+
+    %% connection not in slotmap
+    connection_down([{"127.0.0.1", Port}], {client_stopped,normal}),
+
 
     ct:pal("~p\n", [redis:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>])]),
 
-    ct:pal(os:cmd("docker ps")),
-    ct:pal(os:cmd("docker start redis-2")),
-    ct:pal(os:cmd("docker ps")),
-    timer:sleep(5000),
+    %ct:pal(os:cmd("docker ps")),
+    ct:pal(os:cmd("docker start " ++ Pod)),
+    %ct:pal(os:cmd("docker ps")),
+    %timer:sleep(5000),
 %    {connection_status,{_Pid,{"127.0.0.1",30002},undefined}, {connection_down,{recv_exit,closed}}} = get_msg(10000),
-    ct:pal(os:cmd("docker ps")),
-    ct:pal("~p\n", [redis:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>])]),
-    {slot_map_updated, _} = get_msg(3000),
+    %ct:pal(os:cmd("docker ps")),
+    %ct:pal("~p\n", [redis:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>])]),
+
+    %% node back
+    connection_up([{localhost, Port}], 10000),
+
+    {slot_map_updated, _} = get_msg(10000),
+
+    connection_up([{"127.0.0.1", Port}]),
+
+    {connection_status, _, fully_connected} = get_msg(3000),
     no_more_msgs().
 
 
@@ -304,9 +318,10 @@ group_by_hash(Keys) ->
 %% TEST cluster move
 %% TEST incomplete map connection status
 %% TEST pipeline
-%% TEST manual failover
 %% TEST non-contiguous slots
 %% TEST TCP close from Redis, no alarm
+%% TEST packets dropped after reconnect timeout
+%% TEST DNS map to invalid addr, try next one
 
 %% Test to send and receive a big data packet. The read should be split
 t_split_data(_) ->
@@ -321,19 +336,57 @@ t_split_data(_) ->
 
 start_cluster() ->
     Pid = self(),
-    {ok, P} = redis:start_link([{localhost, 30001}], [{info_cb, fun(Msg) -> Pid ! Msg end}]),
-    {connection_status, _, connection_up} = get_msg(),
+
+    Ports = [30001, 30002, 30003, 30004, 30005, 30006],
+    InitialNodes = [{localhost, Port} || Port <- Ports],
+
+    {ok, P} = redis:start_link(InitialNodes, [{info_cb, fun(Msg) -> Pid ! Msg end}]),
+    %% {connection_status, _, connection_up} = get_msg(),
+
+
+    %% [receive {connection_status, {_Pid, Addr, _Id},  connection_up} -> ok after 1000 -> exit(timeout) end
+    %%  || Addr <- InitialNodes
+
+    connection_up(InitialNodes),
     {slot_map_updated, _ClusterSlotsReply} = get_msg(),
-    ok = receive {connection_status, _, connection_up} -> ok after 1000 -> timeout end,
-    ok = receive {connection_status, _, connection_up} -> ok after 1000 -> timeout end,
-    ok = receive {connection_status, _, connection_up} -> ok after 1000 -> timeout end,
-    ok = receive {connection_status, _, connection_up} -> ok after 1000 -> timeout end,
-    ok = receive {connection_status, _, connection_up} -> ok after 1000 -> timeout end,
-    ok = receive {connection_status, _, connection_up} -> ok after 1000 -> timeout end,
+    connection_up([{"127.0.0.1", Port} || Port <- Ports]),
+    
+
+
+    %% ok = receive {connection_status, _, connection_up} -> ok after 1000 -> timeout end,
+    %% ok = receive {connection_status, _, connection_up} -> ok after 1000 -> timeout end,
+    %% ok = receive {connection_status, _, connection_up} -> ok after 1000 -> timeout end,
+    %% ok = receive {connection_status, _, connection_up} -> ok after 1000 -> timeout end,
+    %% ok = receive {connection_status, _, connection_up} -> ok after 1000 -> timeout end,
+    %% ok = receive {connection_status, _, connection_up} -> ok after 1000 -> timeout end,
 
     {connection_status, _, fully_connected} = get_msg(),
     no_more_msgs(),
     P.
+
+connection_up(Addrs) ->
+    connection_up(Addrs, 1000).
+
+connection_up(Addrs, Timeout) ->
+    [receive
+         {connection_status, {_Pid, Addr, _Id},  connection_up} -> ok
+     after
+         Timeout -> error({timeout, Addr})
+     end
+     || Addr <- Addrs].
+
+connection_down(Addrs, Reason) ->
+    connection_down(Addrs, Reason, 1000).
+
+connection_down(Addrs, Reason, Timeout) ->
+    [receive
+         {connection_status, {_Pid, Addr, _Id}, {connection_down, Reason}} ->
+             ok
+     after
+         Timeout -> error({timeout, Addr})
+     end
+     || Addr <- Addrs].
+
 
 
 get_msg() ->

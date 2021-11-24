@@ -30,7 +30,8 @@
              info_cb = none,
              update_delay = 1000, % 1s delay between slot map update requests
              client_opts = [],
-             update_slot_wait = 500
+             update_slot_wait = 500,
+             min_replicas = 1
 
             }).
 
@@ -76,8 +77,9 @@ init([Addrs, Opts]) ->
                  %% ({max_pending, Val}, S)     -> S#state{pending = q_new(Val)};
                  %% ({reconnect_wait, Val}, S)  -> S#state{reconnect_wait = Val};
                   ({info_cb, Val}, S)        -> S#st{info_cb = Val};
-                  ({update_slot_wait, Val}, S)        -> S#st{update_slot_wait = Val};
+                  ({update_slot_wait, Val}, S) -> S#st{update_slot_wait = Val};
                   ({client_opts, Val}, S)     -> S#st{client_opts = Val};
+                  ({min_replicas, Val}, S)     -> S#st{min_replicas = Val};
                   (Other, _)                  -> error({badarg, Other})
               end,
               #st{},
@@ -112,6 +114,7 @@ handle_info(Msg = {connection_status, {_Pid, Addr, _Id} , Status}, State) ->
 
 
 handle_info({slot_info, Version, Response}, State) ->
+    io:format("~p\n", [{slot_info, Response}]),
     case Response of
         _ when Version < State#st.slot_map_version ->
             %% got a response for a request triggered for an old version of the slot map, ignore
@@ -364,7 +367,7 @@ send_info(Msg, State = #st{info_cb = Fun}) ->
 is_slot_map_ok(State) ->
     %% Need at least two nodes in the cluster. During some startup scenarios it
     %% is possible to have a intermittent situation with only one node.
-    length(State#st.slot_map) >= 2 andalso all_slots_covered(State).
+    length(State#st.slot_map) >= 2 andalso all_slots_covered(State) andalso check_replica_count(State).
 
 all_slots_covered(State) ->
     %% check so that the slot map covers all slots. the slot map is sorted so it
@@ -382,6 +385,16 @@ all_slots_covered(State) ->
     %% check so last slot is ok
     R == 16384.
 
+%% check_replica_count(State) ->
+%%     lists:all([length(Replicas) >= State#st.min_replicas ||
+%%                   [_Start, _Stop, _Master | Replicas] <- State#st.slot_map]).
+
+
+check_replica_count(State) ->
+    lists:all(fun([_Start, _Stop, _Master | Replicas]) ->
+                      length(Replicas) >= State#st.min_replicas
+              end,
+              State#st.slot_map).
 
 
 start_client(Addr, State) ->
