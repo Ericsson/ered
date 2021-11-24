@@ -3,9 +3,9 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/3,
+-export([start_link/2,
          stop/1,
-        update_slots/3]).
+         update_slots/3]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -54,8 +54,8 @@
 %%%===================================================================
 %%% API
 %%%===================================================================
-start_link(Host, Port, Opts) ->
-    gen_server:start_link(?MODULE, [Host, Port, Opts], []).
+start_link(Addrs, Opts) ->
+    gen_server:start_link(?MODULE, [Addrs, Opts], []).
 
 stop(ServerRef) ->
     gen_server:stop(ServerRef).
@@ -140,7 +140,7 @@ handle_info({slot_info, Version, Response}, State) ->
                     %% open clients to new nodes not seen before
                     NewOpenNodes = maps:from_list([{Addr, start_client(Addr, State)}
                                                    || Addr <- Nodes,
-                                                      maps:is_key(Addr, State#st.nodes)]),
+                                                      not maps:is_key(Addr, State#st.nodes)]),
 
                     NewNodes = maps:merge(KeepNodes, NewOpenNodes),
                     send_info({slot_map_updated, {ClusterSlotsReply, NewNodes, Version + 1}}, State),
@@ -154,7 +154,6 @@ handle_info({slot_info, Version, Response}, State) ->
                                       slot_map = NewMap,
                                       masters = MasterNodes,
                                       nodes = maps:merge(KeepNodes, NewNodes)},
-
                     {noreply, update_cluster_status(State1)}
             end
     end;

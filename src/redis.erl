@@ -4,7 +4,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/3,
+-export([start_link/2,
          stop/1,
          command/3, command/4,
          command_all/2, command_all/3,
@@ -26,8 +26,8 @@
 %%%===================================================================
 %%% API
 %%%===================================================================
-start_link(Host, Port, Opts) ->
-    gen_server:start_link(?MODULE, [Host, Port, Opts], []).
+start_link(Addrs, Opts) ->
+    gen_server:start_link(?MODULE, [Addrs, Opts], []).
 
 stop(ServerRef) ->
     gen_server:stop(ServerRef).
@@ -65,7 +65,7 @@ get_clients(ServerRef) ->
 %%% gen_server callbacks
 %%%===================================================================
 
-init([Host, Port, Opts]) ->
+init([Addrs, Opts]) ->
     %% Register callback to get slot map updates
     Pid = self(),
     Opts2 = case lists:keytake(info_cb, 1, Opts) of
@@ -74,7 +74,7 @@ init([Host, Port, Opts]) ->
                 {value, {info_cb, Fun}, Opts1} ->
                     [{info_cb, fun(Msg) -> info_cb(Pid, Msg), Fun(Msg) end} | Opts1]
             end,
-    {ok, ClusterPid} = redis_cluster2:start_link(Host, Port, Opts2),
+    {ok, ClusterPid} = redis_cluster2:start_link(Addrs, Opts2),
     EmptySlots = create_lookup_table(0, [], <<>>),
     {ok, #st{cluster_pid = ClusterPid, slots = EmptySlots}}.
 

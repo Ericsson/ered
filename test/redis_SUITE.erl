@@ -55,7 +55,7 @@ t_cluster_start(_) ->
     %% ct:log(info, "~w", [R]),
     Pid = self(),
 %    receive apa -> apa after 5000 -> ok end,
-    {ok, P} = redis:start_link(localhost, 30001, [{info_cb, fun(Msg) -> Pid ! Msg end}]),
+    {ok, P} = redis:start_link([{localhost, 30001}], [{info_cb, fun(Msg) -> Pid ! Msg end}]),
 %    {ok, P} = redis_cluster2:start_link(localhost, 30001, [{info_cb, fun(Msg) -> Pid ! Msg end}]),
 
     {connection_status, _, connection_up} = get_msg(),
@@ -351,7 +351,7 @@ t_split_data(_) ->
 
 start_cluster() ->
     Pid = self(),
-    {ok, P} = redis:start_link(localhost, 30001, [{info_cb, fun(Msg) -> Pid ! Msg end}]),
+    {ok, P} = redis:start_link([{localhost, 30001}], [{info_cb, fun(Msg) -> Pid ! Msg end}]),
     {connection_status, _, connection_up} = get_msg(),
     {slot_map_updated, _ClusterSlotsReply} = get_msg(),
     ok = receive {connection_status, _, connection_up} -> ok after 1000 -> timeout end,
