@@ -103,7 +103,7 @@ handle_cast({trigger_map_update, SlotMapVersion, Node}, State) ->
 handle_info(Msg = {connection_status, {_Pid, Addr, _Id} , Status}, State) ->
     send_info(Msg, State),
     State1 = State#st{up = case Status of
-                               connection_down ->
+                               {connection_down,_} ->
                                    sets:del_element(Addr, State#st.up);
                                connection_up ->
                                    sets:add_element(Addr, State#st.up)
@@ -199,7 +199,8 @@ update_cluster_status(State) ->
             end
     end.
 
-set_cluster_state(nok, _Reason, State) ->
+set_cluster_state(nok, Reason, State) ->
+    io:format("~p\n", [{nok, Reason, State}]),
     State1 = case State#st.cluster_state of
                  nok ->
                      State;
@@ -209,6 +210,7 @@ set_cluster_state(nok, _Reason, State) ->
     start_periodic_slot_info_request(State1);
 
 set_cluster_state(ok, _, State) ->
+    io:format("~p\n", [{ok, State}]),
     State1 = case State#st.cluster_state of
                  nok ->
                      send_info({connection_status, self(), fully_connected}, State),

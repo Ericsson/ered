@@ -6,13 +6,13 @@
 -compile([export_all]).
 
 all() ->
-    [t_cluster_start,
+    [
      t_command,
      t_command_all,
      t_command_client,
      t_command_pipeline,
      t_scan_delete_keys,
-%     t_hard_failover,
+     t_hard_failover,
      t_manual_failover,
      t_split_data].
 
@@ -47,34 +47,6 @@ end_per_suite(Config) ->
 	   "docker stop redis-5; docker rm redis-5;"
 	   "docker stop redis-6; docker rm redis-6").
 
-
-t_cluster_start(_) ->
-    %% io:format("hek", []),
-    %% R = os:cmd("redis-cli -p 30001 cluster slots"),
-    %% apa = R,
-    %% ct:log(info, "~w", [R]),
-    Pid = self(),
-%    receive apa -> apa after 5000 -> ok end,
-    {ok, P} = redis:start_link([{localhost, 30001}], [{info_cb, fun(Msg) -> Pid ! Msg end}]),
-%    {ok, P} = redis_cluster2:start_link(localhost, 30001, [{info_cb, fun(Msg) -> Pid ! Msg end}]),
-
-    {connection_status, _, connection_up} = get_msg(),
-    {slot_map_updated, ClusterSlotsReply} = get_msg(),
-    ct:pal("~p\n", [ClusterSlotsReply]),
-    {connection_status, _, connection_up} = get_msg(),
-    {connection_status, _, connection_up} = get_msg(),
-    {connection_status, _, connection_up} = get_msg(),
-
-    {connection_status, _, fully_connected} = get_msg(),
-    no_more_msgs(),
-    ok.
-    %{connection_status, _, connection_down} = get_msg(),
-    %% Kill a master
-    %os:cmd("redis-cli -p 30002 DEBUG SEGFAULT"),
-   
-    %{connection_status, _, connection_down} = get_msg(60000),
-
-    %receive apa -> apa after 60000 -> throw(tc_timeout) end.
 
 t_command(_) ->
     R = start_cluster(),
@@ -140,20 +112,19 @@ t_hard_failover(_) ->
     {connection_status,{_Pid,{"127.0.0.1", Port},undefined}, {connection_down,{recv_exit,closed}}} = get_msg(3000),
     {slot_map_updated, _ClusterSlotsReply} = get_msg(3000),
     {connection_status, _, fully_connected} = get_msg(3000),
-    apa =  get_msg(10000),
-    
-        
 
     ct:pal("~p\n", [redis:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>])]),
-    
+
     ct:pal(os:cmd("docker ps")),
     ct:pal(os:cmd("docker start redis-2")),
     ct:pal(os:cmd("docker ps")),
     timer:sleep(5000),
-        
 %    {connection_status,{_Pid,{"127.0.0.1",30002},undefined}, {connection_down,{recv_exit,closed}}} = get_msg(10000),
     ct:pal(os:cmd("docker ps")),
-    ct:pal("~p\n", [redis:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>])]).
+    ct:pal("~p\n", [redis:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>])]),
+    {slot_map_updated, _} = get_msg(3000),
+    no_more_msgs().
+
 
 
 get_master_port(R) ->
@@ -245,8 +216,7 @@ t_manual_failover(_) ->
                   end,
                   [integer_to_binary(N) || N <- lists:seq(1,1000)]),
     ct:pal("~p\n", [os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " ROLE")]),
-    {slot_map_updated, _ClusterSlotsReply} = get_msg(),
-    {connection_status, _, fully_connected} = get_msg().
+    {slot_map_updated, _ClusterSlotsReply} = get_msg().
 %% TODO no_more_msgs
 
 
