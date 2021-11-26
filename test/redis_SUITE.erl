@@ -88,7 +88,7 @@ t_command_pipeline(_) ->
 
 
 t_hard_failover(_) ->
-    R = start_cluster(),
+    R = start_cluster([{close_wait, 2000}]),
     Port = get_master_port(R),
     Pod = get_pod_name_from_port(Port),
     ct:pal("~p\n", [redis:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>])]),
@@ -98,15 +98,11 @@ t_hard_failover(_) ->
 
     {slot_map_updated, _ClusterSlotsReply} = get_msg(5000),
 
-    %% connection not in slotmap
-    connection_down([{"127.0.0.1", Port}], {client_stopped,normal}),
-
-
     ct:pal("~p\n", [redis:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>])]),
 
     ct:pal(os:cmd("docker start " ++ Pod)),
 
-    %% node back
+    %% node back TODO: check new client pid
     connection_up([{localhost, Port}], 10000),
 
     {slot_map_updated, _} = get_msg(10000),
@@ -114,6 +110,10 @@ t_hard_failover(_) ->
     connection_up([{"127.0.0.1", Port}]),
 
     {connection_status, _, fully_connected} = get_msg(3000),
+
+
+    %% old client to the failed node is closed since it was removed from slotmap
+    connection_down([{"127.0.0.1", Port}], {client_stopped,normal}, 2000),
     no_more_msgs().
 
 
@@ -268,14 +268,15 @@ t_split_data(_) ->
 
 
 
-
 start_cluster() ->
+    start_cluster([]).
+start_cluster(Opts) ->
     Pid = self(),
 
     Ports = [30001, 30002, 30003, 30004, 30005, 30006],
     InitialNodes = [{localhost, Port} || Port <- Ports],
 
-    {ok, P} = redis:start_link(InitialNodes, [{info_cb, fun(Msg) -> Pid ! Msg end}]),
+    {ok, P} = redis:start_link(InitialNodes, [{info_cb, fun(Msg) -> Pid ! Msg end}] ++ Opts),
 
     connection_up(InitialNodes),
     {slot_map_updated, _ClusterSlotsReply} = get_msg(),
@@ -304,7 +305,7 @@ connection_down(Addrs, Reason, Timeout) ->
          {connection_status, {_Pid, Addr, _Id}, {connection_down, Reason}} ->
              ok
      after
-         Timeout -> error({timeout, Addr})
+         Timeout -> error({timeout, Addr, Reason})
      end
      || Addr <- Addrs].
 
