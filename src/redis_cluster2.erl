@@ -136,7 +136,13 @@ handle_info({slot_info, Version, Response}, State) ->
                     Nodes = redis_lib:slotmap_all_nodes(NewMap),
                     MasterNodes = new_set(redis_lib:slotmap_master_nodes(NewMap)),
 
-                    %% remove nodes if they are not in the new map or if they are initial.
+                    %% remove nodes if they are not in the new map or initial. Only remove nodes that
+                    %% are already down to avoid closing a lot of clients if we get a transient slot map
+                    %% missing nodes (might happen during Redis node startup I guess)
+                    Remove = lists:foldl(fun maps:without/2,
+                                         State#st.nodes,
+                                         [State#st.initial_nodes, Nodes, sets:to_list(State#st.up)]),
+
                     Remove = maps:without(Nodes, maps:without(State#st.initial_nodes, State#st.nodes)),
                     %% these nodes already has clients
                     KeepNodes = maps:without(maps:keys(Remove), State#st.nodes),
@@ -326,9 +332,12 @@ pick_node(State) ->
           reason := Reason,
           error_code:= ErrorCode,
           % node_type := master|replica,
-          is_master := boolean()
+          is_master := boolean(),
           ip := inet:socket_address(),
-          port := inet:port()}.
+          port := inet:port(),
+          client_id := pid(),
+          node_id := string()
+         }.
 
 -type info_msg2() ::
         node_info(connect_succsesful, none) |
@@ -404,3 +413,10 @@ start_client(Addr, State) ->
     Opts = [{info_pid, self()}] ++ State#st.client_opts,
     {ok, Pid} = redis_client:start_link(Host, Port, Opts),
     Pid.
+
+
+%% maps_without(Kss, Map0) ->
+%%     lists:foldl(fun(Ks, Map1) ->
+%%                         maps:without(Ks,
+                                
+                               
