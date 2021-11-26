@@ -5,14 +5,27 @@
 %% API
 -export([start_link/2,
          stop/1,
-         update_slots/3]).
+         update_slots/3,
+         get_slot_map_info/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3, format_status/2]).
 
 
+%% from gen_sever.erl
+-type server_ref() ::
+        pid()
+      | (LocalName :: atom())
+      | {Name :: atom(), Node :: atom()}
+      | {'global', GlobalName :: term()}
+      | {'via', RegMod :: module(), ViaName :: term()}.
+
 -type addr() :: {inet:socket_address()|inet:hostname(), inet:port_number()}.
+
+-type slot_map_node() :: [binary() | non_neg_integer()]. % [Ip::binary(), Port::non_neg_integer(), Id::binary()].
+-type slot_map() :: [non_neg_integer() | slot_map_node()]. %[SlotStart::non_neg_integer(), SlotEnd::non_neg_integer(), [slot_map_node()]]
+
 %-type node_state() :: {init|connection_up|connection_down, pid()}.
 
 -record(st, {% default_node :: undefined | {addr(), node_state()}, % will be used as default for slot map updates unless down
@@ -53,6 +66,11 @@
 
 %% -record(nd, {id, sock_addr, client_pid, status}
 
+
+
+
+
+
 %%%===================================================================
 %%% API
 %%%===================================================================
@@ -64,6 +82,17 @@ stop(ServerRef) ->
 
 update_slots(ServerRef, SlotMapVersion, Node) ->
     gen_server:cast(ServerRef, {trigger_map_update, SlotMapVersion, Node}).
+
+% -------------------------------------------------------------------
+-spec get_slot_map_info(server_ref()) -> 
+          {
+           SlotMapVersion :: non_neg_integer(),
+           SlotMap :: slot_map(),
+           Clients :: #{addr() => pid()}
+          }.
+
+get_slot_map_info(ServerRef) ->
+    gen_server:call(ServerRef, get_slot_map_info).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -91,8 +120,11 @@ init([Addrs, Opts]) ->
                   nodes = maps:from_list([{Addr, start_client(Addr, State)} || Addr <- Addrs])}}.
 
 
-handle_call(Request, _From, State) ->
-    {stop, {unexpected_call, Request}, State}.
+handle_call(get_slot_map_info, _From, State) ->
+    Nodes = redis_lib:slotmap_all_nodes(State#st.slot_map),
+    Clients = maps:with(Nodes, State#st.nodes),
+    Reply = {State#st.slot_map_version, State#st.slot_map, Clients},
+    {reply,Reply,State}.
 
 
 handle_cast({trigger_map_update, SlotMapVersion, Node}, State) ->
@@ -167,7 +199,8 @@ handle_info({slot_info, Version, Response}, State) ->
 
                     %% Important to wait with closing nodes until the slot info is sent out. We
                     %% want to make sure that slot maps are updated before closing otherwise
-                    %% messages might be routed to missing processes.
+                    %% messages might be routed to missing processes. The close is delayed to
+                    %% make sure we do not lose any messages in transit
                     erlang:send_after(State#st.close_wait, self(), {close_clients, Remove}),
 
                     State1 = State#st{slot_map_version = Version + 1,
@@ -345,7 +378,7 @@ pick_node(State) ->
         #{msg_type := node_info,
           reason := Reason,
           error_code:= ErrorCode,
-          % node_type := master|replica,
+          % node_type := master|replica|not_in_map
           is_master := boolean(),
           ip := inet:socket_address(),
           port := inet:port(),
