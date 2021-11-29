@@ -276,7 +276,7 @@ start_cluster(Opts) ->
     Ports = [30001, 30002, 30003, 30004, 30005, 30006],
     InitialNodes = [{localhost, Port} || Port <- Ports],
 
-    {ok, P} = redis:start_link(InitialNodes, [{info_cb, fun(Msg) -> Pid ! Msg end}] ++ Opts),
+    {ok, P} = redis:start_link(InitialNodes, [{info_pid, [self()]}] ++ Opts),
 
     connection_up(InitialNodes),
     {slot_map_updated, _ClusterSlotsReply} = get_msg(),

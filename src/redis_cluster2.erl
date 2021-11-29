@@ -40,7 +40,7 @@
              slot_timer_ref = none,
 %             node_ids = #{},
 
-             info_cb = none,
+             info_pid = [] :: [pid()],
              update_delay = 1000, % 1s delay between slot map update requests
              client_opts = [],
              update_slot_wait = 500,
@@ -106,7 +106,7 @@ init([Addrs, Opts]) ->
                  %% ({max_waiting, Val}, S)     -> S#state{waiting = q_new(Val)};
                  %% ({max_pending, Val}, S)     -> S#state{pending = q_new(Val)};
                  %% ({reconnect_wait, Val}, S)  -> S#state{reconnect_wait = Val};
-                  ({info_cb, Val}, S)        -> S#st{info_cb = Val};
+                  ({info_pid, Val}, S)        -> S#st{info_pid = Val};
                   ({update_slot_wait, Val}, S) -> S#st{update_slot_wait = Val};
                   ({client_opts, Val}, S)     -> S#st{client_opts = Val};
                   ({min_replicas, Val}, S)     -> S#st{min_replicas = Val};
@@ -417,8 +417,8 @@ pick_node(State) ->
 
 
 
-send_info(Msg, State = #st{info_cb = Fun}) ->
-    [Fun(Msg) || Fun /= none],
+send_info(Msg, State) ->
+    [Pid ! Msg || Pid <- State#st.info_pid],
     State.
 
 

@@ -65,37 +65,14 @@ get_clients(ServerRef) ->
 %%% gen_server callbacks
 %%%===================================================================
 
-init([Addrs, Opts]) ->
+init([Addrs, Opts1]) ->
     %% Register callback to get slot map updates
-    Pid = self(),
-    Opts2 = case lists:keytake(info_cb, 1, Opts) of
-                false ->
-                    [{info_cb, fun(Msg) -> info_cb(Pid, Msg) end} | Opts];
-                {value, {info_cb, Fun}, Opts1} ->
-                    [{info_cb, fun(Msg) -> info_cb(Pid, Msg), Fun(Msg) end} | Opts1]
-            end,
+    InfoPids = [self() | proplists:get_value(info_pid, Opts1, [])],
+    Opts2 = [{info_pid, InfoPids} | proplists:delete(info_pid, Opts1)],
     {ok, ClusterPid} = redis_cluster2:start_link(Addrs, Opts2),
     EmptySlots = create_lookup_table(0, [], <<>>),
     {ok, #st{cluster_pid = ClusterPid, slots = EmptySlots}}.
 
-
-%% handle_call({slot_map_updated, {ClusterMap, AddrToPid, MapVersion}}, _From, State) ->
-%%     %% The idea is to store the client pids in a tuple and then
-%%     %% have a binary where each byte corresponds to a slot and the
-%%     %% value maps to a index in the tuple.
-
-%%     MasterAddrToPid = maps:with(redis_lib:slotmap_master_nodes(ClusterMap), AddrToPid),
-%%     %% Create a list of indices, one for each client pid
-%%     Ixs = lists:seq(1, maps:size(MasterAddrToPid)),
-%%     %% Combine the indices with the Addresses to create a lookup from Addr -> Ix
-%%     AddrToIx = maps:from_list(lists:zip(maps:keys(MasterAddrToPid), Ixs)),
-
-%%     Slots = create_lookup_table(ClusterMap, AddrToIx),
-%%     Clients = create_client_pid_tuple(MasterAddrToPid, AddrToIx),
-%%     {reply, ok, State#st{slots = Slots,
-%%                          clients = Clients,
-%%                          slot_map_version = MapVersion,
-%%                          addr_map = AddrToPid}};
 
 handle_call({command, Command, Key}, From, State) ->
     Slot = redis_lib:hash(Key),
@@ -140,7 +117,7 @@ handle_cast({forward_command, Command, From, Addr}, State) ->
     {noreply, State}.
 
 
-handle_info(slot_map_updated, State) ->
+handle_info({slot_map_updated, _ClusterSlotsInfo}, State) ->
     {MapVersion, ClusterMap, AddrToPid} = redis_cluster2:get_slot_map_info(State#st.cluster_pid),
     %% The idea is to store the client pids in a tuple and then
     %% have a binary where each byte corresponds to a slot and the
@@ -157,7 +134,12 @@ handle_info(slot_map_updated, State) ->
     {noreply, State#st{slots = Slots,
                        clients = Clients,
                        slot_map_version = MapVersion,
-                       addr_map = AddrToPid}}.
+                       addr_map = AddrToPid}};
+
+
+handle_info(_Ignore, State) ->
+    %% Could use a proxy process to receive the slot map update to avoid this catch all handle_info
+    {noreply, State}.
 
 
 terminate(_Reason, State) ->
@@ -175,23 +157,6 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-
-info_cb(Pid, Msg) ->
-    case Msg of
-        {slot_map_updated, _ClusterSlotsInfo} ->
-%            gen_server:call(Pid, {slot_map_updated, ClusterSlotsInfo});
-            Pid ! slot_map_updated;
-        _ ->
-            ignore
-    end.
-
-%% info_cb(Pid, Msg) ->
-%%     case Msg of
-%%         {slot_map_updated, ClusterSlotsInfo} ->
-%%             gen_server:call(Pid, {slot_map_updated, ClusterSlotsInfo});
-%%         _ ->
-%%             ignore
-%%     end.
 
 create_client_pid_tuple(AddrToPid, AddrToIx) ->
     %% Create a list with tuples where the first element is the index and the second is the pid
