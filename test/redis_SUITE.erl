@@ -14,8 +14,19 @@ all() ->
      t_scan_delete_keys,
      t_hard_failover,
      t_manual_failover,
-     t_split_data].
+     t_split_data,
+     t_init_fail
+    ].
 
+
+-define(MSG(Pattern, Timeout),
+        receive
+            Pattern -> ok
+        after
+            Timeout -> error({timeout, ??Pattern, erlang:process_info(self(), messages)})
+        end).
+
+-define(MSG(Pattern), ?MSG(Pattern, 1000)).
 
 init_per_suite(Config) ->
     %% TODO use port_command so we can get the exit code here?
@@ -94,26 +105,28 @@ t_hard_failover(_) ->
     ct:pal("~p\n", [redis:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>])]),
     ct:pal(os:cmd("docker stop " ++ Pod)),
 
-    connection_down([{localhost, Port}, {"127.0.0.1", Port}], {recv_exit,closed}),
-
-    {slot_map_updated, _ClusterSlotsReply} = get_msg(5000),
+    ?MSG(#{msg_type := socket_closed, addr := {localhost, Port}, reason := {recv_exit, closed}}),
+    ?MSG(#{msg_type := socket_closed, addr := {"127.0.0.1", Port}, reason := {recv_exit, closed}}),
+    ?MSG(#{msg_type := cluster_not_ok, reason := master_down}),
+    ?MSG(#{msg_type := slot_map_updated}, 5000),
 
     ct:pal("~p\n", [redis:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>])]),
 
     ct:pal(os:cmd("docker start " ++ Pod)),
 
-    %% node back TODO: check new client pid
-    connection_up([{localhost, Port}], 10000),
+    %% node back: first the inital add reconnects
+    ?MSG(#{msg_type := connected, addr := {localhost, Port}}, 10000),
 
-    {slot_map_updated, _} = get_msg(10000),
+    %% new slotmap when old master comes up as replica
+    ?MSG(#{msg_type := slot_map_updated}, 10000),
 
-    connection_up([{"127.0.0.1", Port}]),
-
-    {connection_status, _, fully_connected} = get_msg(3000),
-
+    %% new client comes up
+    ?MSG(#{msg_type := connected, addr := {"127.0.0.1", Port}, master := false}, 10000),
+    ?MSG(#{msg_type := cluster_ok}),
 
     %% old client to the failed node is closed since it was removed from slotmap
-    connection_down([{"127.0.0.1", Port}], {client_stopped,normal}, 2000),
+    ?MSG(#{msg_type := client_stopped, addr := {"127.0.0.1", Port}, reason := normal}, 2000),
+
     no_more_msgs().
 
 
@@ -165,8 +178,21 @@ t_manual_failover(_) ->
                   end,
                   [integer_to_binary(N) || N <- lists:seq(1,1000)]),
     ct:pal("~p\n", [os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " ROLE")]),
-    {slot_map_updated, _ClusterSlotsReply} = get_msg().
-%% TODO no_more_msgs
+
+    ?MSG(#{msg_type := slot_map_updated}),
+    no_more_msgs().
+
+
+t_init_fail(_) ->
+    Opts = [],
+           %%  {client_opts,
+           %%   [{connection_opts, [{timeout, 1000}]}]
+           %%  }
+           %% ],
+    ct:pal("~p\n", [os:cmd("redis-cli -p 30001 CLIENT PAUSE 10000")]),
+    {ok, P} = redis:start_link([{localhost, 30001}], [{info_pid, [self()]}] ++ Opts),
+    ?MSG(#{msg_type := connect_error, reason := {init_failed, timeout}}, 3500),
+    ct:pal("~p\n", [os:cmd("redis-cli -p 30001 CLIENT UNPAUSE")]).
 
 
 
@@ -267,59 +293,110 @@ t_split_data(_) ->
     ok.
 
 
-
 start_cluster() ->
     start_cluster([]).
 start_cluster(Opts) ->
-    Pid = self(),
-
     Ports = [30001, 30002, 30003, 30004, 30005, 30006],
     InitialNodes = [{localhost, Port} || Port <- Ports],
 
     {ok, P} = redis:start_link(InitialNodes, [{info_pid, [self()]}] ++ Opts),
 
-    connection_up(InitialNodes),
-    {slot_map_updated, _ClusterSlotsReply} = get_msg(),
-    connection_up([{"127.0.0.1", Port} || Port <- Ports]),
+%    ok = msg(#{msg_type => connected, addr => {localhost, 30001}}),
+    ?MSG(#{msg_type := connected, addr := {localhost, 30001}}),
+    ?MSG(#{msg_type := connected, addr := {localhost, 30002}}),
+    ?MSG(#{msg_type := connected, addr := {localhost, 30003}}),
+    ?MSG(#{msg_type := connected, addr := {localhost, 30004}}),
+    ?MSG(#{msg_type := connected, addr := {localhost, 30005}}),
+    ?MSG(#{msg_type := connected, addr := {localhost, 30006}}),
 
-    {connection_status, _, fully_connected} = get_msg(),
+    ?MSG(#{msg_type := slot_map_updated}),
+
+    ?MSG(#{msg_type := connected, addr := {"127.0.0.1", 30001}}),
+    ?MSG(#{msg_type := connected, addr := {"127.0.0.1", 30002}}),
+    ?MSG(#{msg_type := connected, addr := {"127.0.0.1", 30003}}),
+    ?MSG(#{msg_type := connected, addr := {"127.0.0.1", 30004}}),
+    ?MSG(#{msg_type := connected, addr := {"127.0.0.1", 30005}}),
+    ?MSG(#{msg_type := connected, addr := {"127.0.0.1", 30006}}),
+
+    ?MSG(#{msg_type := cluster_ok}),
+    %% connection_up(InitialNodes),
+    %% {slot_map_updated, _ClusterSlotsReply} = get_msg(),
+    %% connection_up([{"127.0.0.1", Port} || Port <- Ports]),
+
+    %% {connection_status, _, fully_connected} = get_msg(),
     no_more_msgs(),
     P.
 
-connection_up(Addrs) ->
-    connection_up(Addrs, 1000).
+%-define(MSG(Pattern), ?MSG(Pattern, 1000)).
 
-connection_up(Addrs, Timeout) ->
-    [receive
-         Msg = {connection_status, {_Pid, Addr, _Id},  connection_up} ->
-             Msg
-     after
-         Timeout -> error({timeout, Addr})
-     end
-     || Addr <- Addrs].
-
-connection_down(Addrs, Reason) ->
-    connection_down(Addrs, Reason, 1000).
-
-connection_down(Addrs, Reason, Timeout) ->
-    [receive
-         Msg = {connection_status, {_Pid, Addr, _Id}, {connection_down, Reason}} ->
-             Msg
-     after
-         Timeout -> error({timeout, Addr, Reason})
-     end
-     || Addr <- Addrs].
+%% -define(MSG(Pattern, Timeout),
+%%         receive
+%%             Msg = Pattern -> Msg
+%%         after
+%%             Timeout -> error({timeout, ??Pattern})
+%%         end).
 
 
+%% msg(Msg) ->
+%%     receive Msg -> Msg after 1000 -> apa end.
 
-get_msg() ->
-    get_msg(1000).
+%% msgs(Msgs, Timeout) ->
 
-get_msg(Timeout) ->
-    receive Msg -> Msg after Timeout -> get_msg_timeout end.
+%%     fun Loop(Expected) ->
+%%             receive
+%%                 Msg ->
+%%                     case match_msg(Msg, Expected) of
+%%                         {ok, Left} ->
+%%                             Loop(Left);
+%%                         error ->
+%%                             error({expected, Expected, got, Msg})
+%%                     end
+%%             after Timeout ->
+%%                     error({timeout_waiting_for, Expected})
+%%             end
+%%     end(Msgs).
+
+
+%% match_msg(Msg, Expected) ->
+    
+%-define(MSG(Pattern, Timeout), ).
+
+
+%% connection_up(Addrs) ->
+%%     connection_up(Addrs, 1000).
+
+%% connection_up(Addrs, Timeout) ->
+%%     [?MSG(#{msg_type := connected, addr := Addr}, Timeout) || Addr <- Addrs].
+
+%% connection_down(Addrs, Reason) ->
+%%     connection_down(Addrs, Reason, 1000).
+
+%% connection_down(Addrs, Reason, Timeout) ->
+%%     [receive
+%%          Msg = {connection_status, {_Pid, Addr, _Id}, {connection_down, Reason}} ->
+%%              Msg
+%%      after
+%%          Timeout -> error({timeout, Addr, Reason})
+%%      end
+%%      || Addr <- Addrs].
+
+
+
+%% get_msg() ->
+%%     get_msg(1000).
+
+%% get_msg(Timeout) ->
+%%     receive Msg -> Msg after Timeout -> get_msg_timeout end.
+
+%% no_more_msgs() ->
+%%     get_msg_timeout = get_msg(0).
 
 no_more_msgs() ->
-    get_msg_timeout = get_msg(0).
+    receive Msg ->
+            error({unexpected,Msg})
+    after 0 ->
+            ok
+    end.
 
 scan_helper(Client, Curs0, Acc0) ->
     {ok, [Curs1, Keys]} = redis:command_client(Client, [<<"SCAN">>, Curs0]),

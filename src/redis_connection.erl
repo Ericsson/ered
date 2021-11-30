@@ -28,7 +28,7 @@ request(Connection, Data, Timeout) ->
             Value
     after Timeout ->
             unlink(Connection),
-            timeout
+            {error, timeout}
     end.
 
 request_async(Connection, Data, Ref) ->

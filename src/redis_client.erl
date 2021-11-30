@@ -24,7 +24,7 @@
                 reconnect_wait = 1000,
                 connection_pid = none,
                 info_pid = none,
-                resp_version = 2,
+                resp_version = 3,
                 pending_timeout = 3000 :: non_neg_integer(),
                 pending_timer = make_ref() :: reference() % initialize to dummy ref, its a valid argument but wont cancel any timer
                }
@@ -157,7 +157,7 @@ start_connect(State) ->
 init_connection(State) ->
     case State#state.resp_version of
         3 ->
-            redis_connection:request(State#state.connection_pid, [<<"hello">>, <<"3">>]);
+            redis_connection:request(State#state.connection_pid, [<<"hello">>, <<"3">>], State#state.pending_timeout);
         2 ->
             ok
     end.

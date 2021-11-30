@@ -28,12 +28,11 @@
 
 
 
--type node_info(Reason, ErrorCode) ::
-        #{msg_type := node_info,
+-type node_info(MsgType, Reason) ::
+        #{msg_type := MsgType,
           reason := Reason,
-          error_code:= ErrorCode,
           % node_type := master|replica|not_in_map
-          is_master := boolean(),
+          master := boolean(),
           %% ip := inet:socket_address(),
           %% port := inet:port(),
           addr := addr(),
@@ -393,18 +392,17 @@ pick_node(State) ->
 format_info_msg(Msg, State) ->
     case Msg of
         {connection_status, {Pid, Addr, Id} , Status} ->
-            {Reason, ErrorCode} =
+            {MsgType, Reason} =
                 case Status of
                     connection_up ->
-                        {connected, none};
+                        {connected, ok};
                     {connection_down, R} ->
                         R
                 end,
 %            {Ip, Port} = Addr,
-            #{msg_type => node_info,
+            #{msg_type => MsgType,
               reason => Reason,
-              error_code=> ErrorCode,
-              is_master => sets:is_element(Addr, State#st.up),
+              master => sets:is_element(Addr, State#st.up),
               %% ip => Ip,
               %% port => Port,
               addr => Addr,
