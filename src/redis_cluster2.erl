@@ -26,6 +26,60 @@
 -type slot_map_node() :: [binary() | non_neg_integer()]. % [Ip::binary(), Port::non_neg_integer(), Id::binary()].
 -type slot_map() :: [non_neg_integer() | slot_map_node()]. %[SlotStart::non_neg_integer(), SlotEnd::non_neg_integer(), [slot_map_node()]]
 
+
+
+-type node_info(Reason, ErrorCode) ::
+        #{msg_type := node_info,
+          reason := Reason,
+          error_code:= ErrorCode,
+          % node_type := master|replica|not_in_map
+          is_master := boolean(),
+          %% ip := inet:socket_address(),
+          %% port := inet:port(),
+          addr := addr(),
+          client_id := pid(),
+          node_id := string()
+         }.
+
+-type info_msg() ::
+        node_info(connected, none) |
+
+        node_info(socket_closed, any()) |
+
+        node_info(connect_error, any()) |
+
+        node_info(flagged_as_down, gone_too_long) |
+
+        node_info(queue_ok, none) |
+
+        node_info(queue_overflow, none) |
+
+        node_info(client_stopped, any()) |
+
+        #{msg_type := slot_map_updated,
+          slot_map := ClusterSlotsReply :: any(),
+          map_version := non_neg_integer()} |
+
+        #{msg_type := cluster_slots_error_response,
+          response := RedisReply :: any()} |
+
+        #{msg_type := cluster_ok} |
+
+        #{msg_type := cluster_not_ok,
+          reason := master_down | master_node_queue_full | bad_slot_map}.
+
+
+
+-type internal_info_msg() ::
+        redis_client:info_msg() |
+        {slot_map_updated, ClusterSlotsReply :: slot_map(), Version :: non_neg_integer()} |
+        {cluster_slots_error_response, Response :: binary()} |
+        cluster_ok |
+        {cluster_nok, Reason :: master_down | master_node_queue_full | bad_slot_map}.
+
+
+
+
 %-type node_state() :: {init|connection_up|connection_down, pid()}.
 
 -record(st, {% default_node :: undefined | {addr(), node_state()}, % will be used as default for slot map updates unless down
@@ -331,119 +385,8 @@ pick_node(State) ->
             maps:get(Addr, State#st.nodes)
     end.
 
-% socket error {node_type => master|replica}
-
-% connect failed
-% connect ok
-% connect wait timeout
 
 
-% slot map updated
-% slot map error
-
-% all master nodes ok
-% all master nodes not ok
-
-% queue overflow
-% queue level below watermark
-
-
-%% -type node_type() = master | replica
-%% -type info_msg() ::
-
-%%         #{msg_type := connection_closed,
-%%           reason := any(),
-%%           node_type := node_type(),
-%%           ip := inet:socket_address(),
-%%           port := inet:port()} |
-
-%%         #{msg_type := connect_error,
-%%           reason := any(),
-%%           node_type := node_type(),
-%%           ip := inet:socket_address(),
-%%           port := inet:port()} |
-
-%%         #{msg_type := connect_ok,
-%%           node_type := node_type(),
-%%           ip := inet:socket_address(),
-%%           port := inet:port()} |
-
-%%         #{msg_type := node_flagged_as_down,
-%%           node_type := node_type(),
-%%           ip := inet:socket_address(),
-%%           port := inet:port()}.
-
-
-
--type node_info(Reason, ErrorCode) ::
-        #{msg_type := node_info,
-          reason := Reason,
-          error_code:= ErrorCode,
-          % node_type := master|replica|not_in_map
-          is_master := boolean(),
-          ip := inet:socket_address(),
-          port := inet:port(),
-          client_id := pid(),
-          node_id := string()
-         }.
-
--type info_msg() ::
-        node_info(connected, none) |
-
-        node_info(socket_closed, any()) |
-
-        node_info(connect_error, any()) |
-
-        node_info(flagged_as_down, gone_too_long) |
-
-        node_info(queue_ok, none) |
-
-        node_info(queue_overflow, none) |
-
-        node_info(client_stopped, any()) |
-
-        #{msg_type := slot_map_updated,
-          slot_map := ClusterSlotsReply :: any(),
-          map_version := non_neg_integer()} |
-
-        #{msg_type := cluster_slots_error_response,
-          response := RedisReply :: any()} |
-
-        #{msg_type := cluster_ok} |
-
-        #{msg_type := cluster_not_ok,
-          reason := master_down | master_node_queue_full | bad_slot_map}.
-
-
-
-
-
-
-
-%% % all master nodes not ok
-
-%% format_info_msg(Msg, State) ->
-%%     case Msg of
-%%         {connection_status, NodeInfo, connection_up} ->
-%%             node_info_msg(NodeInfo, connected, none, State);
-
-%%         {connection_status, NodeInfo, {connection_down, {client_stopped, Reason}}} ->
-%%             node_info_msg(NodeInfo, client_stopped, Reason);
-
-%%         {connection_status, NodeInfo, {connection_down, {connect_error, Reason}}} ->
-%%             node_info_msg(NodeInfo, connect_error, Reason);
-
-%%         {connection_status, NodeInfo, {connection_down, {socket_closed, Reason}}} ->
-%%             node_info_msg(NodeInfo, socket_closed, Reason)
-%%     end.
-
-
--type internal_info_msg() ::
-        redis_client:info_msg() |
-        {slot_map_updated, ClusterSlotsReply :: slot_map(), Version :: non_neg_integer()} |
-        {cluster_slots_error_response, Response :: binary()} |
-        cluster_ok |
-        {cluster_nok, Reason :: master_down | master_node_queue_full | bad_slot_map}.
 
 
 -spec format_info_msg(internal_info_msg(), #st{}) -> info_msg().
@@ -457,13 +400,14 @@ format_info_msg(Msg, State) ->
                     {connection_down, R} ->
                         R
                 end,
-            {Ip, Port} = Addr,
+%            {Ip, Port} = Addr,
             #{msg_type => node_info,
               reason => Reason,
               error_code=> ErrorCode,
               is_master => sets:is_element(Addr, State#st.up),
-              ip => Ip,
-              port => Port,
+              %% ip => Ip,
+              %% port => Port,
+              addr => Addr,
               client_id => Pid,
               node_id => Id};
 
