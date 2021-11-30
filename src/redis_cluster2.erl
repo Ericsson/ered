@@ -21,7 +21,7 @@
       | {'global', GlobalName :: term()}
       | {'via', RegMod :: module(), ViaName :: term()}.
 
--type addr() :: {inet:socket_address()|inet:hostname(), inet:port_number()}.
+-type addr() :: redis_client:addr(). %{inet:socket_address()|inet:hostname(), inet:port_number()}.
 
 -type slot_map_node() :: [binary() | non_neg_integer()]. % [Ip::binary(), Port::non_neg_integer(), Id::binary()].
 -type slot_map() :: [non_neg_integer() | slot_map_node()]. %[SlotStart::non_neg_integer(), SlotEnd::non_neg_integer(), [slot_map_node()]]
@@ -163,12 +163,12 @@ handle_info({slot_info, Version, Response}, State) ->
             %% got a response for a request triggered for an old version of the slot map, ignore
             {noreply, State};
         {error, _} ->
-            %% client error, i.e queue full or similar, ignore. New request will be sent periodically
+            %% client error, i.e queue full or socket error or similar, ignore. New request will be sent periodically
             {noreply, State};
-        {ok, {error, Reason}} ->
+        {ok, {error, Error}} ->
             %% error sent from redis
             %exit(slot_info_error_from_redis); % TODO: handle
-            send_info({slot_info_error_from_redis, Reason}, State),
+            send_info({cluster_slots_error_response, Error}, State),
             {noreply, State};
         {ok, ClusterSlotsReply} ->
             NewMap = lists:sort(ClusterSlotsReply),
@@ -195,7 +195,7 @@ handle_info({slot_info, Version, Response}, State) ->
                                                       not maps:is_key(Addr, State#st.nodes)]),
 
                     NewNodes = maps:merge(KeepNodes, NewOpenNodes),
-                    send_info({slot_map_updated, {ClusterSlotsReply, NewNodes, Version + 1}}, State),
+                    send_info({slot_map_updated, ClusterSlotsReply, Version + 1}, State),
 
                     %% Important to wait with closing nodes until the slot info is sent out. We
                     %% want to make sure that slot maps are updated before closing otherwise
@@ -261,7 +261,8 @@ set_cluster_state(nok, Reason, State) ->
                  nok ->
                      State;
                  ok ->
-                     State#st{cluster_state = nok}  % send_info(#{msg_type := cluster_not_ok,
+                     send_info({cluster_nok, Reason}, State),
+                     State#st{cluster_state = nok}
              end,
     start_periodic_slot_info_request(State1);
 
@@ -269,7 +270,7 @@ set_cluster_state(ok, _, State) ->
     io:format("~p\n", [{ok, State}]),
     State1 = case State#st.cluster_state of
                  nok ->
-                     send_info({connection_status, self(), fully_connected}, State),
+                     send_info(cluster_ok, State),
                      State#st{cluster_state = ok};
                  ok ->
                      State
@@ -309,7 +310,7 @@ stop_periodic_slot_info_request(State) ->
 send_slot_info_request(Node, State) ->
     Pid = self(),
     Cb = fun(Answer) -> Pid ! {slot_info, State#st.slot_map_version, Answer} end,
-    redis_client:request_cb(Node, [<<"CLUSTER">>, <<"SLOTS">>], Cb ).
+    redis_client:request_cb(Node, [<<"CLUSTER">>, <<"SLOTS">>], Cb).
 
 
 
@@ -386,8 +387,8 @@ pick_node(State) ->
           node_id := string()
          }.
 
--type info_msg2() ::
-        node_info(connect_succsesful, none) |
+-type info_msg() ::
+        node_info(connected, none) |
 
         node_info(socket_closed, any()) |
 
@@ -395,29 +396,98 @@ pick_node(State) ->
 
         node_info(flagged_as_down, gone_too_long) |
 
-        node_info(queue_below_watermark, none) |
+        node_info(queue_ok, none) |
 
         node_info(queue_overflow, none) |
+
+        node_info(client_stopped, any()) |
 
         #{msg_type := slot_map_updated,
           slot_map := ClusterSlotsReply :: any(),
           map_version := non_neg_integer()} |
 
-        #{msg_type := slot_map_error_response,
+        #{msg_type := cluster_slots_error_response,
           response := RedisReply :: any()} |
 
         #{msg_type := cluster_ok} |
 
         #{msg_type := cluster_not_ok,
-          reason := master_node_down | master_node_queue_full | bad_slot_map}.
-
-
-% all master nodes not ok
+          reason := master_down | master_node_queue_full | bad_slot_map}.
 
 
 
 
-send_info(Msg, State) ->
+
+
+
+%% % all master nodes not ok
+
+%% format_info_msg(Msg, State) ->
+%%     case Msg of
+%%         {connection_status, NodeInfo, connection_up} ->
+%%             node_info_msg(NodeInfo, connected, none, State);
+
+%%         {connection_status, NodeInfo, {connection_down, {client_stopped, Reason}}} ->
+%%             node_info_msg(NodeInfo, client_stopped, Reason);
+
+%%         {connection_status, NodeInfo, {connection_down, {connect_error, Reason}}} ->
+%%             node_info_msg(NodeInfo, connect_error, Reason);
+
+%%         {connection_status, NodeInfo, {connection_down, {socket_closed, Reason}}} ->
+%%             node_info_msg(NodeInfo, socket_closed, Reason)
+%%     end.
+
+
+-type internal_info_msg() ::
+        redis_client:info_msg() |
+        {slot_map_updated, ClusterSlotsReply :: slot_map(), Version :: non_neg_integer()} |
+        {cluster_slots_error_response, Response :: binary()} |
+        cluster_ok |
+        {cluster_nok, Reason :: master_down | master_node_queue_full | bad_slot_map}.
+
+
+-spec format_info_msg(internal_info_msg(), #st{}) -> info_msg().
+format_info_msg(Msg, State) ->
+    case Msg of
+        {connection_status, {Pid, Addr, Id} , Status} ->
+            {Reason, ErrorCode} =
+                case Status of
+                    connection_up ->
+                        {connected, none};
+                    {connection_down, R} ->
+                        R
+                end,
+            {Ip, Port} = Addr,
+            #{msg_type => node_info,
+              reason => Reason,
+              error_code=> ErrorCode,
+              is_master => sets:is_element(Addr, State#st.up),
+              ip => Ip,
+              port => Port,
+              client_id => Pid,
+              node_id => Id};
+
+        {slot_map_updated, ClusterSlotsReply, Version} ->
+            #{msg_type => slot_map_updated,
+              slot_map => ClusterSlotsReply,
+              map_version => Version};
+
+        {cluster_slots_error_response, Response} ->
+            #{msg_type => cluster_slots_error_response,
+              response => Response};
+
+        cluster_ok ->
+            #{msg_type => cluster_ok};
+
+        {cluster_nok, Reason} ->
+            #{msg_type => cluster_not_ok,
+              reason => Reason}
+
+    end.
+
+
+send_info(InternalMsg, State) ->
+    Msg = format_info_msg(InternalMsg, State),
     [Pid ! Msg || Pid <- State#st.info_pid],
     State.
 

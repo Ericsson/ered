@@ -117,7 +117,7 @@ handle_cast({forward_command, Command, From, Addr}, State) ->
     {noreply, State}.
 
 
-handle_info({slot_map_updated, _ClusterSlotsInfo}, State) ->
+handle_info(#{msg_type := slot_map_updated}, State) ->
     {MapVersion, ClusterMap, AddrToPid} = redis_cluster2:get_slot_map_info(State#st.cluster_pid),
     %% The idea is to store the client pids in a tuple and then
     %% have a binary where each byte corresponds to a slot and the
@@ -138,7 +138,7 @@ handle_info({slot_map_updated, _ClusterSlotsInfo}, State) ->
 
 
 handle_info(_Ignore, State) ->
-    %% Could use a proxy process to receive the slot map update to avoid this catch all handle_info
+    %% Could use a proxy process to receive the slot map udate to avoid this catch all handle_info
     {noreply, State}.
 
 

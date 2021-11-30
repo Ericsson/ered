@@ -291,7 +291,8 @@ connection_up(Addrs) ->
 
 connection_up(Addrs, Timeout) ->
     [receive
-         {connection_status, {_Pid, Addr, _Id},  connection_up} -> ok
+         Msg = {connection_status, {_Pid, Addr, _Id},  connection_up} ->
+             Msg
      after
          Timeout -> error({timeout, Addr})
      end
@@ -302,8 +303,8 @@ connection_down(Addrs, Reason) ->
 
 connection_down(Addrs, Reason, Timeout) ->
     [receive
-         {connection_status, {_Pid, Addr, _Id}, {connection_down, Reason}} ->
-             ok
+         Msg = {connection_status, {_Pid, Addr, _Id}, {connection_down, Reason}} ->
+             Msg
      after
          Timeout -> error({timeout, Addr, Reason})
      end

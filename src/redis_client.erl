@@ -30,6 +30,17 @@
                }
        ).
 
+-type host()        :: inet:socket_address() | inet:hostname().
+-type addr()        :: {host(), inet:port_number()}.
+-type node_id()     :: binary() | undefined.
+-type client_info() :: {pid(), addr(), node_id()}.
+-type status()      :: connection_up | {connection_down, down_reason()}.
+-type reason()      :: term(). % ssl reasons are of type any so no point being more specific
+-type down_reason() :: {client_stopped, reason()} | {connect_error, reason()} | {socket_closed, reason()}.
+-type info_msg()    :: {connection_status, client_info(), status()}.
+
+-export_type([info_msg/0, addr/0]).
+
 %%%===================================================================
 %%% API
 %%%===================================================================
@@ -83,7 +94,7 @@ handle_info({connected, _Pid}, State) ->
     %% TODO make async
     case init_connection(State) of
         {error, Reason} ->
-            {noreply, connection_error({connection_init_failed, Reason}, State)};
+            {noreply, connection_error({connect_error, {init_failed, Reason}}, State)};
         _ ->
             erlang:cancel_timer(State#state.pending_timer),
             report_connection_status(connection_up, State),
@@ -94,7 +105,7 @@ handle_info({connect_error, _Pid, Reason}, State) ->
     {noreply, connection_error({connect_error, Reason}, State)};
 
 handle_info({socket_closed, _Pid, Reason}, State) ->
-    {noreply, connection_error(Reason, State)};
+    {noreply, connection_error({socket_closed, Reason}, State)};
 
 %% handle_info({'EXIT', _Pid, Reason}, State) ->
 %%     {noreply, connection_error(Reason, State)};
@@ -278,6 +289,7 @@ report_connection_status(Status, State = #state{host = Host, port = Port}) ->
     send_info(Msg, State).
 
 
+-spec send_info(info_msg(), #state{}) -> ok.
 send_info(Msg, #state{info_pid = Pid}) ->
     case Pid of
         none -> ok;
