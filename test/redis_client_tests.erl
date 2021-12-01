@@ -28,8 +28,8 @@ request_t() ->
 		       ok = gen_tcp:send(Sock, <<"+pong\r\n">>),
 		       receive ok -> ok end
 	       end),
-    {ok,Pid} = redis_client:start_link("127.0.0.1", Port, []),
-    {ok, <<"pong">>} = redis_client:request(Pid, <<"ping">>).
+    Client = start_client(Port),
+    {ok, <<"pong">>} = redis_client:request(Client, <<"ping">>).
 
 
 fail_connect_t() ->
@@ -54,13 +54,13 @@ fail_parse_t() ->
 		       ok = gen_tcp:send(Sock2, <<"+pong\r\n">>),
 		       receive ok -> ok end
 	       end),
-    {ok, Client} = redis_client:start_link("127.0.0.1", Port, [{info_pid, self()}]),
+    Client = start_client(Port),
     Pid = self(),
     spawn_link(fun() ->
 		       Pid ! redis_client:request(Client, <<"ping">>)
 	       end),
     expect_connection_up(Client),
-    {recv_exit, {parse_error,{invalid_data,<<"&pong">>}}} = expect_connection_down(Client),
+    {socket_closed, {recv_exit, {parse_error,{invalid_data,<<"&pong">>}}}} = expect_connection_down(Client),
     expect_connection_up(Client),
     {ok, <<"pong">>} = get_msg().
 
@@ -76,9 +76,9 @@ server_close_socket_t() ->
 		       {ok, Sock2} = gen_tcp:accept(ListenSock),
 		       receive ok -> ok end
 	       end),
-    {ok, Client} = redis_client:start_link("127.0.0.1", Port, [{info_pid, self()}]),
+    Client = start_client(Port),
     expect_connection_up(Client),
-    {recv_exit, closed} = expect_connection_down(Client),
+    {socket_closed, {recv_exit, closed}} = expect_connection_down(Client),
     expect_connection_up(Client).
 
 
@@ -89,7 +89,7 @@ bad_request_t() ->
 		       {ok, Sock} = gen_tcp:accept(ListenSock),
 		       receive ok -> ok end
 	       end),
-    {ok, Client} = redis_client:start_link("127.0.0.1", Port, [{info_pid, self()}]),
+    Client = start_client(Port),
     expect_connection_up(Client),
     ?_assertException(error, badarg, redis_client:request(Client, bad_request)).
 
@@ -118,7 +118,7 @@ server_buffer_full_t() ->
 
 		       receive ok -> ok end
 	       end),
-    {ok, Client} = redis_client:start_link("127.0.0.1", Port, [{info_pid, self()}, {max_waiting, 5}, {max_pending, 5}]),
+    Client = start_client(Port, [{max_waiting, 5}, {max_pending, 5}]),
     expect_connection_up(Client),
 
     Pid = self(),
@@ -150,13 +150,13 @@ server_buffer_full_reconnect_t() ->
 		       receive ok -> ok end
 
 	       end),
-    {ok, Client} = redis_client:start_link("127.0.0.1", Port, [{info_pid, self()}, {max_waiting, 5}, {max_pending, 5}]),
+    Client = start_client(Port, [{max_waiting, 5}, {max_pending, 5}]),
     expect_connection_up(Client),
 
     Pid = self(),
     [redis_client:request_cb(Client, <<"ping">>, fun(Reply) -> Pid ! {N, Reply} end) || N <- lists:seq(1,11)],
     {6, {error, queue_overflow}} = get_msg(),
-    {recv_exit, closed} = expect_connection_down(Client),
+    {socket_closed, {recv_exit, closed}} = expect_connection_down(Client),
     [{N, {error, queue_overflow}} = get_msg() || N <- [1,2,3,4,5]],
     expect_connection_up(Client),
     [{N, {ok, <<"pong">>}} = get_msg() || N <- [7,8,9,10,11]].
@@ -183,14 +183,12 @@ send_timeout_t() ->
 		       ok = gen_tcp:send(Sock2, <<"+pong\r\n">>),
 		       receive ok -> ok end
 	       end),
-    {ok, Client} = redis_client:start_link("127.0.0.1", Port, [{info_pid, self()},
-							       {connection_opts, [{response_timeout, 100}]}
-							       ]),
+    Client = start_client(Port, [{connection_opts, [{response_timeout, 100}]}]),
     expect_connection_up(Client),
     Pid = self(),
     redis_client:request_cb(Client, <<"ping">>, fun(Reply) -> Pid ! {reply, Reply} end),
     % this should come after max 1000ms
-    {recv_exit,timeout} = expect_connection_down(Client, 200),
+    {socket_closed, {recv_exit,timeout}} = expect_connection_down(Client, 200),
     expect_connection_up(Client),
     {reply, {ok, <<"pong">>}} = get_msg(),
     no_more_msgs().
@@ -221,6 +219,14 @@ get_msg(Timeout) ->
 
 no_more_msgs() ->
     timeout = get_msg(0).
+
+
+start_client(Port) ->
+    start_client(Port, []).
+
+start_client(Port, Opt) ->
+    {ok, Client} = redis_client:start_link("127.0.0.1", Port, [{info_pid, self()}, {resp_version,2}] ++ Opt),
+    Client.
 
 %% close
 %% connect resp3/password/etc
