@@ -14,8 +14,8 @@ all() ->
      t_scan_delete_keys,
      t_hard_failover,
      t_manual_failover,
-     t_split_data,
-     t_init_fail
+     t_init_timeout,
+     t_split_data
     ].
 
 
@@ -183,17 +183,31 @@ t_manual_failover(_) ->
     no_more_msgs().
 
 
-t_init_fail(_) ->
-    Opts = [],
-           %%  {client_opts,
-           %%   [{connection_opts, [{timeout, 1000}]}]
-           %%  }
-           %% ],
+t_init_timeout(_) ->
+    Opts = [
+            {client_opts,
+             [{connection_opts, [{response_timeout, 1000}]}]
+            }
+           ],
     ct:pal("~p\n", [os:cmd("redis-cli -p 30001 CLIENT PAUSE 10000")]),
     {ok, P} = redis:start_link([{localhost, 30001}], [{info_pid, [self()]}] ++ Opts),
-    ?MSG(#{msg_type := connect_error, reason := {init_failed, timeout}}, 3500),
-    ct:pal("~p\n", [os:cmd("redis-cli -p 30001 CLIENT UNPAUSE")]).
+%    ?MSG(#{msg_type := connect_error, reason := {init_failed, timeout}}, 3500),
+    ?MSG(#{msg_type := socket_closed, reason := {recv_exit, timeout}}, 3500),
+    ct:pal("~p\n", [os:cmd("redis-cli -p 30001 CLIENT UNPAUSE")]),
+    
+    ?MSG(#{msg_type := connected, addr := {localhost, 30001}}),
 
+    ?MSG(#{msg_type := slot_map_updated}),
+
+    ?MSG(#{msg_type := connected, addr := {"127.0.0.1", 30001}}),
+    ?MSG(#{msg_type := connected, addr := {"127.0.0.1", 30002}}),
+    ?MSG(#{msg_type := connected, addr := {"127.0.0.1", 30003}}),
+    ?MSG(#{msg_type := connected, addr := {"127.0.0.1", 30004}}),
+    ?MSG(#{msg_type := connected, addr := {"127.0.0.1", 30005}}),
+    ?MSG(#{msg_type := connected, addr := {"127.0.0.1", 30006}}),
+
+    ?MSG(#{msg_type := cluster_ok}),
+    no_more_msgs().
 
 
 t_scan_delete_keys(_) ->
@@ -327,69 +341,6 @@ start_cluster(Opts) ->
     no_more_msgs(),
     P.
 
-%-define(MSG(Pattern), ?MSG(Pattern, 1000)).
-
-%% -define(MSG(Pattern, Timeout),
-%%         receive
-%%             Msg = Pattern -> Msg
-%%         after
-%%             Timeout -> error({timeout, ??Pattern})
-%%         end).
-
-
-%% msg(Msg) ->
-%%     receive Msg -> Msg after 1000 -> apa end.
-
-%% msgs(Msgs, Timeout) ->
-
-%%     fun Loop(Expected) ->
-%%             receive
-%%                 Msg ->
-%%                     case match_msg(Msg, Expected) of
-%%                         {ok, Left} ->
-%%                             Loop(Left);
-%%                         error ->
-%%                             error({expected, Expected, got, Msg})
-%%                     end
-%%             after Timeout ->
-%%                     error({timeout_waiting_for, Expected})
-%%             end
-%%     end(Msgs).
-
-
-%% match_msg(Msg, Expected) ->
-    
-%-define(MSG(Pattern, Timeout), ).
-
-
-%% connection_up(Addrs) ->
-%%     connection_up(Addrs, 1000).
-
-%% connection_up(Addrs, Timeout) ->
-%%     [?MSG(#{msg_type := connected, addr := Addr}, Timeout) || Addr <- Addrs].
-
-%% connection_down(Addrs, Reason) ->
-%%     connection_down(Addrs, Reason, 1000).
-
-%% connection_down(Addrs, Reason, Timeout) ->
-%%     [receive
-%%          Msg = {connection_status, {_Pid, Addr, _Id}, {connection_down, Reason}} ->
-%%              Msg
-%%      after
-%%          Timeout -> error({timeout, Addr, Reason})
-%%      end
-%%      || Addr <- Addrs].
-
-
-
-%% get_msg() ->
-%%     get_msg(1000).
-
-%% get_msg(Timeout) ->
-%%     receive Msg -> Msg after Timeout -> get_msg_timeout end.
-
-%% no_more_msgs() ->
-%%     get_msg_timeout = get_msg(0).
 
 no_more_msgs() ->
     receive Msg ->

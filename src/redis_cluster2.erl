@@ -47,6 +47,8 @@
 
         node_info(connect_error, any()) |
 
+        node_info(init_error, any()) |
+
         node_info(flagged_as_down, gone_too_long) |
 
         node_info(queue_ok, none) |

@@ -26,7 +26,8 @@
                 info_pid = none,
                 resp_version = 3,
                 pending_timeout = 3000 :: non_neg_integer(),
-                pending_timer = make_ref() :: reference() % initialize to dummy ref, its a valid argument but wont cancel any timer
+                pending_timer = none :: none | reference(), %% Timer to go from pending to down
+                init_timer = none :: none | reference() %% Timer to retry the init procedure
                }
        ).
 
@@ -36,7 +37,8 @@
 -type client_info() :: {pid(), addr(), node_id()}.
 -type status()      :: connection_up | {connection_down, down_reason()}.
 -type reason()      :: term(). % ssl reasons are of type any so no point being more specific
--type down_reason() :: {client_stopped, reason()} | {connect_error, reason()} | {socket_closed, reason()}.
+-type down_reason() :: {client_stopped | connect_error | init_error | socket_closed, reason()}.
+%-type down_reason() :: {client_stopped, reason()} | {connect_error, reason()} | {init_error, reason()} | {socket_closed, reason()}.
 -type info_msg()    :: {connection_status, client_info(), status()}.
 
 -export_type([info_msg/0, addr/0]).
@@ -90,16 +92,21 @@ handle_info({request_reply, Reply}, State = #state{pending = Pending}) ->
     reply_request(Request, {ok, Reply}),
     {noreply, send_waiting(State#state{pending = NewPending})};
 
-handle_info({connected, _Pid}, State) ->
-    %% TODO make async
-    case init_connection(State) of
+
+handle_info({init_request_reply, Reply}, State) ->
+    case Reply of
         {error, Reason} ->
-            {noreply, connection_error({connect_error, {init_failed, Reason}}, State)};
+            {noreply, init_error({init_error, Reason}, State)};
         _ ->
-            erlang:cancel_timer(State#state.pending_timer),
+            %erlang:cancel_timer(State#state.pending_timer),
             report_connection_status(connection_up, State),
-            {noreply, send_waiting(State#state{connection_state = up})}
+            {noreply, send_waiting(State#state{connection_state = up,
+                                               pending_timer = none})}
     end;
+
+
+handle_info({connected, _Pid}, State) ->
+    {noreply, init_connection(State)};
 
 handle_info({connect_error, _Pid, Reason}, State) ->
     {noreply, connection_error({connect_error, Reason}, State)};
@@ -107,21 +114,19 @@ handle_info({connect_error, _Pid, Reason}, State) ->
 handle_info({socket_closed, _Pid, Reason}, State) ->
     {noreply, connection_error({socket_closed, Reason}, State)};
 
-%% handle_info({'EXIT', _Pid, Reason}, State) ->
-%%     {noreply, connection_error(Reason, State)};
-
 handle_info(do_reconnect, State) ->
     {noreply, start_connect(State)};
 
-handle_info(pending_timeout, State) ->
-    case State#state.connection_state of
-        pending ->
-            %% TODO trigger info event
-            State1 = reply_all({error, node_down}, State),
-            {noreply, State1#state{connection_state = down}};
-        _ ->
-            {noreply, State}
-    end.
+handle_info({timeout, TimerRef, pending}, State) when TimerRef == State#state.pending_timer ->
+    State1 = reply_all({error, node_down}, State),
+    {noreply, State1#state{connection_state = down}};
+
+handle_info({timeout, TimerRef, init}, State) when TimerRef == State#state.init_timer ->
+    {noreply, init_connection(State)};
+
+handle_info({timeout, _TimerRef, _Msg}, State) ->
+    {noreply, State}.
+
 
 
 terminate(Reason, State) ->
@@ -153,14 +158,37 @@ start_connect(State) ->
     Pid = redis_connection:connect_async(Host, Port, Opts),
     State#state{connection_pid = Pid}.
 
-
 init_connection(State) ->
     case State#state.resp_version of
         3 ->
-            redis_connection:request(State#state.connection_pid, [<<"hello">>, <<"3">>], State#state.pending_timeout);
+            redis_connection:request_async(State#state.connection_pid, [<<"HELLO">>, <<"3">>], init_request_reply);
+
         2 ->
-            ok
+            self() ! {init_request_reply, ok}
+    end,
+    State.
+
+%% init_connection(State) ->
+%%     case State#state.resp_version of
+%%         3 ->
+%%             redis_connection:request(State#state.connection_pid, [<<"hello">>, <<"3">>], State#state.pending_timeout);
+%%         2 ->
+%%             ok
+%%     end.
+
+init_error(Reason, State) ->
+    case State#state.connection_state of
+        S when S == down; S == pending ->
+            State#state{init_timer = erlang:start_timer(State#state.reconnect_wait, self(), init)};
+        _ ->
+            report_connection_status({connection_down, Reason}, State),
+            State2 = cancel_pending_requests(State),
+            State2#state{connection_state = pending,
+                         pending_timer = erlang:start_timer(State#state.pending_timeout, self(), pending),
+                         init_timer = erlang:start_timer(State#state.reconnect_wait, self(), init)}
     end.
+
+
 
 connection_error(Reason, State) ->
     case State#state.connection_state of
@@ -171,7 +199,8 @@ connection_error(Reason, State) ->
             report_connection_status({connection_down, Reason}, State),
             State2 = cancel_pending_requests(State),
             start_connect(State2#state{connection_state = pending,
-                                       pending_timer = erlang:send_after(State#state.pending_timeout, self(), pending_timeout)
+                                       pending_timer = erlang:start_timer(State#state.pending_timeout, self(), pending),
+                                       init_timer = none % no need for this until connection is up again
                                       })
     end.
 
