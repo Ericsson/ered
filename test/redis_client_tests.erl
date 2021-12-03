@@ -16,7 +16,8 @@ run_test_() ->
      {spawn, fun bad_option_t/0},
      {spawn, fun bad_connection_option_t/0},
      {spawn, fun server_buffer_full_reconnect_t/0},
-     {spawn, fun send_timeout_t/0}
+     {spawn, fun send_timeout_t/0},
+     {spawn, fun fail_hello_t/0}
     ].
 
 request_t() ->
@@ -191,6 +192,26 @@ send_timeout_t() ->
     {socket_closed, {recv_exit,timeout}} = expect_connection_down(Client, 200),
     expect_connection_up(Client),
     {reply, {ok, <<"pong">>}} = get_msg(),
+    no_more_msgs().
+
+fail_hello_t() ->
+    {ok, ListenSock} = gen_tcp:listen(0, [binary, {active , false}]),
+    {ok, Port} = inet:port(ListenSock),
+    Pid = self(),
+    spawn_link(fun() ->
+		       {ok, Sock} = gen_tcp:accept(ListenSock),
+		       {ok, <<"*2\r\n$5\r\nHELLO\r\n$1\r\n3\r\n">>} = gen_tcp:recv(Sock, 0),
+                       ok = gen_tcp:send(Sock, <<"-NOPROTO unsupported protocol version\r\n">>),
+
+                       %% test resend
+		       {ok, <<"*2\r\n$5\r\nHELLO\r\n$1\r\n3\r\n">>} = gen_tcp:recv(Sock, 0),
+                       ok = gen_tcp:send(Sock, <<"-NOPROTO unsupported protocol version\r\n">>),
+
+                       Pid ! done
+	       end),
+    {ok,Client} = redis_client:start_link("127.0.0.1", Port, [{info_pid, self()}]),
+    {init_error, <<"NOPROTO unsupported protocol version">>} = expect_connection_down(Client),
+    receive done -> ok end,
     no_more_msgs().
 
 
