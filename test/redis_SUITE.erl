@@ -323,23 +323,33 @@ start_cluster(Opts) ->
     ?MSG(#{msg_type := connected, addr := {localhost, 30005}}),
     ?MSG(#{msg_type := connected, addr := {localhost, 30006}}),
 
-    ?MSG(#{msg_type := slot_map_updated}),
 
-    ?MSG(#{msg_type := connected, addr := {"127.0.0.1", 30001}}),
-    ?MSG(#{msg_type := connected, addr := {"127.0.0.1", 30002}}),
-    ?MSG(#{msg_type := connected, addr := {"127.0.0.1", 30003}}),
-    ?MSG(#{msg_type := connected, addr := {"127.0.0.1", 30004}}),
-    ?MSG(#{msg_type := connected, addr := {"127.0.0.1", 30005}}),
-    ?MSG(#{msg_type := connected, addr := {"127.0.0.1", 30006}}),
+    #{slot_map := SlotMap} = msg(msg_type, slot_map_updated, 1000),
+
+    IdMap =  maps:from_list(lists:flatmap(
+                              fun([_,_|Nodes]) ->
+                                      [{Port, Id} || [_Addr, Port, Id |_]<- Nodes]
+                              end, SlotMap)),
+
+    R = [#{msg_type := connected} = msg(addr, {"127.0.0.1", Port}) || Port <- Ports],
+
+    ClusterIds = [Id || #{cluster_id := Id} <- R],
+    ClusterIds = [maps:get(Port, IdMap) || Port <- Ports],
 
     ?MSG(#{msg_type := cluster_ok}),
-    %% connection_up(InitialNodes),
-    %% {slot_map_updated, _ClusterSlotsReply} = get_msg(),
-    %% connection_up([{"127.0.0.1", Port} || Port <- Ports]),
 
-    %% {connection_status, _, fully_connected} = get_msg(),
     no_more_msgs(),
     P.
+
+msg(Key, Val) ->
+    msg(Key, Val, 1000).
+
+msg(Key, Val, Time) ->
+    receive
+        M = #{Key := Val} -> M
+    after Time ->
+            error({timeout, {Key, Val}, erlang:process_info(self(), messages)})
+    end.
 
 
 no_more_msgs() ->
