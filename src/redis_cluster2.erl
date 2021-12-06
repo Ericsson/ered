@@ -409,7 +409,7 @@ format_info_msg(Msg, State) ->
               %% port => Port,
               addr => Addr,
               client_id => Pid,
-              node_id => Id};
+              cluster_id => Id};
 
         {slot_map_updated, ClusterSlotsReply, Version} ->
             #{msg_type => slot_map_updated,
@@ -471,7 +471,7 @@ check_replica_count(State) ->
 
 start_client(Addr, State) ->
     {Host, Port} = Addr,
-    Opts = [{info_pid, self()}] ++ State#st.client_opts,
+    Opts = [{info_pid, self()}, {use_cluster_id, true}] ++ State#st.client_opts,
     {ok, Pid} = redis_client:start_link(Host, Port, Opts),
     Pid.
 

@@ -210,7 +210,7 @@ fail_hello_t() ->
                        Pid ! done
 	       end),
     {ok,Client} = redis_client:start_link("127.0.0.1", Port, [{info_pid, self()}]),
-    {init_error, <<"NOPROTO unsupported protocol version">>} = expect_connection_down(Client),
+    {init_error, [{error, <<"NOPROTO unsupported protocol version">>}]} = expect_connection_down(Client),
     receive done -> ok end,
     no_more_msgs().
 

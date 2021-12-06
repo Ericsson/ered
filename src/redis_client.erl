@@ -18,14 +18,19 @@
 -record(state, {host,
                 port,
                 connection_opts = [],
+                info_pid = none,
+                resp_version = 3,
+                reconnect_wait = 1000,
+                pending_timeout = 3000 :: non_neg_integer(),
+                use_cluster_id = false :: boolean(),
+
+                connection_pid = none,
+
                 waiting = q_new(5000),
                 pending = q_new(128),
                 connection_state = initial, % initial, up, down, pending
-                reconnect_wait = 1000,
-                connection_pid = none,
-                info_pid = none,
-                resp_version = 3,
-                pending_timeout = 3000 :: non_neg_integer(),
+                cluster_id = undefined :: undefined | binary(),
+
                 pending_timer = none :: none | reference(), %% Timer to go from pending to down
                 init_timer = none :: none | reference() %% Timer to retry the init procedure
                }
@@ -74,6 +79,7 @@ init([Host, Port, Opts]) ->
                  ({info_pid, Val}, S)        -> S#state{info_pid = Val};
                  ({resp_version, Val}, S)    -> S#state{resp_version = Val};
                  ({pending_timeout, Val}, S) -> S#state{pending_timeout = Val};
+                 ({use_cluster_id, Val}, S)  -> S#state{use_cluster_id = Val};
                  (Other, _)                  -> error({badarg, Other})
               end,
               #state{host = Host, port = Port},
@@ -93,16 +99,46 @@ handle_info({request_reply, Reply}, State = #state{pending = Pending}) ->
     {noreply, send_waiting(State#state{pending = NewPending})};
 
 
+%% handle_info({init_request_reply, Reply}, State) ->
+%%     case Reply of
+%%         {error, Reason} ->
+%%             {noreply, init_error({init_error, Reason}, State)};
+%%         _ ->
+%%             %erlang:cancel_timer(State#state.pending_timer),
+%%             report_connection_status(connection_up, State),
+%%             {noreply, send_waiting(State#state{connection_state = up,
+%%                                                pending_timer = none})}
+%%     end;
+
 handle_info({init_request_reply, Reply}, State) ->
-    case Reply of
-        {error, Reason} ->
-            {noreply, init_error({init_error, Reason}, State)};
-        _ ->
-            %erlang:cancel_timer(State#state.pending_timer),
-            report_connection_status(connection_up, State),
-            {noreply, send_waiting(State#state{connection_state = up,
-                                               pending_timer = none})}
+   % io:format("~p\n", [Reply]),
+    Result = case Reply of
+                 [] ->
+                     {ok,State};
+                 [HelloReply | Rest] ->
+                     case HelloReply of
+                         {error, _} ->
+                             error;
+                         _ ->
+                             case Rest of
+                                 [] ->
+                                     {ok,State};
+                                 [{error,_}] ->
+                                     error;
+                                 [ClusterId] ->
+                                     {ok, State#state{cluster_id = ClusterId}}
+                             end
+                     end
+        end,
+    case Result of
+        error ->
+            {noreply, init_error({init_error, Reply}, State)};
+        {ok, State1} ->
+            report_connection_status(connection_up, State1),
+            {noreply, send_waiting(State1#state{connection_state = up,
+                                                pending_timer = none})}
     end;
+
 
 
 handle_info({connected, _Pid}, State) ->
@@ -158,13 +194,14 @@ start_connect(State) ->
     Pid = redis_connection:connect_async(Host, Port, Opts),
     State#state{connection_pid = Pid}.
 
-init_connection(State) ->
-    case State#state.resp_version of
-        3 ->
-            redis_connection:request_async(State#state.connection_pid, [<<"HELLO">>, <<"3">>], init_request_reply);
-
-        2 ->
-            self() ! {init_request_reply, ok}
+init_connection(State = #state{resp_version = Resp, use_cluster_id = UseClusterId}) ->
+    Commands = [[<<"HELLO">>, <<"3">>] || Resp == 3] ++ [[<<"CLUSTER">>, <<"MYID">>] || UseClusterId],
+    %io:format("~p\n", [Commands]),
+    case Commands of
+        [] ->
+            self() ! {init_request_reply, []};
+        _ ->
+            redis_connection:request_async(State#state.connection_pid, Commands, init_request_reply)
     end,
     State.
 
@@ -313,8 +350,8 @@ get_request_payload({request, Request, _Fun}) ->
 
 %% report_connection_state_info(State) ->
 
-report_connection_status(Status, State = #state{host = Host, port = Port}) ->
-    Msg = {connection_status, {self(), {Host, Port}, _Id = undefined}, Status},
+report_connection_status(Status, State = #state{host = Host, port = Port, cluster_id = ClusterId}) ->
+    Msg = {connection_status, {self(), {Host, Port}, ClusterId}, Status},
     send_info(Msg, State).
 
 
