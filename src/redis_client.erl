@@ -94,61 +94,47 @@ handle_cast(Request, State) ->
     {noreply, new_request(Request, State)}.
 
 handle_info({request_reply, Reply}, State = #state{pending = Pending}) ->
-          {Request, NewPending} = q_out(Pending),
-    reply_request(Request, {ok, Reply}),
-    {noreply, send_waiting(State#state{pending = NewPending})};
-
-
-%% handle_info({init_request_reply, Reply}, State) ->
-%%     case Reply of
-%%         {error, Reason} ->
-%%             {noreply, init_error({init_error, Reason}, State)};
-%%         _ ->
-%%             %erlang:cancel_timer(State#state.pending_timer),
-%%             report_connection_status(connection_up, State),
-%%             {noreply, send_waiting(State#state{connection_state = up,
-%%                                                pending_timer = none})}
-%%     end;
-
-handle_info({init_request_reply, Reply}, State) ->
-   % io:format("~p\n", [Reply]),
-    Result = case Reply of
-                 [] ->
-                     {ok,State};
-                 [HelloReply | Rest] ->
-                     case HelloReply of
-                         {error, _} ->
-                             error;
-                         _ ->
-                             case Rest of
-                                 [] ->
-                                     {ok,State};
-                                 [{error,_}] ->
-                                     error;
-                                 [ClusterId] ->
-                                     {ok, State#state{cluster_id = ClusterId}}
-                             end
-                     end
-        end,
-    case Result of
-        error ->
-            {noreply, init_error({init_error, Reply}, State)};
-        {ok, State1} ->
-            report_connection_status(connection_up, State1),
-            {noreply, send_waiting(State1#state{connection_state = up,
-                                                pending_timer = none})}
+    case q_out(Pending) of
+        empty ->
+            {noreply, State};
+        {Request, NewPending} ->
+            reply_request(Request, {ok, Reply}),
+            {noreply, send_waiting(State#state{pending = NewPending})}
     end;
-
-
 
 handle_info({connected, _Pid}, State) ->
     {noreply, init_connection(State)};
 
 handle_info({connect_error, _Pid, Reason}, State) ->
-    {noreply, connection_error({connect_error, Reason}, State)};
+    %% wait a bit until next reconnect attempt
+    erlang:send_after(State#state.reconnect_wait, self(), do_reconnect),
+    {noreply, connection_pending({connect_error, Reason}, State)};
 
 handle_info({socket_closed, _Pid, Reason}, State) ->
-    {noreply, connection_error({socket_closed, Reason}, State)};
+    State1 = connection_pending({socket_closed, Reason}, State),
+    %% cancel init timer since connection is down and try to reconnect immediately
+    {noreply, start_connect(State1#state{init_timer = none})};
+
+handle_info({init_request_reply, Reply}, State) ->
+   % io:format("~p\n", [Reply]),
+    case [Reason || {error, Reason} <- Reply] of
+        [] ->
+            State1 = case Reply of
+                         [_Hello, ClusterId] ->
+                             State#state{cluster_id = ClusterId};
+                         [ClusterId] when State#state.use_cluster_id ->
+                             State#state{cluster_id = ClusterId};
+                         _Other -> %% Hello or empty
+                             State
+                 end,
+            report_connection_status(connection_up, State1),
+            {noreply, send_waiting(State1#state{connection_state = up,
+                                                pending_timer = none})};
+        Error ->
+            %% start the init timer to resend the initial messages
+            Tref = erlang:start_timer(State#state.reconnect_wait, self(), init),
+            {noreply, connection_pending({init_error, Error}, State#state{init_timer = Tref})}
+    end;
 
 handle_info(do_reconnect, State) ->
     {noreply, start_connect(State)};
@@ -196,8 +182,7 @@ start_connect(State) ->
 
 init_connection(State = #state{resp_version = Resp, use_cluster_id = UseClusterId}) ->
     Commands = [[<<"HELLO">>, <<"3">>] || Resp == 3] ++ [[<<"CLUSTER">>, <<"MYID">>] || UseClusterId],
-    %io:format("~p\n", [Commands]),
-    case Commands of
+     case Commands of
         [] ->
             self() ! {init_request_reply, []};
         _ ->
@@ -205,42 +190,15 @@ init_connection(State = #state{resp_version = Resp, use_cluster_id = UseClusterI
     end,
     State.
 
-%% init_connection(State) ->
-%%     case State#state.resp_version of
-%%         3 ->
-%%             redis_connection:request(State#state.connection_pid, [<<"hello">>, <<"3">>], State#state.pending_timeout);
-%%         2 ->
-%%             ok
-%%     end.
-
-init_error(Reason, State) ->
-    case State#state.connection_state of
-        S when S == down; S == pending ->
-            State#state{init_timer = erlang:start_timer(State#state.reconnect_wait, self(), init)};
-        _ ->
+connection_pending(Reason, State) ->
+    case lists:member(State#state.connection_state, [initial,up]) of
+        true ->
             report_connection_status({connection_down, Reason}, State),
-            State2 = cancel_pending_requests(State),
-            State2#state{connection_state = pending,
-                         pending_timer = erlang:start_timer(State#state.pending_timeout, self(), pending),
-                         init_timer = erlang:start_timer(State#state.reconnect_wait, self(), init)}
+            Tref = erlang:start_timer(State#state.pending_timeout, self(), pending),
+            cancel_pending_requests(State#state{connection_state = pending, pending_timer = Tref});
+        false ->
+            State
     end.
-
-
-
-connection_error(Reason, State) ->
-    case State#state.connection_state of
-        S when S == down; S == pending ->
-            erlang:send_after(State#state.reconnect_wait, self(), do_reconnect),
-            State;
-        _ -> %% initial, up
-            report_connection_status({connection_down, Reason}, State),
-            State2 = cancel_pending_requests(State),
-            start_connect(State2#state{connection_state = pending,
-                                       pending_timer = erlang:start_timer(State#state.pending_timeout, self(), pending),
-                                       init_timer = none % no need for this until connection is up again
-                                      })
-    end.
-
 
 cancel_pending_requests(State) ->
     case q_out(State#state.pending) of
