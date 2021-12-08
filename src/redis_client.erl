@@ -93,7 +93,7 @@ handle_call({request, Request}, From, State) ->
 handle_cast(Request, State) ->
     {noreply, new_request(Request, State)}.
 
-handle_info({request_reply, Reply}, State = #state{pending = Pending}) ->
+handle_info({{request_reply, Pid}, Reply}, State = #state{pending = Pending, connection_pid = Pid}) ->
     case q_out(Pending) of
         empty ->
             {noreply, State};
@@ -101,6 +101,10 @@ handle_info({request_reply, Reply}, State = #state{pending = Pending}) ->
             reply_request(Request, {ok, Reply}),
             {noreply, send_waiting(State#state{pending = NewPending})}
     end;
+
+handle_info({request_reply, _Pid, _Reply}, State) ->
+    %% Stray message from a defunct client? ignore!
+    {noreply, State};
 
 handle_info({connected, _Pid}, State) ->
     {noreply, init_connection(State)};
@@ -116,7 +120,6 @@ handle_info({socket_closed, _Pid, Reason}, State) ->
     {noreply, start_connect(State1#state{init_timer = none})};
 
 handle_info({init_request_reply, Reply}, State) ->
-   % io:format("~p\n", [Reply]),
     case [Reason || {error, Reason} <- Reply] of
         [] ->
             State1 = case Reply of
@@ -237,7 +240,7 @@ send_request(Request, Pending, Conn) ->
             full;
         Q ->
             Data = get_request_payload(Request),
-            redis_connection:request_async(Conn, Data, request_reply),
+            redis_connection:request_async(Conn, Data, {request_reply, Conn}),
             Q
     end.
 

@@ -212,7 +212,6 @@ handle_info(Msg = {connection_status, {Pid, Addr, _Id} , Status}, State) ->
     end;
 
 handle_info({slot_info, Version, Response}, State) ->
-    io:format("~p\n", [{slot_info, Response}]),
     case Response of
         _ when Version < State#st.slot_map_version ->
             %% got a response for a request triggered for an old version of the slot map, ignore
