@@ -23,13 +23,14 @@
                 reconnect_wait = 1000,
                 pending_timeout = 3000 :: non_neg_integer(),
                 use_cluster_id = false :: boolean(),
-
+                queue_ok_level = 2000,
                 connection_pid = none,
 
                 waiting = q_new(5000),
                 pending = q_new(128),
                 connection_state = initial, % initial, up, down, pending
                 cluster_id = undefined :: undefined | binary(),
+                queue_full = false :: boolean(), % set to true when full, false when reaching queue_ok_level
 
                 pending_timer = none :: none | reference(), %% Timer to go from pending to down
                 init_timer = none :: none | reference() %% Timer to retry the init procedure
@@ -40,7 +41,7 @@
 -type addr()        :: {host(), inet:port_number()}.
 -type node_id()     :: binary() | undefined.
 -type client_info() :: {pid(), addr(), node_id()}.
--type status()      :: connection_up | {connection_down, down_reason()}.
+-type status()      :: connection_up | {connection_down, down_reason()} | queue_ok | queue_full.
 -type reason()      :: term(). % ssl reasons are of type any so no point being more specific
 -type down_reason() :: {client_stopped | connect_error | init_error | socket_closed, reason()}.
 %-type down_reason() :: {client_stopped, reason()} | {connect_error, reason()} | {init_error, reason()} | {socket_closed, reason()}.
@@ -75,6 +76,7 @@ init([Host, Port, Opts]) ->
               fun({connection_opts, Val}, S) -> S#state{connection_opts = Val};
                  ({max_waiting, Val}, S)     -> S#state{waiting = q_new(Val)};
                  ({max_pending, Val}, S)     -> S#state{pending = q_new(Val)};
+                 ({queue_ok_level, Val}, S)  -> S#state{queue_ok_level = Val};
                  ({reconnect_wait, Val}, S)  -> S#state{reconnect_wait = Val};
                  ({info_pid, Val}, S)        -> S#state{info_pid = Val};
                  ({resp_version, Val}, S)    -> S#state{resp_version = Val};
@@ -144,7 +146,8 @@ handle_info(do_reconnect, State) ->
 
 handle_info({timeout, TimerRef, pending}, State) when TimerRef == State#state.pending_timer ->
     State1 = reply_all({error, node_down}, State),
-    {noreply, State1#state{connection_state = down}};
+    report_connection_status(queue_ok, State1),
+    {noreply, State1#state{connection_state = down, queue_full = false}};
 
 handle_info({timeout, TimerRef, init}, State) when TimerRef == State#state.init_timer ->
     {noreply, init_connection(State)};
@@ -210,8 +213,9 @@ cancel_pending_requests(State) ->
          {Request, OtherPending} ->
             case q_in_first(Request, State#state.waiting) of
                 full ->
+                    [report_connection_status(queue_full, State) || not State#state.queue_full],
                     reply_request(Request, {error, queue_overflow}),
-                    cancel_pending_requests(State#state{pending = OtherPending});
+                    cancel_pending_requests(State#state{pending = OtherPending, queue_full = true});
                 NewWaiting ->
                     cancel_pending_requests(State#state{pending = OtherPending, waiting = NewWaiting})
             end
@@ -223,15 +227,15 @@ new_request(Request, #state{connection_state = down}) ->
     reply_request(Request, {error, node_down});
 
 new_request(Request, State = #state{connection_state = up}) ->
-    #state{waiting = Waiting, pending = Pending, connection_pid = Conn} = State,
+    #state{pending = Pending, connection_pid = Conn} = State,
     case send_request(Request, Pending, Conn) of
         full ->
-            State#state{waiting = do_wait(Request, Waiting)};
+            do_wait(Request, State);
         Q ->
             State#state{pending = Q}
     end;
-new_request(Request, State = #state{waiting = Waiting}) ->
-    State#state{waiting = do_wait(Request, Waiting)}.
+new_request(Request, State) ->
+    do_wait(Request, State).
 
 
 send_request(Request, Pending, Conn) ->
@@ -244,7 +248,7 @@ send_request(Request, Pending, Conn) ->
             Q
     end.
 
-do_wait(Request, Waiting) ->
+do_wait(Request, State = #state{waiting = Waiting, queue_full = Full}) ->
     case q_in(Request, Waiting) of
         full ->
             % If queue is full kick out the one in front. Might not seem fair but
@@ -252,9 +256,10 @@ do_wait(Request, Waiting) ->
             % have timed out  already
             {OldRequest, Q} = q_out(Waiting),
             reply_request(OldRequest, {error, queue_overflow}),
-            q_in(Request, Q);
+            [report_connection_status(queue_full, State) || not Full],
+            State#state{waiting = q_in(Request, Q), queue_full = true};
         Q ->
-            Q
+            State#state{waiting = Q}
     end.
 
 send_waiting(State = #state{waiting = Waiting, pending = Pending, connection_pid = Conn}) ->
@@ -266,7 +271,14 @@ send_waiting(State = #state{waiting = Waiting, pending = Pending, connection_pid
                 full ->
                     State;
                 NewPending ->
-                    send_waiting(State#state{waiting = NewWaiting, pending = NewPending})
+                    %% check if queue was full and is now on a OK level
+                    case State#state.queue_full andalso (q_len(NewWaiting) =< State#state.queue_ok_level) of
+                        true ->
+                            report_connection_status(queue_ok, State),
+                            send_waiting(State#state{waiting = NewWaiting, pending = NewPending, queue_full = false});
+                        false ->
+                            send_waiting(State#state{waiting = NewWaiting, pending = NewPending})
+                    end
             end
     end.
 
@@ -291,17 +303,20 @@ q_out({Size, Max, Q}) ->
         {{value, Val}, NewQ} -> {Val, {Size-1, Max, NewQ}}
     end.
 
-q_out_last({Size, Max, Q}) ->
-    case queue:out_r(Q) of
-        {empty, _Q} -> empty;
-        {{value, Val}, NewQ} -> {Val, {Size-1, Max, NewQ}}
-    end.
+%% q_out_last({Size, Max, Q}) ->
+%%     case queue:out_r(Q) of
+%%         {empty, _Q} -> empty;
+%%         {{value, Val}, NewQ} -> {Val, {Size-1, Max, NewQ}}
+%%     end.
 
 q_to_list({_Size, _Max, Q}) ->
     queue:to_list(Q).
 
 q_clear({_, Max, _}) ->
     q_new(Max).
+
+q_len({Size, _Max, _Q}) ->
+    Size.
 
 reply_request({request, _, Fun}, Reply) ->
     Fun(Reply).

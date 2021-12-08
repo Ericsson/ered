@@ -119,13 +119,16 @@ server_buffer_full_t() ->
 
 		       receive ok -> ok end
 	       end),
-    Client = start_client(Port, [{max_waiting, 5}, {max_pending, 5}]),
+    Client = start_client(Port, [{max_waiting, 5}, {max_pending, 5}, {queue_ok_level,1}]),
     expect_connection_up(Client),
 
     Pid = self(),
     [redis_client:request_cb(Client, <<"ping">>, fun(Reply) -> Pid ! {N, Reply} end) || N <- lists:seq(1,11)],
+    receive {connection_status, _, queue_full} -> ok end,
     {6, {error, queue_overflow}} = get_msg(),
+    receive {connection_status, _, queue_ok} -> ok end,
     [{N, {ok, <<"pong">>}} = get_msg()|| N <- [1,2,3,4,5,7,8,9,10,11]].
+
 
 
 server_buffer_full_reconnect_t() ->
@@ -151,16 +154,19 @@ server_buffer_full_reconnect_t() ->
 		       receive ok -> ok end
 
 	       end),
-    Client = start_client(Port, [{max_waiting, 5}, {max_pending, 5}]),
+    Client = start_client(Port, [{max_waiting, 5}, {max_pending, 5}, {queue_ok_level,1}]),
     expect_connection_up(Client),
 
     Pid = self(),
     [redis_client:request_cb(Client, <<"ping">>, fun(Reply) -> Pid ! {N, Reply} end) || N <- lists:seq(1,11)],
+    receive {connection_status, _ClientInfo, queue_full} -> ok end,
     {6, {error, queue_overflow}} = get_msg(),
     {socket_closed, {recv_exit, closed}} = expect_connection_down(Client),
     [{N, {error, queue_overflow}} = get_msg() || N <- [1,2,3,4,5]],
+    receive {connection_status, _ClientInfo, queue_ok} -> ok end,
     expect_connection_up(Client),
     [{N, {ok, <<"pong">>}} = get_msg() || N <- [7,8,9,10,11]].
+
 
 
 bad_option_t() ->

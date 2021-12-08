@@ -53,7 +53,7 @@
 
         node_info(queue_ok, none) |
 
-        node_info(queue_overflow, none) |
+        node_info(queue_full, none) |
 
         node_info(client_stopped, any()) |
 
