@@ -15,7 +15,8 @@ all() ->
      t_hard_failover,
      t_manual_failover,
      t_init_timeout,
-     t_split_data
+     t_split_data,
+     t_queue_full
     ].
 
 
@@ -191,10 +192,10 @@ t_init_timeout(_) ->
            ],
     ct:pal("~p\n", [os:cmd("redis-cli -p 30001 CLIENT PAUSE 10000")]),
     {ok, P} = redis:start_link([{localhost, 30001}], [{info_pid, [self()]}] ++ Opts),
-%    ?MSG(#{msg_type := connect_error, reason := {init_failed, timeout}}, 3500),
+
     ?MSG(#{msg_type := socket_closed, reason := {recv_exit, timeout}}, 3500),
     ct:pal("~p\n", [os:cmd("redis-cli -p 30001 CLIENT UNPAUSE")]),
-    
+
     ?MSG(#{msg_type := connected, addr := {localhost, 30001}}),
 
     ?MSG(#{msg_type := slot_map_updated}),
@@ -307,6 +308,33 @@ t_split_data(_) ->
     ok.
 
 
+
+t_queue_full(_) ->
+    Opts = [{max_pending, 10}, {max_waiting, 10}, {queue_ok_level, 5}],
+    Client = start_cluster([{client_opts, Opts}]),
+    Ports = [30001, 30002, 30003, 30004, 30005, 30006],
+    [os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " CLIENT PAUSE 10000") || Port <- Ports],
+    [C|_] = redis:get_clients(Client),
+    Pid = self(),
+
+    fun Loop(0) -> ok;
+        Loop(N) -> redis:command_client_cb(C, [<<"PING">>], fun(Reply) -> Pid ! {reply, Reply} end),
+                   Loop(N-1)
+    end(21),
+
+%    receive {reply, {error, queue_overflow}} -> ok after 10000 -> error(no_queue_overflow) end,
+    recv({reply, {error, queue_overflow}}, 10000),
+    msg(msg_type, queue_full),
+    #{reason := master_queue_full} = msg(msg_type, cluster_not_ok),
+    [os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " CLIENT UNPAUSE 10000") || Port <- Ports],
+
+    msg(msg_type, queue_ok),
+    msg(msg_type, cluster_ok),
+    [recv({reply, {ok, <<"PONG">>}}, 1000) || _ <- lists:seq(1,20)],
+    no_more_msgs(),
+    ok.
+
+
 start_cluster() ->
     start_cluster([]).
 start_cluster(Opts) ->
@@ -351,6 +379,12 @@ msg(Key, Val, Time) ->
             error({timeout, {Key, Val}, erlang:process_info(self(), messages)})
     end.
 
+recv(Msg, Time) ->
+    receive
+        Msg -> Msg
+    after Time ->
+            error({timeout, Msg, erlang:process_info(self(), messages)})
+    end.
 
 no_more_msgs() ->
     receive Msg ->

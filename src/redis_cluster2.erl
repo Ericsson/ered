@@ -76,7 +76,7 @@
         {slot_map_updated, ClusterSlotsReply :: slot_map(), Version :: non_neg_integer()} |
         {cluster_slots_error_response, Response :: binary()} |
         cluster_ok |
-        {cluster_nok, Reason :: master_down | master_node_queue_full | bad_slot_map}.
+        {cluster_nok, Reason :: master_down | master_queue_full | bad_slot_map}.
 
 
 
@@ -90,6 +90,7 @@
              nodes = #{} :: #{addr() => pid()}, % TODO, rename to clients?
              up = new_set([]),
              masters = new_set([]),
+             queue_full = new_set([]),
              slot_map = [],
              slot_map_version = 1,
              slot_timer_ref = none,
@@ -195,12 +196,16 @@ handle_info(Msg = {connection_status, {Pid, Addr, _Id} , Status}, State) ->
     case maps:find(Addr, State#st.nodes) of
         {ok, Pid} ->
             send_info(Msg, State),
-            State1 = State#st{up = case Status of
-                                       {connection_down,_} ->
-                                           sets:del_element(Addr, State#st.up);
-                                       connection_up ->
-                                           sets:add_element(Addr, State#st.up)
-                                   end},
+            State1 = case Status of
+                         {connection_down,_} ->
+                             State#st{up = sets:del_element(Addr, State#st.up)};
+                         connection_up ->
+                             State#st{up = sets:add_element(Addr, State#st.up)};
+                         queue_full ->
+                             State#st{queue_full = sets:add_element(Addr, State#st.queue_full)};
+                         queue_ok ->
+                             State#st{queue_full = sets:del_element(Addr, State#st.queue_full)}
+                     end,
             {noreply, update_cluster_status(State1)};
         % old client
         _Other ->
@@ -255,6 +260,8 @@ handle_info({slot_info, Version, Response}, State) ->
                     %% want to make sure that slot maps are updated before closing otherwise
                     %% messages might be routed to missing processes. The close is delayed to
                     %% make sure we do not lose any messages in transit
+
+                    %% TODO: remove from queue_ok?
                     erlang:send_after(State#st.close_wait, self(), {close_clients, Remove}),
 
                     State1 = State#st{slot_map_version = Version + 1,
@@ -305,12 +312,16 @@ update_cluster_status(State) ->
                 false ->
                     set_cluster_state(nok, master_down, State);
                 true ->
-                    set_cluster_state(ok, ok, State)
+                    case sets:is_disjoint(State#st.masters, State#st.queue_full) of
+                        false ->
+                            set_cluster_state(nok, master_queue_full, State);
+                        true ->
+                            set_cluster_state(ok, ok, State)
+                    end
             end
     end.
 
 set_cluster_state(nok, Reason, State) ->
-    io:format("~p\n", [{nok, Reason, State}]),
     State1 = case State#st.cluster_state of
                  nok ->
                      State;
@@ -321,7 +332,6 @@ set_cluster_state(nok, Reason, State) ->
     start_periodic_slot_info_request(State1);
 
 set_cluster_state(ok, _, State) ->
-    io:format("~p\n", [{ok, State}]),
     State1 = case State#st.cluster_state of
                  nok ->
                      send_info(cluster_ok, State),
@@ -398,7 +408,11 @@ format_info_msg(Msg, State) ->
                     connection_up ->
                         {connected, ok};
                     {connection_down, R} ->
-                        R
+                        R;
+                    queue_full ->
+                        {queue_full, ok};
+                    queue_ok ->
+                        {queue_ok, ok}
                 end,
 %            {Ip, Port} = Addr,
             #{msg_type => MsgType,
