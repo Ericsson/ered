@@ -16,6 +16,7 @@ run_test_() ->
      {spawn, fun bad_option_t/0},
      {spawn, fun bad_connection_option_t/0},
      {spawn, fun server_buffer_full_reconnect_t/0},
+     {spawn, fun server_buffer_full_node_goes_down_t/0},
      {spawn, fun send_timeout_t/0},
      {spawn, fun fail_hello_t/0}
     ].
@@ -127,7 +128,8 @@ server_buffer_full_t() ->
     receive {connection_status, _, queue_full} -> ok end,
     {6, {error, queue_overflow}} = get_msg(),
     receive {connection_status, _, queue_ok} -> ok end,
-    [{N, {ok, <<"pong">>}} = get_msg()|| N <- [1,2,3,4,5,7,8,9,10,11]].
+    [{N, {ok, <<"pong">>}} = get_msg()|| N <- [1,2,3,4,5,7,8,9,10,11]],
+    no_more_msgs().
 
 
 
@@ -165,7 +167,35 @@ server_buffer_full_reconnect_t() ->
     [{N, {error, queue_overflow}} = get_msg() || N <- [1,2,3,4,5]],
     receive {connection_status, _ClientInfo, queue_ok} -> ok end,
     expect_connection_up(Client),
-    [{N, {ok, <<"pong">>}} = get_msg() || N <- [7,8,9,10,11]].
+    [{N, {ok, <<"pong">>}} = get_msg() || N <- [7,8,9,10,11]],
+    no_more_msgs().
+
+
+server_buffer_full_node_goes_down_t() ->
+    {ok, ListenSock} = gen_tcp:listen(0, [binary, {active , false}]),
+    {ok, Port} = inet:port(ListenSock),
+    spawn_link(fun() ->
+		       {ok, Sock} = gen_tcp:accept(ListenSock),
+		       % expect 5 ping
+		       Ping = <<"*1\r\n$4\r\nping\r\n">>,
+		       Expected = iolist_to_binary(lists:duplicate(5, Ping)),
+		       {ok, Expected} = gen_tcp:recv(Sock, size(Expected)),
+		       % should be nothing more since only 5 pending
+		       {error, timeout} = gen_tcp:recv(Sock, 0, 0),
+                       gen_tcp:close(ListenSock)
+	       end),
+    Client = start_client(Port, [{max_waiting, 5}, {max_pending, 5}, {queue_ok_level,1}, {down_timeout, 100}]),
+    expect_connection_up(Client),
+
+    Pid = self(),
+    [redis_client:request_cb(Client, <<"ping">>, fun(Reply) -> Pid ! {N, Reply} end) || N <- lists:seq(1,11)],
+    receive {connection_status, _ClientInfo, queue_full} -> ok end,
+    {6, {error, queue_overflow}} = get_msg(),
+    {socket_closed, {recv_exit, closed}} = expect_connection_down(Client),
+    [{N, {error, queue_overflow}} = get_msg() || N <- [1,2,3,4,5]],
+    receive {connection_status, _ClientInfo, queue_ok} -> ok end,
+    [{N, {error, node_down}} = get_msg() || N <- [7,8,9,10,11]],
+    no_more_msgs().
 
 
 

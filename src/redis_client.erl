@@ -21,7 +21,7 @@
                 info_pid = none,
                 resp_version = 3,
                 reconnect_wait = 1000,
-                pending_timeout = 3000 :: non_neg_integer(),
+                down_timeout = 3000 :: non_neg_integer(),
                 use_cluster_id = false :: boolean(),
                 queue_ok_level = 2000,
                 connection_pid = none,
@@ -80,7 +80,7 @@ init([Host, Port, Opts]) ->
                  ({reconnect_wait, Val}, S)  -> S#state{reconnect_wait = Val};
                  ({info_pid, Val}, S)        -> S#state{info_pid = Val};
                  ({resp_version, Val}, S)    -> S#state{resp_version = Val};
-                 ({pending_timeout, Val}, S) -> S#state{pending_timeout = Val};
+                 ({down_timeout, Val}, S) -> S#state{down_timeout = Val};
                  ({use_cluster_id, Val}, S)  -> S#state{use_cluster_id = Val};
                  (Other, _)                  -> error({badarg, Other})
               end,
@@ -146,7 +146,7 @@ handle_info(do_reconnect, State) ->
 
 handle_info({timeout, TimerRef, pending}, State) when TimerRef == State#state.pending_timer ->
     State1 = reply_all({error, node_down}, State),
-    report_connection_status(queue_ok, State1),
+    [report_connection_status(queue_ok, State1) || State#state.queue_full],
     {noreply, State1#state{connection_state = down, queue_full = false}};
 
 handle_info({timeout, TimerRef, init}, State) when TimerRef == State#state.init_timer ->
@@ -200,7 +200,7 @@ connection_pending(Reason, State) ->
     case lists:member(State#state.connection_state, [initial,up]) of
         true ->
             report_connection_status({connection_down, Reason}, State),
-            Tref = erlang:start_timer(State#state.pending_timeout, self(), pending),
+            Tref = erlang:start_timer(State#state.down_timeout, self(), pending),
             cancel_pending_requests(State#state{connection_state = pending, pending_timer = Tref});
         false ->
             State

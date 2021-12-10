@@ -310,10 +310,15 @@ t_split_data(_) ->
 
 
 t_queue_full(_) ->
-    Opts = [{max_pending, 10}, {max_waiting, 10}, {queue_ok_level, 5}],
+    ct:pal("~p\n", [os:cmd("redis-cli -p 30001 INFO")]),
+
+    Opts = [{max_pending, 10}, {max_waiting, 10}, {queue_ok_level, 5}, {down_timeout, 10000}],
     Client = start_cluster([{client_opts, Opts}]),
+
+    
+
     Ports = [30001, 30002, 30003, 30004, 30005, 30006],
-    [os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " CLIENT PAUSE 10000") || Port <- Ports],
+    [os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " CLIENT PAUSE 2000") || Port <- Ports],
     [C|_] = redis:get_clients(Client),
     Pid = self(),
 
@@ -323,10 +328,11 @@ t_queue_full(_) ->
     end(21),
 
 %    receive {reply, {error, queue_overflow}} -> ok after 10000 -> error(no_queue_overflow) end,
-    recv({reply, {error, queue_overflow}}, 10000),
+    recv({reply, {error, queue_overflow}}, 1000),
+    [ct:pal("~p\n", [os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " CLIENT UNPAUSE")]) || Port <- Ports],
     msg(msg_type, queue_full),
     #{reason := master_queue_full} = msg(msg_type, cluster_not_ok),
-    [os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " CLIENT UNPAUSE 10000") || Port <- Ports],
+
 
     msg(msg_type, queue_ok),
     msg(msg_type, cluster_ok),
