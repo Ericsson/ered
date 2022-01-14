@@ -92,8 +92,12 @@ handle_call({request, Request}, From, State) ->
     Fun = fun(Reply) -> gen_server:reply(From, Reply) end,
     handle_cast({request, Request, Fun}, State).
 
+-spec handle_cast(any(), #state{}) -> {noreply, #state{}}.
+
 handle_cast(Request, State) ->
     {noreply, new_request(Request, State)}.
+
+-spec handle_info(any(), #state{}) -> {noreply, #state{}}.
 
 handle_info({{request_reply, Pid}, Reply}, State = #state{pending = Pending, connection_pid = Pid}) ->
     case q_out(Pending) of
@@ -223,8 +227,11 @@ cancel_pending_requests(State) ->
 
 
 %%%%%%
-new_request(Request, #state{connection_state = down}) ->
-    reply_request(Request, {error, node_down});
+-spec new_request(any(), #state{}) -> #state{}.
+
+new_request(Request, State = #state{connection_state = down}) ->
+    reply_request(Request, {error, node_down}),
+    State;
 
 new_request(Request, State = #state{connection_state = up}) ->
     #state{pending = Pending, connection_pid = Conn} = State,
@@ -248,6 +255,8 @@ send_request(Request, Pending, Conn) ->
             Q
     end.
 
+-spec do_wait(any(), #state{}) -> #state{}.
+
 do_wait(Request, State = #state{waiting = Waiting, queue_full = Full}) ->
     case q_in(Request, Waiting) of
         full ->
@@ -261,6 +270,8 @@ do_wait(Request, State = #state{waiting = Waiting, queue_full = Full}) ->
         Q ->
             State#state{waiting = Q}
     end.
+
+-spec send_waiting(#state{}) -> #state{}.
 
 send_waiting(State = #state{waiting = Waiting, pending = Pending, connection_pid = Conn}) ->
     case q_out(Waiting) of

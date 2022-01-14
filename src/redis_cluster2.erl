@@ -245,7 +245,6 @@ handle_info({slot_info, Version, Response}, State) ->
                                          State#st.nodes,
                                          [State#st.initial_nodes, Nodes, sets:to_list(State#st.up)]),
 
-                    Remove = maps:without(Nodes, maps:without(State#st.initial_nodes, State#st.nodes)),
                     %% these nodes already has clients
                     KeepNodes = maps:without(maps:keys(Remove), State#st.nodes),
                     %% open clients to new nodes not seen before
@@ -301,7 +300,8 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 
 new_set(List) ->
-    sets:from_list(List, [{version, 2}]).
+    sets:from_list(List).
+    % sets:from_list(List, [{version, 2}]). TODO: OTP 24
 
 update_cluster_status(State) ->
     case is_slot_map_ok(State) of
