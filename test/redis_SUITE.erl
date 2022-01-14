@@ -16,7 +16,8 @@ all() ->
      t_manual_failover,
      t_init_timeout,
      t_split_data,
-     t_queue_full
+     t_queue_full,
+     t_kill_client
     ].
 
 
@@ -314,9 +315,6 @@ t_queue_full(_) ->
 
     Opts = [{max_pending, 10}, {max_waiting, 10}, {queue_ok_level, 5}, {down_timeout, 10000}],
     Client = start_cluster([{client_opts, Opts}]),
-
-    
-
     Ports = [30001, 30002, 30003, 30004, 30005, 30006],
     [os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " CLIENT PAUSE 2000") || Port <- Ports],
     [C|_] = redis:get_clients(Client),
@@ -339,6 +337,20 @@ t_queue_full(_) ->
     [recv({reply, {ok, <<"PONG">>}}, 1000) || _ <- lists:seq(1,20)],
     no_more_msgs(),
     ok.
+
+t_kill_client(_) ->
+    R = start_cluster(),
+    Port = get_master_port(R),
+    ct:pal("~p\n",[os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " CLIENT KILL TYPE NORMAL")]),
+    #{addr := {_, Port}} = msg(msg_type, socket_closed),
+    #{addr := {_, Port}} = msg(msg_type, socket_closed),
+
+    msg(msg_type, cluster_not_ok),
+    #{addr := {_, Port}} = msg(msg_type, connected),
+    #{addr := {_, Port}} = msg(msg_type, connected),
+    msg(msg_type, cluster_ok),
+
+    no_more_msgs().
 
 
 start_cluster() ->
