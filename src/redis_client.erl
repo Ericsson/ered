@@ -25,6 +25,7 @@
                 use_cluster_id = false :: boolean(),
                 queue_ok_level = 2000,
                 connection_pid = none,
+                last_status = none,
 
                 waiting = q_new(5000),
                 pending = q_new(128),
@@ -136,8 +137,8 @@ handle_info({init_request_reply, Reply}, State) ->
                          _Other -> %% Hello or empty
                              State
                  end,
-            report_connection_status(connection_up, State1),
-            {noreply, send_waiting(State1#state{connection_state = up,
+            State2 = report_connection_status(connection_up, State1),
+            {noreply, send_waiting(State2#state{connection_state = up,
                                                 pending_timer = none})};
         Error ->
             %% start the init timer to resend the initial messages
@@ -150,8 +151,13 @@ handle_info(do_reconnect, State) ->
 
 handle_info({timeout, TimerRef, pending}, State) when TimerRef == State#state.pending_timer ->
     State1 = reply_all({error, node_down}, State),
-    [report_connection_status(queue_ok, State1) || State#state.queue_full],
-    {noreply, State1#state{connection_state = down, queue_full = false}};
+    State2 = if
+                 State1#state.queue_full ->
+                     report_connection_status(queue_ok, State1);
+                 true ->
+                     State1
+             end,
+    {noreply, State2#state{connection_state = down, queue_full = false}};
 
 handle_info({timeout, TimerRef, init}, State) when TimerRef == State#state.init_timer ->
     {noreply, init_connection(State)};
@@ -203,9 +209,9 @@ init_connection(State = #state{resp_version = Resp, use_cluster_id = UseClusterI
 connection_pending(Reason, State) ->
     case lists:member(State#state.connection_state, [initial,up]) of
         true ->
-            report_connection_status({connection_down, Reason}, State),
-            Tref = erlang:start_timer(State#state.down_timeout, self(), pending),
-            cancel_pending_requests(State#state{connection_state = pending, pending_timer = Tref});
+            State1 = report_connection_status({connection_down, Reason}, State),
+            Tref = erlang:start_timer(State1#state.down_timeout, self(), pending),
+            cancel_pending_requests(State1#state{connection_state = pending, pending_timer = Tref});
         false ->
             State
     end.
@@ -216,8 +222,11 @@ cancel_pending_requests(State) ->
             State;
          {Request, OtherPending} ->
             case q_in_first(Request, State#state.waiting) of
+                full when State#state.queue_full ->
+                    reply_request(Request, {error, queue_overflow}),
+                    cancel_pending_requests(State#state{pending = OtherPending});
                 full ->
-                    [report_connection_status(queue_full, State) || not State#state.queue_full],
+                    report_connection_status(queue_full, State),
                     reply_request(Request, {error, queue_overflow}),
                     cancel_pending_requests(State#state{pending = OtherPending, queue_full = true});
                 NewWaiting ->
@@ -257,7 +266,7 @@ send_request(Request, Pending, Conn) ->
 
 -spec do_wait(any(), #state{}) -> #state{}.
 
-do_wait(Request, State = #state{waiting = Waiting, queue_full = Full}) ->
+do_wait(Request, State = #state{waiting = Waiting}) ->
     case q_in(Request, Waiting) of
         full ->
             % If queue is full kick out the one in front. Might not seem fair but
@@ -265,8 +274,13 @@ do_wait(Request, State = #state{waiting = Waiting, queue_full = Full}) ->
             % have timed out  already
             {OldRequest, Q} = q_out(Waiting),
             reply_request(OldRequest, {error, queue_overflow}),
-            [report_connection_status(queue_full, State) || not Full],
-            State#state{waiting = q_in(Request, Q), queue_full = true};
+            State1 = if
+                         not State#state.queue_full ->
+                             report_connection_status(queue_full, State);
+                         true ->
+                             State
+                     end,
+            State1#state{waiting = q_in(Request, Q), queue_full = true};
         Q ->
             State#state{waiting = Q}
     end.
@@ -285,8 +299,8 @@ send_waiting(State = #state{waiting = Waiting, pending = Pending, connection_pid
                     %% check if queue was full and is now on a OK level
                     case State#state.queue_full andalso (q_len(NewWaiting) =< State#state.queue_ok_level) of
                         true ->
-                            report_connection_status(queue_ok, State),
-                            send_waiting(State#state{waiting = NewWaiting, pending = NewPending, queue_full = false});
+                            State2 = report_connection_status(queue_ok, State),
+                            send_waiting(State2#state{waiting = NewWaiting, pending = NewPending, queue_full = false});
                         false ->
                             send_waiting(State#state{waiting = NewWaiting, pending = NewPending})
                     end
@@ -337,9 +351,12 @@ get_request_payload({request, Request, _Fun}) ->
 
 %% report_connection_state_info(State) ->
 
+report_connection_status(Status, State = #state{last_status = Status}) ->
+    State;
 report_connection_status(Status, State = #state{host = Host, port = Port, cluster_id = ClusterId}) ->
     Msg = {connection_status, {self(), {Host, Port}, ClusterId}, Status},
-    send_info(Msg, State).
+    send_info(Msg, State),
+    State#state{last_status = Status}.
 
 
 -spec send_info(info_msg(), #state{}) -> ok.
