@@ -49,7 +49,7 @@
 
         node_info(init_error, any()) |
 
-        node_info(flagged_as_down, gone_too_long) |
+        node_info(connect_timeout, none) |
 
         node_info(queue_ok, none) |
 
@@ -204,7 +204,10 @@ handle_info(Msg = {connection_status, {Pid, Addr, _Id} , Status}, State) ->
                          queue_full ->
                              State#st{queue_full = sets:add_element(Addr, State#st.queue_full)};
                          queue_ok ->
-                             State#st{queue_full = sets:del_element(Addr, State#st.queue_full)}
+                             State#st{queue_full = sets:del_element(Addr, State#st.queue_full)};
+                         {socket_closed, _} ->
+                             State
+
                      end,
             {noreply, update_cluster_status(State1)};
         % old client
@@ -407,12 +410,16 @@ format_info_msg(Msg, State) ->
                 case Status of
                     connection_up ->
                         {connected, ok};
+                    {connection_down, connect_timeout} ->
+                        {connect_timeout, none};
                     {connection_down, R} ->
                         R;
                     queue_full ->
                         {queue_full, ok};
                     queue_ok ->
-                        {queue_ok, ok}
+                        {queue_ok, ok};
+                    {socket_closed, R} ->
+                        {socket_closed, R}
                 end,
 %            {Ip, Port} = Addr,
             #{msg_type => MsgType,
