@@ -194,6 +194,7 @@ server_buffer_full_node_goes_down_t() ->
     {socket_closed, {recv_exit, closed}} = expect_connection_down(Client),
     [{N, {error, queue_overflow}} = get_msg() || N <- [1,2,3,4,5]],
     receive {connection_status, _ClientInfo, queue_ok} -> ok end,
+    receive {connection_status, _ClientInfo, {connection_down, {connect_error,econnrefused}}} -> ok end,
     [{N, {error, node_down}} = get_msg() || N <- [7,8,9,10,11]],
     no_more_msgs().
 

@@ -110,6 +110,8 @@ t_hard_failover(_) ->
     ?MSG(#{msg_type := socket_closed, addr := {localhost, Port}, reason := {recv_exit, closed}}),
     ?MSG(#{msg_type := socket_closed, addr := {"127.0.0.1", Port}, reason := {recv_exit, closed}}),
     ?MSG(#{msg_type := cluster_not_ok, reason := master_down}),
+    ?MSG(#{msg_type := connect_error, addr := {localhost, Port}, reason := econnrefused}),
+    ?MSG(#{msg_type := connect_error, addr := {"127.0.0.1", Port}, reason := econnrefused}),
     ?MSG(#{msg_type := slot_map_updated}, 5000),
 
     ct:pal("~p\n", [redis:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>])]),

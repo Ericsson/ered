@@ -207,13 +207,13 @@ init_connection(State = #state{resp_version = Resp, use_cluster_id = UseClusterI
     State.
 
 connection_pending(Reason, State) ->
+    State1 = report_connection_status({connection_down, Reason}, State),
     case lists:member(State#state.connection_state, [initial,up]) of
         true ->
-            State1 = report_connection_status({connection_down, Reason}, State),
             Tref = erlang:start_timer(State1#state.down_timeout, self(), pending),
             cancel_pending_requests(State1#state{connection_state = pending, pending_timer = Tref});
         false ->
-            State
+            State1
     end.
 
 cancel_pending_requests(State) ->
