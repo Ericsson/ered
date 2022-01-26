@@ -15,17 +15,31 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3, format_status/2]).
 
--record(state, {host,
-                port,
-                connection_opts = [],
-                info_pid = none,
-                resp_version = 3,
-                reconnect_wait = 1000,
+
+%-record(st, {}).
+-record(opts, {
+               host                   :: host(),
+               port                   :: inet:port_number(),
+               connection_opts = []   :: [redis_connection:opts()],
+               resp_version = 3       :: 2..3,
+               use_cluster_id = false :: boolean(),
+               reconnect_wait = 1000  :: non_neg_integer(),
+               connect_timeout = 3000 :: non_neg_integer(),
+
+               queue_timeout = 3000   :: non_neg_integer(),
+               info_pid = none        :: none | pid(),
+               queue_ok_level = 2000 :: non_neg_integer()
+              }).
+
+
+
+-record(state, {
+
 %                down_timeout = 3000 :: non_neg_integer(),
-                connect_timeout = 3000 :: non_neg_integer(),
-                queue_timeout = 3000 :: non_neg_integer(),
-                use_cluster_id = false :: boolean(),
-                queue_ok_level = 2000,
+
+              
+
+
                 connection_pid = none,
                 last_status = none,
 
@@ -38,7 +52,10 @@
                 %pending_timer = none :: none | reference(), %% Timer to go from pending to down
                 init_timer = none :: none | reference(), %% Timer to retry the init procedure
                 queue_timer = none :: none | reference(),
-                connect_timer = none :: none | reference()
+                connect_timer = none :: none | reference(),
+                opts,
+
+
                }
        ).
 
@@ -75,24 +92,28 @@ request_cb(ServerRef, Request, CallbackFun) ->
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
-init([Host, Port, Opts]) ->
+init([Host, Port, OptsList]) ->
     %% process_flag(trap_exit, true),
-    State = lists:foldl(
-              fun({connection_opts, Val}, S) -> S#state{connection_opts = Val};
-                 ({max_waiting, Val}, S)     -> S#state{waiting = q_new(Val)};
-                 ({max_pending, Val}, S)     -> S#state{pending = q_new(Val)};
-                 ({queue_ok_level, Val}, S)  -> S#state{queue_ok_level = Val};
-                 ({reconnect_wait, Val}, S)  -> S#state{reconnect_wait = Val};
-                 ({info_pid, Val}, S)        -> S#state{info_pid = Val};
-                 ({resp_version, Val}, S)    -> S#state{resp_version = Val};
-                 ({connect_timeout, Val}, S) -> S#state{connect_timeout = Val};
-                 ({queue_timeout, Val}, S)   -> S#state{queue_timeout = Val};
-                 ({use_cluster_id, Val}, S)  -> S#state{use_cluster_id = Val};
-                 (Other, _)                  -> error({badarg, Other})
-              end,
-              #state{host = Host, port = Port},
-              Opts),
-    {ok, start_connect(State)}.
+
+    Opts = lists:foldl(
+             fun({connection_opts, Val}, S) -> S#opts{connection_opts = Val};
+                ({max_waiting, Val}, S)     -> S#opts{waiting = q_new(Val)};
+                ({max_pending, Val}, S)     -> S#opts{pending = q_new(Val)};
+                ({queue_ok_level, Val}, S)  -> S#opts{queue_ok_level = Val};
+                ({reconnect_wait, Val}, S)  -> S#opts{reconnect_wait = Val};
+                ({info_pid, Val}, S)        -> S#opts{info_pid = Val};
+                ({resp_version, Val}, S)    -> S#opts{resp_version = Val};
+                ({connect_timeout, Val}, S) -> S#opts{connect_timeout = Val};
+                ({queue_timeout, Val}, S)   -> S#opts{queue_timeout = Val};
+                ({use_cluster_id, Val}, S)  -> S#opts{use_cluster_id = Val};
+                (Other, _)                  -> error({badarg, Other})
+             end,
+             #opts{host = Host, port = Port},
+             OptsList),
+
+    Pid = self(),
+    spawn_link(fun() -> connect(Pid, Opts) end),
+    {ok, #state{opts = Opts}}.
 
 handle_call({request, Request}, From, State) ->
     Fun = fun(Reply) -> gen_server:reply(From, Reply) end,
@@ -391,44 +412,25 @@ send_info(Msg, #state{info_pid = Pid}) ->
     end.
 
 
-
-%% connect() ->
-%%     ConnectionPid = redis_connection:connect_async(Host, Port, Opts),
-%%     receive 
-%%         {connected, ConnectionPid} ->
-%%             init();
-%%         {connect_error, ConnectionPid, Reason} ->
-%%             reconnect()
-%%             Pid ! connect_error;
-%%     after Timeout ->
-%%             Pid ! connect_timeout,
-%%             receive
-%%                 {connected, ConnectionPid} ->
-%%                     init();
-%%                 {connect_error, ConnectionPid, Reason} ->
-%%                     reconnect()
-%%                     Pid ! connect_error;
-
-
-connect(Pid, Host, Port, Opts, ReconnectWait, ConnectTimeout) ->
-    TRef = erlang:send_after(ConnectTimeout, Pid, connect_timeout),
-    Result = redis_connection:connect(Host, Port, Opts),
+connect(Pid, Opts) -> % Host, Port, Opts, ReconnectWait, ConnectTimeout) ->
+    TRef = erlang:send_after(ConnectTimeout, Pid, Opts#opts.connect_timeout),
+    Result = redis_connection:connect(Opts#opts.host, Opts#opts.port, Opts#opts.connection_opts),
     erlang:cancel_timer(TRef),
     case Result of
         {error, Reason} ->
             Pid ! {connect_error, Reason},
-            timer:sleep(ReconnectWait);
+            timer:sleep(Opts#opts.reconnect_wait);
 
         {ok, ConnectionPid} ->
             case init() of
                 {init_error, Reason} ->
                     Pid ! {init_error, Reason},
-                    timer:sleep(ReconnectWait),
+                    timer:sleep(Opts#opts.reconnect_wait),
                     init();
                 {socket_closed, Reason} ->
                     Pid ! {socket_closed, Reason};
                 {ok, ClusterId}  ->
-                    Pid ! {connected, ConnectionPid},
+                    Pid ! {connected, ConnectionPid, ClusterId},
                     receive
                         {socket_closed, Reason} ->
                             Pid ! {socket_closed, Reason}
@@ -436,15 +438,16 @@ connect(Pid, Host, Port, Opts, ReconnectWait, ConnectTimeout) ->
             end,
 
     end,
-    connect(Pid, Host, Port, Opts, ReconnectWait, ConnectTimeout).
+    connect(Pid, Optst).
 
 
-init(ConnectionPid, RespVersion, UseClusterId) ->
-    Commands = [[<<"CLUSTER">>, <<"MYID">>] || UseClusterId] ++ [[<<"HELLO">>, <<"3">>] || Resp == 3],
-    case Commands of
+init(ConnectionPid, Opts) ->
+    Cmd1 =  [[<<"CLUSTER">>, <<"MYID">>] || Opts#opts.use_cluster_id],
+    Cmd2 =  [[<<"HELLO">>, <<"3">>] || Opts#opts.resp_version == 3],
+    case Cmd1 ++ Cmd2 of
         [] ->
             {ok, undefined};
-        _ ->
+        Commands ->
             redis_connection:request_async(State#state.connection_pid, Commands, init_request_reply),
             receive
                 {init_request_reply, Reply} ->
@@ -460,73 +463,3 @@ init(ConnectionPid, RespVersion, UseClusterId) ->
                     Other
             end
     end.
-
-
-%% connect() ->
-
-%%     ConnectionPid = start_connect(),
-%%     Pid ! {connected, ConnectionPid},
-%%     init_connection(),
-%%     receive
-%%         {socket_closed, Reason} ->
-%%             Pid ! {socket_closed, Reason}
-%%     end,
-%%     connect().
-
-
-
-
-
-%% connect() ->
-%%     fun DoConnect() ->
-%%             TRef = erlang:send_after(ConnectTimeout, Pid, connect_timeout),
-%%             case redis_connection:connect(Host, Port, Opts) of
-%%                 {error, Reason} ->
-%%                     erlang:cancel_timer(TRef),
-%%                     Pid ! {connect_error, Reason},
-%%                     timer:sleep(ReconnectWait),
-%%                     DoConnect();
-
-%%                 {ok, ConnectionPid} ->
-%%                     case init()
-                            
-                            
-
-
-
-
-%%     ConnectionPid = start_connect(),
-%%     Pid ! {connected, ConnectionPid},
-%%     init_connection(),
-%%     receive
-%%         {socket_closed, Reason} ->
-%%             Pid ! {socket_closed, Reason}
-%%     end,
-%%     connect().
-
-
-
-
-%%     case init() of 
-%%         ok ->
-%%             receive soket_error
-
-    
-        
-
-
-
-    %% receive 
-    %%     {connected, ConnectionPid} ->
-    %%         init();
-    %%     {connect_error, ConnectionPid, Reason} ->
-    %%         reconnect()
-    %%         Pid ! connect_error;
-    %% after Timeout ->
-    %%         Pid ! connect_timeout,
-    %%         receive
-    %%             {connected, ConnectionPid} ->
-    %%                 init();
-    %%             {connect_error, ConnectionPid, Reason} ->
-    %%                 reconnect()
-    %%                 Pid ! connect_error;    

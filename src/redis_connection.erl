@@ -16,6 +16,10 @@
 %%
 %% send quit at close
 
+-type opts() :: any().
+
+-eport_type([opts/0]).
+
 request(Connection, Data) ->
     request(Connection, Data, 10000).
 
