@@ -389,3 +389,144 @@ send_info(Msg, #state{info_pid = Pid}) ->
         none -> ok;
         _ -> Pid ! Msg % TODO add more info
     end.
+
+
+
+%% connect() ->
+%%     ConnectionPid = redis_connection:connect_async(Host, Port, Opts),
+%%     receive 
+%%         {connected, ConnectionPid} ->
+%%             init();
+%%         {connect_error, ConnectionPid, Reason} ->
+%%             reconnect()
+%%             Pid ! connect_error;
+%%     after Timeout ->
+%%             Pid ! connect_timeout,
+%%             receive
+%%                 {connected, ConnectionPid} ->
+%%                     init();
+%%                 {connect_error, ConnectionPid, Reason} ->
+%%                     reconnect()
+%%                     Pid ! connect_error;
+
+
+connect(Pid, Host, Port, Opts, ReconnectWait, ConnectTimeout) ->
+    TRef = erlang:send_after(ConnectTimeout, Pid, connect_timeout),
+    Result = redis_connection:connect(Host, Port, Opts),
+    erlang:cancel_timer(TRef),
+    case Result of
+        {error, Reason} ->
+            Pid ! {connect_error, Reason},
+            timer:sleep(ReconnectWait);
+
+        {ok, ConnectionPid} ->
+            case init() of
+                {init_error, Reason} ->
+                    Pid ! {init_error, Reason},
+                    timer:sleep(ReconnectWait),
+                    init();
+                {socket_closed, Reason} ->
+                    Pid ! {socket_closed, Reason};
+                {ok, ClusterId}  ->
+                    Pid ! {connected, ConnectionPid},
+                    receive
+                        {socket_closed, Reason} ->
+                            Pid ! {socket_closed, Reason}
+                    end
+            end,
+
+    end,
+    connect(Pid, Host, Port, Opts, ReconnectWait, ConnectTimeout).
+
+
+init(ConnectionPid, RespVersion, UseClusterId) ->
+    Commands = [[<<"CLUSTER">>, <<"MYID">>] || UseClusterId] ++ [[<<"HELLO">>, <<"3">>] || Resp == 3],
+    case Commands of
+        [] ->
+            {ok, undefined};
+        _ ->
+            redis_connection:request_async(State#state.connection_pid, Commands, init_request_reply),
+            receive
+                {init_request_reply, Reply} ->
+                    case [Reason || {error, Reason} <- Reply] of
+                        [] when UseClusterId ->
+                            {ok, hd(Reply)};
+                        []  ->
+                            {ok, undefined};
+                        Errors ->
+                            {init_error, Errors}
+                    end;
+                Other ->
+                    Other
+            end
+    end.
+
+
+%% connect() ->
+
+%%     ConnectionPid = start_connect(),
+%%     Pid ! {connected, ConnectionPid},
+%%     init_connection(),
+%%     receive
+%%         {socket_closed, Reason} ->
+%%             Pid ! {socket_closed, Reason}
+%%     end,
+%%     connect().
+
+
+
+
+
+%% connect() ->
+%%     fun DoConnect() ->
+%%             TRef = erlang:send_after(ConnectTimeout, Pid, connect_timeout),
+%%             case redis_connection:connect(Host, Port, Opts) of
+%%                 {error, Reason} ->
+%%                     erlang:cancel_timer(TRef),
+%%                     Pid ! {connect_error, Reason},
+%%                     timer:sleep(ReconnectWait),
+%%                     DoConnect();
+
+%%                 {ok, ConnectionPid} ->
+%%                     case init()
+                            
+                            
+
+
+
+
+%%     ConnectionPid = start_connect(),
+%%     Pid ! {connected, ConnectionPid},
+%%     init_connection(),
+%%     receive
+%%         {socket_closed, Reason} ->
+%%             Pid ! {socket_closed, Reason}
+%%     end,
+%%     connect().
+
+
+
+
+%%     case init() of 
+%%         ok ->
+%%             receive soket_error
+
+    
+        
+
+
+
+    %% receive 
+    %%     {connected, ConnectionPid} ->
+    %%         init();
+    %%     {connect_error, ConnectionPid, Reason} ->
+    %%         reconnect()
+    %%         Pid ! connect_error;
+    %% after Timeout ->
+    %%         Pid ! connect_timeout,
+    %%         receive
+    %%             {connected, ConnectionPid} ->
+    %%                 init();
+    %%             {connect_error, ConnectionPid, Reason} ->
+    %%                 reconnect()
+    %%                 Pid ! connect_error;    
