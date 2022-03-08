@@ -17,38 +17,40 @@
 
 
 %-record(st, {}).
--record(opts, {
-               host                   :: host(),
-               port                   :: inet:port_number(),
-               connection_opts = []   :: [redis_connection:opts()],
-               resp_version = 3       :: 2..3,
-               use_cluster_id = false :: boolean(),
-               reconnect_wait = 1000  :: non_neg_integer(),
-               connect_timeout = 3000 :: non_neg_integer(),
+-record(opts,
+        {
+         host                   :: host(),
+         port                   :: inet:port_number(),
+         connection_opts = []   :: [redis_connection:opts()],
+         resp_version = 3       :: 2..3,
+         use_cluster_id = false :: boolean(),
+         reconnect_wait = 1000  :: non_neg_integer(),
+         connect_timeout = 3000 :: non_neg_integer(),
 
-               queue_timeout = 3000   :: non_neg_integer(),
-               info_pid = none        :: none | pid(),
-               queue_ok_level = 2000 :: non_neg_integer()
-              }).
+         queue_timeout = 3000   :: non_neg_integer(),
+         info_pid = none        :: none | pid(),
+         queue_ok_level = 2000  :: non_neg_integer(),
 
-
-
--record(state, {
-                connection_pid = none,
-                last_status = none,
-
-                waiting = q_new(5000),
-                pending = q_new(128),
-
-                cluster_id = undefined :: undefined | binary(),
-                queue_full = false :: boolean(), % set to true when full, false when reaching queue_ok_level
-
-                queue_timer = none :: none | reference(),
-                opts
+         max_waiting = 5000     :: non_neg_integer(),
+         max_pending = 128      :: non_neg_integer()
+        }).
 
 
-               }
-       ).
+
+-record(state,
+        {
+         connection_pid = none,
+         last_status = none,
+
+         waiting :: undefined | queue:queue(), %% TODO add request type %= q_new(5000),
+         pending :: undefined | queue:queue(), %= q_new(128),
+
+         cluster_id = undefined :: undefined | binary(),
+         queue_full = false :: boolean(), % set to true when full, false when reaching queue_ok_level
+
+         queue_timer = none :: none | reference(),
+         opts :: undefined | #opts{}
+        }).
 
 -type host()        :: inet:socket_address() | inet:hostname().
 -type addr()        :: {host(), inet:port_number()}.
@@ -59,6 +61,7 @@
 -type down_reason() :: {client_stopped | connect_error | init_error | socket_closed, reason()}.
 %-type down_reason() :: {client_stopped, reason()} | {connect_error, reason()} | {init_error, reason()} | {socket_closed, reason()}.
 -type info_msg()    :: {connection_status, client_info(), status()}.
+
 
 -export_type([info_msg/0, addr/0]).
 
@@ -85,11 +88,11 @@ request_cb(ServerRef, Request, CallbackFun) ->
 %%%===================================================================
 init([Host, Port, OptsList]) ->
     %% process_flag(trap_exit, true),
-
+    
     Opts = lists:foldl(
              fun({connection_opts, Val}, S) -> S#opts{connection_opts = Val};
-                ({max_waiting, Val}, S)     -> S#opts{waiting = q_new(Val)};
-                ({max_pending, Val}, S)     -> S#opts{pending = q_new(Val)};
+                ({max_waiting, Val}, S)     -> S#opts{max_waiting = Val};
+                ({max_pending, Val}, S)     -> S#opts{max_pending = Val};
                 ({queue_ok_level, Val}, S)  -> S#opts{queue_ok_level = Val};
                 ({reconnect_wait, Val}, S)  -> S#opts{reconnect_wait = Val};
                 ({info_pid, Val}, S)        -> S#opts{info_pid = Val};
@@ -104,7 +107,9 @@ init([Host, Port, OptsList]) ->
 
     Pid = self(),
     spawn_link(fun() -> connect(Pid, Opts) end),
-    {ok, #state{opts = Opts}}.
+    {ok, #state{opts = Opts,
+                waiting = q_new(Opts#opts.max_waiting),
+                pending = q_new(Opts#opts.max_pending)}}.
 
 handle_call({request, Request}, From, State) ->
     Fun = fun(Reply) -> gen_server:reply(From, Reply) end,
@@ -131,16 +136,16 @@ handle_info({request_reply, _Pid, _Reply}, State) ->
     {noreply, State};
 
 
-handle_info(R = connect_timeout, State) ->
-    {noreply, connection_down({connection_down, R}, State)};
+handle_info(Reason = connect_timeout, State) ->
+    {noreply, connection_down({connection_down, Reason}, State)};
 
-handle_info(R = {connect_error, _Pid, Reason}, State) ->
-    {noreply, connection_down({connection_down, R}, State)};
+handle_info(Reason = {connect_error, _Pid, _ErrorReason}, State) ->
+    {noreply, connection_down({connection_down, Reason}, State)};
 
-handle_info(R = {socket_closed, Reason}, State) ->
-    {noreply, connection_down(R, State)};
+handle_info(Reason = {socket_closed, _CloseReason}, State) ->
+    {noreply, connection_down(Reason, State)};
 
-handle_info(R = {connected, Pid, ClusterId}, State) ->
+handle_info({connected, Pid, ClusterId}, State) ->
     State1 = State#state{connection_pid = Pid, cluster_id = ClusterId, queue_timer = none},
     State2 = report_connection_status(connection_up, State1),
     State3 = send_waiting(State2),
@@ -186,10 +191,11 @@ reply_all(Reply, State = #state{waiting = Waiting, pending = Pending}) ->
 
 
 connection_down(Reason, State) when State#state.connection_pid /= none ->
-    Tref = erlang:start_timer(State#state.queue_timeout, self(), queue),
+    Tref = erlang:start_timer(State#state.opts#opts.queue_timeout, self(), queue),
     connection_down(Reason, State#state{queue_timer = Tref, connection_pid = none});
 connection_down(Reason, State) ->
-    cancel_pending_requests(report_connection_status(Reason)).
+    cancel_pending_requests(
+      report_connection_status(Reason, State)).
 
 
 cancel_pending_requests(State) ->
@@ -273,7 +279,8 @@ send_waiting(State = #state{waiting = Waiting, pending = Pending, connection_pid
                     State;
                 NewPending ->
                     %% check if queue was full and is now on a OK level
-                    case State#state.queue_full andalso (q_len(NewWaiting) =< State#state.queue_ok_level) of
+                    QueueOkLevel = State#state.opts#opts.queue_ok_level,
+                    case State#state.queue_full andalso (q_len(NewWaiting) =< QueueOkLevel) of
                         true ->
                             State2 = report_connection_status(queue_ok, State),
                             send_waiting(State2#state{waiting = NewWaiting, pending = NewPending, queue_full = false});
@@ -329,14 +336,17 @@ get_request_payload({request, Request, _Fun}) ->
 
 report_connection_status(Status, State = #state{last_status = Status}) ->
     State;
-report_connection_status(Status, State = #state{host = Host, port = Port, cluster_id = ClusterId}) ->
+report_connection_status(Status, State) ->
+    #opts{host = Host, port = Port} = State#state.opts,
+    ClusterId = State#state.cluster_id,
     Msg = {connection_status, {self(), {Host, Port}, ClusterId}, Status},
     send_info(Msg, State),
     State#state{last_status = Status}.
 
 
 -spec send_info(info_msg(), #state{}) -> ok.
-send_info(Msg, #state{info_pid = Pid}) ->
+send_info(Msg, State) ->
+    Pid = State#state.opts#opts.info_pid,
     case Pid of
         none -> ok;
         _ -> Pid ! Msg % TODO add more info
@@ -357,7 +367,7 @@ connect(Pid, Opts) -> % Host, Port, Opts, ReconnectWait, ConnectTimeout) ->
                 {init_error, Reason} ->
                     Pid ! {init_error, Reason},
                     timer:sleep(Opts#opts.reconnect_wait),
-                    init();
+                    init(ConnectionPid, Opts);
                 {socket_closed, Reason} ->
                     Pid ! {socket_closed, Reason};
                 {ok, ClusterId}  ->
@@ -369,7 +379,7 @@ connect(Pid, Opts) -> % Host, Port, Opts, ReconnectWait, ConnectTimeout) ->
             end
 
     end,
-    connect(Pid, Optst).
+    connect(Pid, Opts).
 
 
 init(ConnectionPid, Opts) ->
@@ -383,7 +393,7 @@ init(ConnectionPid, Opts) ->
             receive
                 {init_request_reply, Reply} ->
                     case [Reason || {error, Reason} <- Reply] of
-                        [] when UseClusterId ->
+                        [] when Opts#opts.use_cluster_id ->
                             {ok, hd(Reply)};
                         []  ->
                             {ok, undefined};
