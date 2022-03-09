@@ -42,8 +42,8 @@
          connection_pid = none,
          last_status = none,
 
-         waiting :: undefined | queue:queue(), %% TODO add request type %= q_new(5000),
-         pending :: undefined | queue:queue(), %= q_new(128),
+         waiting :: undefined | queue:queue(redis_lib:request()), %% TODO add request type %= q_new(5000),
+         pending :: undefined | queue:queue(redis_lib:request()), %= q_new(128),
 
          cluster_id = undefined :: undefined | binary(),
          queue_full = false :: boolean(), % set to true when full, false when reaching queue_ok_level

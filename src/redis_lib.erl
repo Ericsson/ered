@@ -10,6 +10,12 @@
          hash/1]).
 
 
+-type request() :: {redis_command, non_neg_integer() | single, binary()}.
+
+-export_type([request/0]).
+
+-spec format_request(binary() | iolist()) -> request().
+
 format_request(Command = {redis_command, _, _}) ->
     Command;
 
@@ -31,9 +37,9 @@ format_command(RawCommand) ->
     Len = integer_to_list(length(RawCommand)),
     Elements = [["$", integer_to_list(size(Bin)), "\r\n", Bin, "\r\n"] || Bin <- RawCommand],
     %% Maybe this could be kept as an iolist?
-    %% Since this is copied around a bit between processes maybe it is cheaper to keep it as a binary
-    %% since it will be heap allocated if big..
     %% TODO profile this.
+    %% Since this is copied around a bit between processes it might be cheaper to keep it as a binary
+    %% since then it will be heap allocated if big. Just speculation
     iolist_to_binary(["*", Len, "\r\n", Elements]).
 
 parse_cluster_slots(ClusterSlotsReply) ->
