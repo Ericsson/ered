@@ -134,7 +134,7 @@ handle_info({{request_reply, Pid}, Reply}, State = #state{pending = Pending, con
             {noreply, State};
         {Request, NewPending} ->
             reply_request(Request, {ok, Reply}),
-            {noreply, send_waiting(State#state{pending = NewPending})}
+            {noreply, check_if_queue_ok(send_waiting(State#state{pending = NewPending}))}
     end;
 
 handle_info({request_reply, _Pid, _Reply}, State) ->
@@ -157,18 +157,13 @@ handle_info(Reason = {init_error, _Errors}, State) ->
 handle_info({connected, Pid, ClusterId}, State) ->
     State1 = State#state{connection_pid = Pid, cluster_id = ClusterId, queue_timer = none},
     State2 = report_connection_status(connection_up, State1),
-    State3 = send_waiting(State2),
+    State3 = check_if_queue_ok(send_waiting(State2)),
     {noreply, State3#state{node_down = false}};
 
 handle_info({timeout, TimerRef, queue}, State) when TimerRef == State#state.queue_timer ->
     State1 = reply_all({error, node_down}, State),
-    State2 = if
-                 State1#state.queue_full ->
-                     report_connection_status(queue_ok, State1);
-                 true ->
-                     State1
-             end,
-    {noreply, State2#state{queue_full = false}};
+    State2 = check_if_queue_ok(State1),
+    {noreply, State2};
 
 
 handle_info({timeout, _TimerRef, _Msg}, State) ->
@@ -291,16 +286,17 @@ send_waiting(State) ->
                 fail ->
                     State;
                 {ok, State1} ->
-                    %% check if queue was full and is now on a OK level
-                    QueueOkLevel = State1#state.opts#opts.queue_ok_level,
-                    case State1#state.queue_full andalso (q_len(NewWaiting) =< QueueOkLevel) of
-                        true ->
-                            State2 = report_connection_status(queue_ok, State1),
-                            send_waiting(State2#state{waiting = NewWaiting, queue_full = false});
-                        false ->
-                            send_waiting(State1#state{waiting = NewWaiting})
-                    end
+                    send_waiting(State1#state{waiting = NewWaiting})
             end
+    end.
+
+check_if_queue_ok(State) ->
+    QueueOkLevel = State#state.opts#opts.queue_ok_level,
+    case State#state.queue_full andalso (q_len(State#state.waiting) =< QueueOkLevel) of
+        true ->
+            report_connection_status(queue_ok, State#state{queue_full = false});
+        false ->
+            State
     end.
 
 q_new(Max) ->
