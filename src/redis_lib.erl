@@ -14,7 +14,7 @@
 
 -export_type([request/0]).
 
--spec format_request(binary() | iolist()) -> request().
+-spec format_request(binary() | iolist() | request()) -> request().
 
 format_request(Command = {redis_command, _, _}) ->
     Command;
