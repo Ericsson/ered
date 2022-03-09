@@ -152,7 +152,7 @@ handle_info(Reason = {socket_closed, _CloseReason}, State) ->
     {noreply, connection_down(Reason, State)};
 
 handle_info(Reason = {init_error, _Errors}, State) ->
-    {noreply, connection_down(Reason, State)};
+    {noreply, connection_down({connection_down, Reason}, State)};
 
 handle_info({connected, Pid, ClusterId}, State) ->
     State1 = State#state{connection_pid = Pid, cluster_id = ClusterId, queue_timer = none},
@@ -377,12 +377,12 @@ connect(Pid, Opts) -> % Host, Port, Opts, ReconnectWait, ConnectTimeout) ->
 
         {ok, ConnectionPid} ->
             case init(Pid, ConnectionPid, Opts) of
-                {socket_closed, Reason} ->
+                {socket_closed, ConnectionPid, Reason} ->
                     Pid ! {socket_closed, Reason};
                 {ok, ClusterId}  ->
                     Pid ! {connected, ConnectionPid, ClusterId},
                     receive
-                        {socket_closed, Reason} ->
+                        {socket_closed, ConnectionPid, Reason} ->
                             Pid ! {socket_closed, Reason}
                     end
             end
