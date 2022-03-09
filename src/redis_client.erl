@@ -45,7 +45,6 @@
 
 -record(state,
         {
-         connection_state = pending :: pending | up | down,
          connection_pid = none,
          last_status = none,
 
@@ -53,7 +52,9 @@
          pending :: undefined | request_queue(),
 
          cluster_id = undefined :: undefined | binary(),
+
          queue_full = false :: boolean(), % set to true when full, false when reaching queue_ok_level
+         node_down = false :: boolean(),
 
          queue_timer = none :: none | reference(),
          opts :: undefined | #opts{}
@@ -67,7 +68,6 @@
 -type status()      :: connection_up | {connection_down, down_reason()} | queue_ok | queue_full.
 -type reason()      :: term(). % ssl reasons are of type any so no point being more specific
 -type down_reason() :: {client_stopped | connect_error | init_error | socket_closed, reason()}.
-%-type down_reason() :: {client_stopped, reason()} | {connect_error, reason()} | {init_error, reason()} | {socket_closed, reason()}.
 -type info_msg()    :: {connection_status, client_info(), status()}.
 
 
@@ -143,7 +143,7 @@ handle_info({request_reply, _Pid, _Reply}, State) ->
 
 
 handle_info(Reason = connect_timeout, State) ->
-    {noreply, connection_down({connection_down, Reason}, State#state{connection_state = down})};
+    {noreply, connection_down({connection_down, Reason}, State#state{node_down = true})};
 
 handle_info(Reason = {connect_error, _ErrorReason}, State) ->
     {noreply, connection_down({connection_down, Reason}, State)};
@@ -158,7 +158,7 @@ handle_info({connected, Pid, ClusterId}, State) ->
     State1 = State#state{connection_pid = Pid, cluster_id = ClusterId, queue_timer = none},
     State2 = report_connection_status(connection_up, State1),
     State3 = send_waiting(State2),
-    {noreply, State3#state{connection_state = up}};
+    {noreply, State3#state{node_down = false}};
 
 handle_info({timeout, TimerRef, queue}, State) when TimerRef == State#state.queue_timer ->
     State1 = reply_all({error, node_down}, State),
@@ -202,10 +202,6 @@ reply_all(Reply, State = #state{waiting = Waiting, pending = Pending}) ->
 connection_down(Reason, State) when State#state.connection_pid /= none ->
     Tref = erlang:start_timer(State#state.opts#opts.queue_timeout, self(), queue),
     connection_down(Reason, State#state{queue_timer = Tref, connection_pid = none});
-
-connection_down(Reason, State = #state{connection_state = up}) ->
-    connection_down(Reason, State#state{connection_state = pending});
-
 connection_down(Reason, State) ->
     cancel_pending_requests(report_connection_status(Reason, State)).
 
@@ -233,31 +229,35 @@ cancel_pending_requests(State) ->
 -spec new_request(any(), #state{}) -> #state{}.
 
 new_request(Request, State) ->
-    case State#state.connection_state of
-        up ->
-            case send_request(Request, State#state.pending, State#state.connection_pid) of
-                full ->
-                    do_wait(Request, State);
-                Q ->
-                    State#state{pending = Q}
+    case State#state.node_down of
+        false ->
+            case send_request(Request, State) of
+                {ok, State1} ->
+                    State1;
+                fail ->
+                    do_wait(Request, State)
             end;
-        pending ->
-            do_wait(Request, State);
-        down ->
+        true ->
             reply_request(Request, {error, node_down}),
             State
     end.
 
 
-send_request(Request, Pending, Conn) ->
-    case q_in(Request, Pending) of
-        full ->
-            full;
-        Q ->
-            Data = get_request_payload(Request),
-            redis_connection:request_async(Conn, Data, {request_reply, Conn}),
-            Q
+send_request(Request, State) ->
+    case State#state.connection_pid of
+        none ->
+            fail;
+        Conn ->
+            case q_in(Request, State#state.pending) of
+                full ->
+                    fail;
+                Q ->
+                    Data = get_request_payload(Request),
+                    redis_connection:request_async(Conn, Data, {request_reply, Conn}),
+                    {ok, State#state{pending = Q}}
+            end
     end.
+
 
 -spec do_wait(any(), #state{}) -> #state{}.
 
@@ -282,23 +282,23 @@ do_wait(Request, State = #state{waiting = Waiting}) ->
 
 -spec send_waiting(#state{}) -> #state{}.
 
-send_waiting(State = #state{waiting = Waiting, pending = Pending, connection_pid = Conn}) ->
-    case q_out(Waiting) of
+send_waiting(State) ->
+    case q_out(State#state.waiting) of
         empty ->
             State;
         {Request, NewWaiting} ->
-            case send_request(Request, Pending, Conn) of
-                full ->
+            case send_request(Request, State) of
+                fail ->
                     State;
-                NewPending ->
+                {ok, State1} ->
                     %% check if queue was full and is now on a OK level
-                    QueueOkLevel = State#state.opts#opts.queue_ok_level,
-                    case State#state.queue_full andalso (q_len(NewWaiting) =< QueueOkLevel) of
+                    QueueOkLevel = State1#state.opts#opts.queue_ok_level,
+                    case State1#state.queue_full andalso (q_len(NewWaiting) =< QueueOkLevel) of
                         true ->
-                            State2 = report_connection_status(queue_ok, State),
-                            send_waiting(State2#state{waiting = NewWaiting, pending = NewPending, queue_full = false});
+                            State2 = report_connection_status(queue_ok, State1),
+                            send_waiting(State2#state{waiting = NewWaiting, queue_full = false});
                         false ->
-                            send_waiting(State#state{waiting = NewWaiting, pending = NewPending})
+                            send_waiting(State1#state{waiting = NewWaiting})
                     end
             end
     end.
