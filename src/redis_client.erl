@@ -35,6 +35,12 @@
          max_pending = 128      :: non_neg_integer()
         }).
 
+-type request_reply()    :: {ok, redis_connection:result()} | {error, request_error()}.
+-type request_error()    :: queue_overflow | node_down | {client_stopped, reason()}.
+-type request_callback() :: fun((request_reply()) -> any()).
+-type request_item()     :: {request, redis_lib:request(), request_callback()}.
+-type request_queue()    :: {Size :: non_neg_integer(), Max :: non_neg_integer(), queue:queue(request_item())}.
+
 
 
 -record(state,
@@ -42,8 +48,8 @@
          connection_pid = none,
          last_status = none,
 
-         waiting :: undefined | queue:queue(redis_lib:request()), %% TODO add request type %= q_new(5000),
-         pending :: undefined | queue:queue(redis_lib:request()), %= q_new(128),
+         waiting :: undefined | request_queue(), %queue:queue(redis_lib:request()), %% TODO add request type %= q_new(5000),
+         pending :: undefined | request_queue(), %queue:queue(redis_lib:request()), %= q_new(128),
 
          cluster_id = undefined :: undefined | binary(),
          queue_full = false :: boolean(), % set to true when full, false when reaching queue_ok_level

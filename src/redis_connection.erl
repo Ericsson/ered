@@ -17,8 +17,11 @@
 %% send quit at close
 
 -type opts() :: any().
+-type result() :: redis_parser:parse_result().
 
--eport_type([opts/0]).
+
+-eport_type([opts/0,
+             result/0]).
 
 request(Connection, Data) ->
     request(Connection, Data, 10000).
