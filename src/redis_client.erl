@@ -39,21 +39,21 @@
 -type request_error()    :: queue_overflow | node_down | {client_stopped, reason()}.
 -type request_callback() :: fun((request_reply()) -> any()).
 -type request_item()     :: {request, redis_lib:request(), request_callback()}.
--type request_queue()    :: {Size :: non_neg_integer(), Max :: non_neg_integer(), queue:queue(request_item())}.
+-type request_queue()    :: {Size :: non_neg_integer(), queue:queue(request_item())}.
 
 
 
--record(state,
+-record(st,
         {
          connection_pid = none,
          last_status = none,
 
-         waiting :: undefined | request_queue(),
-         pending :: undefined | request_queue(),
+         waiting = q_new() :: request_queue(),
+         pending = q_new() :: request_queue(),
 
          cluster_id = undefined :: undefined | binary(),
 
-         queue_full = false :: boolean(), % set to true when full, false when reaching queue_ok_level
+         queue_full_event_sent = false :: boolean(), % set to true when full, false when reaching queue_ok_level
          node_down = false :: boolean(),
 
          queue_timer = none :: none | reference(),
@@ -113,28 +113,29 @@ init([Host, Port, OptsList]) ->
 
     Pid = self(),
     spawn_link(fun() -> connect(Pid, Opts) end),
-    {ok, #state{opts = Opts,
-                waiting = q_new(Opts#opts.max_waiting),
-                pending = q_new(Opts#opts.max_pending)}}.
+    {ok, #st{opts = Opts}}.
 
 handle_call({request, Request}, From, State) ->
     Fun = fun(Reply) -> gen_server:reply(From, Reply) end,
     handle_cast({request, Request, Fun}, State).
 
--spec handle_cast(any(), #state{}) -> {noreply, #state{}}.
 
 handle_cast(Request, State) ->
-    {noreply, new_request(Request, State)}.
+    if
+        State#st.node_down ->
+            {noreply, reply_request(Request, {error, node_down})};
+        true ->
+            {noreply, process_requests(State#st{waiting = q_in(Request, State#st.waiting)})}
+    end.
 
--spec handle_info(any(), #state{}) -> {noreply, #state{}}.
 
-handle_info({{request_reply, Pid}, Reply}, State = #state{pending = Pending, connection_pid = Pid}) ->
+handle_info({{request_reply, Pid}, Reply}, State = #st{pending = Pending, connection_pid = Pid}) ->
     case q_out(Pending) of
         empty ->
             {noreply, State};
         {Request, NewPending} ->
             reply_request(Request, {ok, Reply}),
-            {noreply, check_if_queue_ok(send_waiting(State#state{pending = NewPending}))}
+            {noreply, process_requests(State#st{pending = NewPending})}
     end;
 
 handle_info({request_reply, _Pid, _Reply}, State) ->
@@ -143,7 +144,7 @@ handle_info({request_reply, _Pid, _Reply}, State) ->
 
 
 handle_info(Reason = connect_timeout, State) ->
-    {noreply, connection_down({connection_down, Reason}, State#state{node_down = true})};
+    {noreply, connection_down({connection_down, Reason}, State#st{node_down = true})};
 
 handle_info(Reason = {connect_error, _ErrorReason}, State) ->
     {noreply, connection_down({connection_down, Reason}, State)};
@@ -155,15 +156,13 @@ handle_info(Reason = {init_error, _Errors}, State) ->
     {noreply, connection_down({connection_down, Reason}, State)};
 
 handle_info({connected, Pid, ClusterId}, State) ->
-    State1 = State#state{connection_pid = Pid, cluster_id = ClusterId, queue_timer = none},
+    State1 = State#st{connection_pid = Pid, cluster_id = ClusterId, queue_timer = none},
     State2 = report_connection_status(connection_up, State1),
-    State3 = check_if_queue_ok(send_waiting(State2)),
-    {noreply, State3#state{node_down = false}};
+    {noreply, process_requests(State2#st{node_down = false})};
 
-handle_info({timeout, TimerRef, queue}, State) when TimerRef == State#state.queue_timer ->
+handle_info({timeout, TimerRef, queue}, State) when TimerRef == State#st.queue_timer ->
     State1 = reply_all({error, node_down}, State),
-    State2 = check_if_queue_ok(State1),
-    {noreply, State2};
+    {noreply, process_requests(State1)};
 
 
 handle_info({timeout, _TimerRef, _Msg}, State) ->
@@ -188,152 +187,79 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-reply_all(Reply, State = #state{waiting = Waiting, pending = Pending}) ->
+reply_all(Reply, State = #st{waiting = Waiting, pending = Pending}) ->
     [reply_request(Request, Reply) || Request <- q_to_list(Pending)],
     [reply_request(Request, Reply) || Request <- q_to_list(Waiting)],
-    State#state{waiting = q_clear(Waiting), pending = q_clear(Pending)}.
+    State#st{waiting = q_new(), pending = q_new()}.
 
 
-connection_down(Reason, State) when State#state.connection_pid /= none ->
-    Tref = erlang:start_timer(State#state.opts#opts.queue_timeout, self(), queue),
-    connection_down(Reason, State#state{queue_timer = Tref, connection_pid = none});
+connection_down(Reason, State) when State#st.connection_pid /= none ->
+    Tref = erlang:start_timer(State#st.opts#opts.queue_timeout, self(), queue),
+    connection_down(Reason, State#st{queue_timer = Tref, connection_pid = none});
 connection_down(Reason, State) ->
-    cancel_pending_requests(report_connection_status(Reason, State)).
-
-
-cancel_pending_requests(State) ->
-    case q_out(State#state.pending) of
-        empty ->
-            State;
-         {Request, OtherPending} ->
-            case q_in_first(Request, State#state.waiting) of
-                full when State#state.queue_full ->
-                    reply_request(Request, {error, queue_overflow}),
-                    cancel_pending_requests(State#state{pending = OtherPending});
-                full ->
-                    report_connection_status(queue_full, State),
-                    reply_request(Request, {error, queue_overflow}),
-                    cancel_pending_requests(State#state{pending = OtherPending, queue_full = true});
-                NewWaiting ->
-                    cancel_pending_requests(State#state{pending = OtherPending, waiting = NewWaiting})
-            end
-    end.
+    State1 = State#st{waiting = q_join(State#st.pending, State#st.waiting),
+                         pending = q_new()},
+    State2 = process_requests(State1),
+    report_connection_status(Reason, State2).
 
 
 %%%%%%
--spec new_request(any(), #state{}) -> #state{}.
+process_requests(State) ->
+    NumWaiting = q_len(State#st.waiting),
+    NumPending = q_len(State#st.pending),
+    if
+        (NumWaiting > 0) and (NumPending < State#st.opts#opts.max_pending) and (State#st.connection_pid /= none) ->
+            {Request, NewWaiting} = q_out(State#st.waiting),
+            Data = get_request_payload(Request),
+            redis_connection:request_async(State#st.connection_pid, Data, {request_reply, State#st.connection_pid}),
+            process_requests(State#st{pending = q_in(Request, State#st.pending),
+                                         waiting = NewWaiting});
 
-new_request(Request, State) ->
-    case State#state.node_down of
-        false ->
-            case send_request(Request, State) of
-                {ok, State1} ->
-                    State1;
-                fail ->
-                    do_wait(Request, State)
-            end;
+        (NumWaiting > State#st.opts#opts.max_waiting) and (State#st.queue_full_event_sent) ->
+            drop_requests(State);
+
+        NumWaiting > State#st.opts#opts.max_waiting ->
+            drop_requests(
+              report_connection_status(queue_full, State#st{queue_full_event_sent = true}));
+
+        (NumWaiting < State#st.opts#opts.queue_ok_level) and (State#st.queue_full_event_sent) ->
+            report_connection_status(queue_ok, State#st{queue_full_event_sent = false});
+
         true ->
-            reply_request(Request, {error, node_down}),
             State
     end.
 
-
-send_request(Request, State) ->
-    case State#state.connection_pid of
-        none ->
-            fail;
-        Conn ->
-            case q_in(Request, State#state.pending) of
-                full ->
-                    fail;
-                Q ->
-                    Data = get_request_payload(Request),
-                    redis_connection:request_async(Conn, Data, {request_reply, Conn}),
-                    {ok, State#state{pending = Q}}
-            end
-    end.
-
-
--spec do_wait(any(), #state{}) -> #state{}.
-
-do_wait(Request, State = #state{waiting = Waiting}) ->
-    case q_in(Request, Waiting) of
-        full ->
-            % If queue is full kick out the one in front. Might not seem fair but
-            % propably the one in front is tired of queueing and the call might even
-            % have timed out  already
-            {OldRequest, Q} = q_out(Waiting),
+drop_requests(State) ->
+    case q_len(State#st.waiting) > State#st.opts#opts.max_waiting of
+        true ->
+            {OldRequest, NewWaiting} = q_out(State#st.waiting),
             reply_request(OldRequest, {error, queue_overflow}),
-            State1 = if
-                         not State#state.queue_full ->
-                             report_connection_status(queue_full, State);
-                         true ->
-                             State
-                     end,
-            State1#state{waiting = q_in(Request, Q), queue_full = true};
-        Q ->
-            State#state{waiting = Q}
-    end.
-
--spec send_waiting(#state{}) -> #state{}.
-
-send_waiting(State) ->
-    case q_out(State#state.waiting) of
-        empty ->
-            State;
-        {Request, NewWaiting} ->
-            case send_request(Request, State) of
-                fail ->
-                    State;
-                {ok, State1} ->
-                    send_waiting(State1#state{waiting = NewWaiting})
-            end
-    end.
-
-check_if_queue_ok(State) ->
-    QueueOkLevel = State#state.opts#opts.queue_ok_level,
-    case State#state.queue_full andalso (q_len(State#state.waiting) =< QueueOkLevel) of
-        true ->
-            report_connection_status(queue_ok, State#state{queue_full = false});
-        false ->
+            drop_requests(State#st{waiting = NewWaiting});
+        false  ->
             State
     end.
 
-q_new(Max) ->
-    {0, Max, queue:new()}.
+q_new() ->
+    {0, queue:new()}.
 
-q_in(Item, {Size, Max, Q}) ->
-    case Size >= Max of
-        true -> full;
-        false -> {Size+1, Max, queue:in(Item, Q)}
-    end.
+q_in(Item, {Size, Q}) ->
+    {Size+1, queue:in(Item, Q)}.
 
-q_in_first(Item, {Size, Max, Q}) ->
-    case Size >= Max of
-        true -> full;
-        false -> {Size+1, Max, queue:in_r(Item, Q)}
-    end.
+q_join({Size1,Q1}, {Size2, Q2}) ->
+    {Size1 + Size2, queue:join(Q1, Q2)}.
 
-q_out({Size, Max, Q}) ->
+q_out({Size, Q}) ->
     case queue:out(Q) of
         {empty, _Q} -> empty;
-        {{value, Val}, NewQ} -> {Val, {Size-1, Max, NewQ}}
+        {{value, Val}, NewQ} -> {Val, {Size-1, NewQ}}
     end.
 
-%% q_out_last({Size, Max, Q}) ->
-%%     case queue:out_r(Q) of
-%%         {empty, _Q} -> empty;
-%%         {{value, Val}, NewQ} -> {Val, {Size-1, Max, NewQ}}
-%%     end.
-
-q_to_list({_Size, _Max, Q}) ->
+q_to_list({_Size, Q}) ->
     queue:to_list(Q).
 
-q_clear({_, Max, _}) ->
-    q_new(Max).
-
-q_len({Size, _Max, _Q}) ->
+q_len({Size, _Q}) ->
     Size.
+
 
 reply_request({request, _, Fun}, Reply) ->
     Fun(Reply).
@@ -341,21 +267,19 @@ reply_request({request, _, Fun}, Reply) ->
 get_request_payload({request, Request, _Fun}) ->
     Request.
 
-%% report_connection_state_info(State) ->
-
-report_connection_status(Status, State = #state{last_status = Status}) ->
+report_connection_status(Status, State = #st{last_status = Status}) ->
     State;
 report_connection_status(Status, State) ->
-    #opts{host = Host, port = Port} = State#state.opts,
-    ClusterId = State#state.cluster_id,
+    #opts{host = Host, port = Port} = State#st.opts,
+    ClusterId = State#st.cluster_id,
     Msg = {connection_status, {self(), {Host, Port}, ClusterId}, Status},
     send_info(Msg, State),
-    State#state{last_status = Status}.
+    State#st{last_status = Status}.
 
 
--spec send_info(info_msg(), #state{}) -> ok.
+-spec send_info(info_msg(), #st{}) -> ok.
 send_info(Msg, State) ->
-    Pid = State#state.opts#opts.info_pid,
+    Pid = State#st.opts#opts.info_pid,
     case Pid of
         none -> ok;
         _ -> Pid ! Msg % TODO add more info
