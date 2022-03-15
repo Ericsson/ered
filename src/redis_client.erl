@@ -16,7 +16,6 @@
          terminate/2, code_change/3, format_status/2]).
 
 
-%-record(st, {}).
 -record(opts,
         {
          host                   :: host(),
@@ -26,7 +25,7 @@
          use_cluster_id = false :: boolean(),
          reconnect_wait = 1000  :: non_neg_integer(),
 
-         queue_timeout = 3000   :: non_neg_integer(),
+         node_down_timeout = 3000   :: non_neg_integer(),
          info_pid = none        :: none | pid(),
          queue_ok_level = 2000  :: non_neg_integer(),
 
@@ -55,7 +54,7 @@
          queue_full_event_sent = false :: boolean(), % set to true when full, false when reaching queue_ok_level
          node_down = false :: boolean(),
 
-         queue_timer = none :: none | reference(),
+         node_down_timer = none :: none | reference(),
          opts :: undefined | #opts{}
 
         }).
@@ -95,23 +94,22 @@ request_cb(ServerRef, Request, CallbackFun) ->
 %%%===================================================================
 init([Host, Port, OptsList]) ->
     Opts = lists:foldl(
-             fun({connection_opts, Val}, S) -> S#opts{connection_opts = Val};
-                ({max_waiting, Val}, S)     -> S#opts{max_waiting = Val};
-                ({max_pending, Val}, S)     -> S#opts{max_pending = Val};
-                ({queue_ok_level, Val}, S)  -> S#opts{queue_ok_level = Val};
-                ({reconnect_wait, Val}, S)  -> S#opts{reconnect_wait = Val};
-                ({info_pid, Val}, S)        -> S#opts{info_pid = Val};
-                ({resp_version, Val}, S)    -> S#opts{resp_version = Val};
-                ({queue_timeout, Val}, S)   -> S#opts{queue_timeout = Val};
-                ({use_cluster_id, Val}, S)  -> S#opts{use_cluster_id = Val};
-                (Other, _)                  -> error({badarg, Other})
+             fun({connection_opts, Val}, S)   -> S#opts{connection_opts = Val};
+                ({max_waiting, Val}, S)       -> S#opts{max_waiting = Val};
+                ({max_pending, Val}, S)       -> S#opts{max_pending = Val};
+                ({queue_ok_level, Val}, S)    -> S#opts{queue_ok_level = Val};
+                ({reconnect_wait, Val}, S)    -> S#opts{reconnect_wait = Val};
+                ({info_pid, Val}, S)          -> S#opts{info_pid = Val};
+                ({resp_version, Val}, S)      -> S#opts{resp_version = Val};
+                ({node_down_timeout, Val}, S) -> S#opts{node_down_timeout = Val};
+                ({use_cluster_id, Val}, S)    -> S#opts{use_cluster_id = Val};
+                (Other, _)                    -> error({badarg, Other})
              end,
              #opts{host = Host, port = Port},
              OptsList),
 
     Pid = self(),
     spawn_link(fun() -> connect(Pid, Opts) end),
-%    {ok, #st{opts = Opts}}.
     {ok, start_node_down_timer(#st{opts = Opts})}.
 
 handle_call({request, Request}, From, State) ->
@@ -151,12 +149,12 @@ handle_info(Reason = {init_error, _Errors}, State) ->
     {noreply, connection_down({connection_down, Reason}, State)};
 
 handle_info({connected, Pid, ClusterId}, State) ->
-    erlang:cancel_timer(State#st.queue_timer),
-    State1 = State#st{connection_pid = Pid, cluster_id = ClusterId, queue_timer = none},
+    erlang:cancel_timer(State#st.node_down_timer),
+    State1 = State#st{connection_pid = Pid, cluster_id = ClusterId, node_down_timer = none},
     State2 = report_connection_status(connection_up, State1),
     {noreply, process_requests(State2#st{node_down = false})};
 
-handle_info({timeout, TimerRef, queue}, State) when TimerRef == State#st.queue_timer ->
+handle_info({timeout, TimerRef, node_down}, State) when TimerRef == State#st.node_down_timer ->
     State1 = reply_all({error, node_down}, State),
     {noreply, process_requests(State1#st{node_down = true})};
 
@@ -190,21 +188,12 @@ reply_all(Reply, State = #st{waiting = Waiting, pending = Pending}) ->
 
 
 start_node_down_timer(State) ->
-    case State#st.queue_timer of
+    case State#st.node_down_timer of
         none ->
-            State#st{queue_timer = erlang:start_timer(State#st.opts#opts.queue_timeout, self(), queue)};
+            State#st{node_down_timer = erlang:start_timer(State#st.opts#opts.node_down_timeout, self(), node_down)};
         _ ->
             State
     end.
-
-%% stop_node_down_timer(State) ->
-%%     case State#st.queue_timer of
-%%         none ->
-%%             State;
-%%         Tref ->
-%%             erlang:stop_timer(Tref),
-%%             State#st{queue_timer = none};
-%%          end.
 
 connection_down(Reason, State) ->
     State1 = State#st{waiting = q_join(State#st.pending, State#st.waiting),

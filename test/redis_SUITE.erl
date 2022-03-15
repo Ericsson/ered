@@ -324,7 +324,7 @@ t_split_data(_) ->
 t_queue_full(_) ->
     ct:pal("~p\n", [os:cmd("redis-cli -p 30001 INFO")]),
 
-    Opts = [{max_pending, 10}, {max_waiting, 10}, {queue_ok_level, 5}, {queue_timeout, 10000}],
+    Opts = [{max_pending, 10}, {max_waiting, 10}, {queue_ok_level, 5}, {node_down_timeout, 10000}],
     Client = start_cluster([{client_opts, Opts}]),
     Ports = [30001, 30002, 30003, 30004, 30005, 30006],
     [os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " CLIENT PAUSE 2000") || Port <- Ports],

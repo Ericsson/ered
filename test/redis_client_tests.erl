@@ -189,7 +189,7 @@ server_buffer_full_node_goes_down_t() ->
 		       {error, timeout} = gen_tcp:recv(Sock, 0, 0),
                        gen_tcp:close(ListenSock)
 	       end),
-    Client = start_client(Port, [{max_waiting, 5}, {max_pending, 5}, {queue_ok_level,1}, {queue_timeout, 100}]),
+    Client = start_client(Port, [{max_waiting, 5}, {max_pending, 5}, {queue_ok_level,1}, {node_down_timeout, 100}]),
     expect_connection_up(Client),
 
     Pid = self(),
