@@ -49,8 +49,6 @@
 
         node_info(init_error, any()) |
 
-        node_info(connect_timeout, none) |
-
         node_info(queue_ok, none) |
 
         node_info(queue_full, none) |
@@ -410,8 +408,6 @@ format_info_msg(Msg, State) ->
                 case Status of
                     connection_up ->
                         {connected, ok};
-                    {connection_down, node_down_timeout} ->
-                        {connect_timeout, none}; %% TODO change event type
                     {connection_down, R} ->
                         R;
                     queue_full ->

@@ -151,13 +151,13 @@ handle_info(Reason = {init_error, _Errors}, State) ->
     {noreply, connection_down({connection_down, Reason}, State)};
 
 handle_info({connected, Pid, ClusterId}, State) ->
+    erlang:cancel_timer(State#st.queue_timer),
     State1 = State#st{connection_pid = Pid, cluster_id = ClusterId, queue_timer = none},
     State2 = report_connection_status(connection_up, State1),
     {noreply, process_requests(State2#st{node_down = false})};
 
 handle_info({timeout, TimerRef, queue}, State) when TimerRef == State#st.queue_timer ->
     State1 = reply_all({error, node_down}, State),
-    %State2 = report_connection_status({connection_down, node_down_timeout}, State1),
     {noreply, process_requests(State1#st{node_down = true})};
 
 
@@ -192,11 +192,19 @@ reply_all(Reply, State = #st{waiting = Waiting, pending = Pending}) ->
 start_node_down_timer(State) ->
     case State#st.queue_timer of
         none ->
-            State#st{queue_timer = erlang:start_timer(State#st.opts#opts.queue_timeout, self(), queue),
-                     connection_pid = none};
+            State#st{queue_timer = erlang:start_timer(State#st.opts#opts.queue_timeout, self(), queue)};
         _ ->
             State
     end.
+
+%% stop_node_down_timer(State) ->
+%%     case State#st.queue_timer of
+%%         none ->
+%%             State;
+%%         Tref ->
+%%             erlang:stop_timer(Tref),
+%%             State#st{queue_timer = none};
+%%          end.
 
 connection_down(Reason, State) ->
     State1 = State#st{waiting = q_join(State#st.pending, State#st.waiting),
