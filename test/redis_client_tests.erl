@@ -161,10 +161,14 @@ server_buffer_full_reconnect_t() ->
     expect_connection_up(Client),
 
     Pid = self(),
+    %% 5 messages will be pending, 5 messages in queue
     [redis_client:request_cb(Client, <<"ping">>, fun(Reply) -> Pid ! {N, Reply} end) || N <- lists:seq(1,11)],
     receive {connection_status, _ClientInfo, queue_full} -> ok end,
+    %% 1 message over the limit, first one in queue gets kicked out
     {6, {error, queue_overflow}} = get_msg(),
     receive {connection_status, _ClientInfo, {socket_closed, {recv_exit, closed}}} -> ok end,
+    %% when connection goes down the pending messages will be put in the queue and the queue 
+    %% will overflow kicking out the oldest first
     [{N, {error, queue_overflow}} = get_msg() || N <- [1,2,3,4,5]],
     receive {connection_status, _ClientInfo, queue_ok} -> ok end,
     expect_connection_up(Client),

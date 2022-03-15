@@ -157,7 +157,7 @@ handle_info({connected, Pid, ClusterId}, State) ->
 
 handle_info({timeout, TimerRef, queue}, State) when TimerRef == State#st.queue_timer ->
     State1 = reply_all({error, node_down}, State),
-    State2 = report_connection_status({connection_down, node_down_timeout}, State1),
+    %State2 = report_connection_status({connection_down, node_down_timeout}, State1),
     {noreply, process_requests(State1#st{node_down = true})};
 
 
@@ -200,7 +200,8 @@ start_node_down_timer(State) ->
 
 connection_down(Reason, State) ->
     State1 = State#st{waiting = q_join(State#st.pending, State#st.waiting),
-                         pending = q_new()},
+                      pending = q_new(),
+                      connection_pid = none},
     State2 = process_requests(State1),
     State3 = report_connection_status(Reason, State2),
     start_node_down_timer(State3).
@@ -216,7 +217,7 @@ process_requests(State) ->
             Data = get_request_payload(Request),
             redis_connection:request_async(State#st.connection_pid, Data, {request_reply, State#st.connection_pid}),
             process_requests(State#st{pending = q_in(Request, State#st.pending),
-                                         waiting = NewWaiting});
+                                      waiting = NewWaiting});
 
         (NumWaiting > State#st.opts#opts.max_waiting) and (State#st.queue_full_event_sent) ->
             drop_requests(State);
@@ -248,7 +249,7 @@ q_new() ->
 q_in(Item, {Size, Q}) ->
     {Size+1, queue:in(Item, Q)}.
 
-q_join({Size1,Q1}, {Size2, Q2}) ->
+q_join({Size1, Q1}, {Size2, Q2}) ->
     {Size1 + Size2, queue:join(Q1, Q2)}.
 
 q_out({Size, Q}) ->
