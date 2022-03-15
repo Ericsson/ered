@@ -142,11 +142,11 @@ handle_info({request_reply, _Pid, _Reply}, State) ->
 handle_info(Reason = {connect_error, _ErrorReason}, State) ->
     {noreply, connection_down({connection_down, Reason}, State)};
 
-handle_info(Reason = {socket_closed, _CloseReason}, State) ->
-    {noreply, connection_down(Reason, State)};
-
 handle_info(Reason = {init_error, _Errors}, State) ->
     {noreply, connection_down({connection_down, Reason}, State)};
+
+handle_info(Reason = {socket_closed, _CloseReason}, State) ->
+    {noreply, connection_down(Reason, State)};
 
 handle_info({connected, Pid, ClusterId}, State) ->
     erlang:cancel_timer(State#st.node_down_timer),
