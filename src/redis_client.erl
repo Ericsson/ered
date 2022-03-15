@@ -25,7 +25,6 @@
          resp_version = 3       :: 2..3,
          use_cluster_id = false :: boolean(),
          reconnect_wait = 1000  :: non_neg_integer(),
-         connect_timeout = 3000 :: non_neg_integer(),
 
          queue_timeout = 3000   :: non_neg_integer(),
          info_pid = none        :: none | pid(),
@@ -103,7 +102,6 @@ init([Host, Port, OptsList]) ->
                 ({reconnect_wait, Val}, S)  -> S#opts{reconnect_wait = Val};
                 ({info_pid, Val}, S)        -> S#opts{info_pid = Val};
                 ({resp_version, Val}, S)    -> S#opts{resp_version = Val};
-                ({connect_timeout, Val}, S) -> S#opts{connect_timeout = Val};
                 ({queue_timeout, Val}, S)   -> S#opts{queue_timeout = Val};
                 ({use_cluster_id, Val}, S)  -> S#opts{use_cluster_id = Val};
                 (Other, _)                  -> error({badarg, Other})
@@ -113,7 +111,8 @@ init([Host, Port, OptsList]) ->
 
     Pid = self(),
     spawn_link(fun() -> connect(Pid, Opts) end),
-    {ok, #st{opts = Opts}}.
+%    {ok, #st{opts = Opts}}.
+    {ok, start_node_down_timer(#st{opts = Opts})}.
 
 handle_call({request, Request}, From, State) ->
     Fun = fun(Reply) -> gen_server:reply(From, Reply) end,
@@ -142,10 +141,6 @@ handle_info({request_reply, _Pid, _Reply}, State) ->
     %% Stray message from a defunct client? ignore!
     {noreply, State};
 
-
-handle_info(Reason = connect_timeout, State) ->
-    {noreply, connection_down({connection_down, Reason}, State#st{node_down = true})};
-
 handle_info(Reason = {connect_error, _ErrorReason}, State) ->
     {noreply, connection_down({connection_down, Reason}, State)};
 
@@ -162,7 +157,8 @@ handle_info({connected, Pid, ClusterId}, State) ->
 
 handle_info({timeout, TimerRef, queue}, State) when TimerRef == State#st.queue_timer ->
     State1 = reply_all({error, node_down}, State),
-    {noreply, process_requests(State1)};
+    State2 = report_connection_status({connection_down, node_down_timeout}, State1),
+    {noreply, process_requests(State1#st{node_down = true})};
 
 
 handle_info({timeout, _TimerRef, _Msg}, State) ->
@@ -193,14 +189,21 @@ reply_all(Reply, State = #st{waiting = Waiting, pending = Pending}) ->
     State#st{waiting = q_new(), pending = q_new()}.
 
 
-connection_down(Reason, State) when State#st.connection_pid /= none ->
-    Tref = erlang:start_timer(State#st.opts#opts.queue_timeout, self(), queue),
-    connection_down(Reason, State#st{queue_timer = Tref, connection_pid = none});
+start_node_down_timer(State) ->
+    case State#st.queue_timer of
+        none ->
+            State#st{queue_timer = erlang:start_timer(State#st.opts#opts.queue_timeout, self(), queue),
+                     connection_pid = none};
+        _ ->
+            State
+    end.
+
 connection_down(Reason, State) ->
     State1 = State#st{waiting = q_join(State#st.pending, State#st.waiting),
                          pending = q_new()},
     State2 = process_requests(State1),
-    report_connection_status(Reason, State2).
+    State3 = report_connection_status(Reason, State2),
+    start_node_down_timer(State3).
 
 
 %%%%%%
@@ -287,9 +290,7 @@ send_info(Msg, State) ->
 
 
 connect(Pid, Opts) -> % Host, Port, Opts, ReconnectWait, ConnectTimeout) ->
-    TRef = erlang:send_after(Opts#opts.connect_timeout, Pid, connect_timeout),
     Result = redis_connection:connect(Opts#opts.host, Opts#opts.port, Opts#opts.connection_opts),
-    erlang:cancel_timer(TRef),
     case Result of
         {error, Reason} ->
             Pid ! {connect_error, Reason},

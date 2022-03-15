@@ -410,8 +410,8 @@ format_info_msg(Msg, State) ->
                 case Status of
                     connection_up ->
                         {connected, ok};
-                    {connection_down, connect_timeout} ->
-                        {connect_timeout, none};
+                    {connection_down, node_down_timeout} ->
+                        {connect_timeout, none}; %% TODO change event type
                     {connection_down, R} ->
                         R;
                     queue_full ->
