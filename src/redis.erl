@@ -167,7 +167,8 @@ create_client_pid_tuple(AddrToPid, AddrToIx) ->
 
 create_lookup_table(ClusterMap, AddrToIx) ->
     %% Replace the Addr in the slot map with the index using the lookup
-    Slots = [{Start, End, maps:get(Addr,AddrToIx)} || {Start, End, Addr} <- redis_lib:parse_cluster_slots(ClusterMap)],
+    Slots = [{Start, End, maps:get(Addr,AddrToIx)}
+             || {Start, End, Addr} <- redis_lib:slotmap_master_slots(ClusterMap)],
     create_lookup_table(0, Slots, <<>>).
 
 create_lookup_table(16384, _, Acc) ->
