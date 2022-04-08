@@ -17,7 +17,8 @@ all() ->
      t_init_timeout,
      t_split_data,
      t_queue_full,
-     t_kill_client
+     t_kill_client,
+     t_new_cluster_master
     ].
 
 
@@ -59,7 +60,8 @@ end_per_suite(Config) ->
 	   "docker stop redis-3; docker rm redis-3;"
 	   "docker stop redis-4; docker rm redis-4;"
 	   "docker stop redis-5; docker rm redis-5;"
-	   "docker stop redis-6; docker rm redis-6").
+	   "docker stop redis-6; docker rm redis-6;"
+           "docker stop redis-7; docker rm redis-7"). % redis-7 used in t_new_cluster_master
 
 
 t_command(_) ->
@@ -114,11 +116,6 @@ t_hard_failover(_) ->
     ?MSG(#{msg_type := connect_error, addr := {localhost, Port}, reason := econnrefused}),
     ?MSG(#{msg_type := connect_error, addr := {"127.0.0.1", Port}, reason := econnrefused}),
 
-    %% ?MSG(#{msg_type := connect_timeout, addr := {localhost, Port}}, 3000),
-    %% ?MSG(#{msg_type := connect_timeout, addr := {"127.0.0.1", Port}}, 3000),
-
-    %% ?MSG(#{msg_type := connect_error, addr := {localhost, Port}, reason := econnrefused}),
-    %% ?MSG(#{msg_type := connect_error, addr := {"127.0.0.1", Port}, reason := econnrefused}),
 
     ?MSG(#{msg_type := slot_map_updated}, 5000),
 
@@ -352,16 +349,71 @@ t_queue_full(_) ->
 t_kill_client(_) ->
     R = start_cluster(),
     Port = get_master_port(R),
+
+    %% KILL will close the TCP connection to the redis client
     ct:pal("~p\n",[os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " CLIENT KILL TYPE NORMAL")]),
     #{addr := {_, Port}} = msg(msg_type, socket_closed),
     #{addr := {_, Port}} = msg(msg_type, socket_closed),
 
-%    msg(msg_type, cluster_not_ok),
+    %% connection reestablished
     #{addr := {_, Port}} = msg(msg_type, connected),
     #{addr := {_, Port}} = msg(msg_type, connected),
-%    msg(msg_type, cluster_ok),
-
     no_more_msgs().
+
+t_new_cluster_master(_) ->
+    R = start_cluster(),
+
+    %% Create new master
+    cmd_log("docker run --name redis-7 -d --net=host --restart=on-failure redis redis-server --cluster-enabled yes --port 30007 --cluster-node-timeout 2000"),
+    cmd_until("redis-cli -p 30007 CLUSTER MEET 127.0.0.1 30001", "OK"),
+    cmd_until("redis-cli -p 30007 CLUSTER INFO", "cluster_state:ok"),
+
+    %% Clear all old data
+    Clients = redis:get_clients(R),
+    [{ok, _} = redis:command_client(Client, [<<"FLUSHDB">>]) || Client <- Clients],
+
+    %% Set some dummy data
+    Key = <<"test_key">>,
+    Data = <<"dummydata">>,
+    {ok, _} = redis:command(R, [<<"SET">>, Key, Data], Key),
+
+
+    %% Find what node owns the data now. Get a move redirecton and extract port. Ex: MOVED 5798 172.100.0.1:6392
+    Moved = cmd_log("redis-cli -p 30007 GET " ++ binary_to_list(Key)),
+    SourcePort = string:trim(lists:nth(2, string:split(Moved, ":"))),
+
+    %% Move the data to new master
+    move_key(SourcePort, DestPort, Key),
+
+    %% Make sure it moved
+    cmd_until("redis-cli -p 30007 GET " ++ binary_to_list(Key), binary_to_list(<<"dummydata">>)),
+
+    %% Fetch with client. New connection should be opened and new slot map update
+    {ok, Data} = redis:command(R, [<<"GET">>, Key], Key),
+    ?MSG(#{msg_type := slot_map_updated}, 10000),
+
+    %% Move back the slot
+    move_key(DestPort, SourcePort, Key),
+
+    Pod = get_pod_name_from_port(30007),
+    cmd_log("docker stop " ++ Pod), 
+    %% Not sure if more cleanup is needed to remove from cluster..
+    no_more_msgs(),
+
+
+move_key(SourcePort, DestPort, Key) ->
+    Slot = integer_to_list(redis_lib:hash(Key)),
+    SourceNodeId = string:trim(cmd_log("redis-cli -p " ++ SourcePort ++ " CLUSTER MYID")),
+    DestNodeId = string:trim(cmd_log("redis-cli -p 30007 CLUSTER MYID")),
+
+    cmd_log("redis-cli -p 30007 CLUSTER SETSLOT " ++ Slot ++ " IMPORTING " ++ SourceNodeId),
+    cmd_log("redis-cli -p " ++ SourcePort ++ " CLUSTER SETSLOT " ++ Slot ++ " MIGRATING " ++ DestNodeId),
+    cmd_log("redis-cli -p " ++ SourcePort ++ " MIGRATE 127.0.0.1 30007 " ++ binary_to_list(Key) ++ " 0 5000"),
+
+    cmd_log("redis-cli -p 30007 CLUSTER SETSLOT " ++ Slot ++ " NODE " ++ DestNodeId),
+    cmd_log("redis-cli -p " ++ SourcePort ++ " CLUSTER SETSLOT " ++ Slot ++ " NODE " ++ DestNodeId),
+
+    cmd_until("redis-cli -p 30007 GET " ++ binary_to_list(Key), binary_to_list(<<"dummydata">>)).
 
 
 start_cluster() ->
@@ -431,3 +483,27 @@ scan_helper(Client, Curs0, Acc0) ->
         _ ->
             scan_helper(Client, Curs1, Acc1)
     end.
+
+cmd_log(Cmd) ->
+    R = os:cmd(Cmd),
+    ct:pal("~p -> ~p\n", [Cmd, R]),
+    R.
+
+cmd_until(Cmd, Regex) ->
+    fun Loop(N) ->
+            case re:run(cmd_log(Cmd), Regex) of
+                nomatch when N > 0 ->
+                    timer:sleep(500),
+                    Loop(N -1);
+                nomatch when N =< 0 ->
+                    error({timeout_cmd_until, Cmd, Regex});
+                Match ->
+                    Match
+            end
+    end(20).
+
+%% redis_cli(Port, CmdList) ->
+%%     Args = [io_lib:format(" ~w ", Arg) || Arg <- [Port | CmdList]],
+%%     Cmd = lists:flatten(["redis-cli -p" | Args]),
+%%     string:trim(cmd_log(Cmd)).
+
