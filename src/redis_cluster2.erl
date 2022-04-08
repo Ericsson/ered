@@ -6,7 +6,9 @@
 -export([start_link/2,
          stop/1,
          update_slots/3,
-         get_slot_map_info/1]).
+         get_slot_map_info/1,
+         connect_node/2
+        ]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -148,6 +150,9 @@ update_slots(ServerRef, SlotMapVersion, Node) ->
 get_slot_map_info(ServerRef) ->
     gen_server:call(ServerRef, get_slot_map_info).
 
+connect_node(ServerRef, Addr) ->
+    gen_server:call(ServerRef, {connect_node, Addr}).
+
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
@@ -178,8 +183,16 @@ handle_call(get_slot_map_info, _From, State) ->
     Nodes = redis_lib:slotmap_all_nodes(State#st.slot_map),
     Clients = maps:with(Nodes, State#st.nodes),
     Reply = {State#st.slot_map_version, State#st.slot_map, Clients},
-    {reply,Reply,State}.
+    {reply,Reply,State};
 
+handle_call({connect_node, Addr}, _From, State) ->
+    case maps:get(Addr, State#st.nodes, not_found) of
+        not_found ->
+            ClientPid = start_client(Addr, State),
+            {reply, ClientPid, State#st{nodes = maps:put(Addr, ClientPid, State#st.nodes)}};
+        ClientPid ->
+            {reply, ClientPid, State}
+    end.
 
 handle_cast({trigger_map_update, SlotMapVersion, Node}, State) ->
     case SlotMapVersion == State#st.slot_map_version of

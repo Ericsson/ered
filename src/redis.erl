@@ -107,14 +107,16 @@ handle_call(get_clients, _From, State) ->
 handle_cast({forward_command, Command, From, Addr}, State) ->
     case maps:get(Addr, State#st.addr_map, not_found) of
         not_found ->
-            %% TODO this will always be the case since we only keep clients open to the masters YET..
-            gen_server:reply(From, {error, {forward_to_addr_failed, Addr}});
+            Client = redis_cluster2:connect_node(State#st.cluster_pid, Addr),
+            Fun = fun(Reply) -> gen_server:reply(From, Reply) end,
+            redis_client:request_cb(Client, Command, Fun),
+            {noreply, State#st{addr_map = maps:put(Addr, Client, State#st.addr_map)}};
         Client ->
             %% TODO special reply handling, move send logic to common help function
             Fun = fun(Reply) -> gen_server:reply(From, Reply) end,
-            redis_client:request_cb(Client, Command, Fun)
-    end,
-    {noreply, State}.
+            redis_client:request_cb(Client, Command, Fun),
+            {noreply, State}
+    end.
 
 
 handle_info(#{msg_type := slot_map_updated}, State) ->

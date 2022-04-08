@@ -381,7 +381,7 @@ t_new_cluster_master(_) ->
     %% Find what node owns the data now. Get a move redirecton and extract port. Ex: MOVED 5798 172.100.0.1:6392
     Moved = cmd_log("redis-cli -p 30007 GET " ++ binary_to_list(Key)),
     SourcePort = string:trim(lists:nth(2, string:split(Moved, ":"))),
-
+    DestPort = "30007",
     %% Move the data to new master
     move_key(SourcePort, DestPort, Key),
 
@@ -398,7 +398,7 @@ t_new_cluster_master(_) ->
     Pod = get_pod_name_from_port(30007),
     cmd_log("docker stop " ++ Pod), 
     %% Not sure if more cleanup is needed to remove from cluster..
-    no_more_msgs(),
+    no_more_msgs().
 
 
 move_key(SourcePort, DestPort, Key) ->
