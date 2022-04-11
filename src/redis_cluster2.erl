@@ -319,9 +319,7 @@ new_set(List) ->
 
 update_cluster_status(State) ->
     case is_slot_map_ok(State) of
-        false ->
-            set_cluster_state(nok, bad_slot_map, State);
-        true ->
+        ok ->
             case sets:is_subset(State#st.masters, State#st.up) of
                 false ->
                     set_cluster_state(nok, master_down, State);
@@ -332,7 +330,9 @@ update_cluster_status(State) ->
                         true ->
                             set_cluster_state(ok, ok, State)
                     end
-            end
+            end;
+        Reason ->
+            set_cluster_state(nok, Reason, State)
     end.
 
 set_cluster_state(nok, Reason, State) ->
@@ -468,7 +468,22 @@ send_info(InternalMsg, State) ->
 is_slot_map_ok(State) ->
     %% Need at least two nodes in the cluster. During some startup scenarios it
     %% is possible to have a intermittent situation with only one node.
-    length(State#st.slot_map) >= 2 andalso all_slots_covered(State) andalso check_replica_count(State).
+    if
+        length(State#st.slot_map) < 2 ->
+            too_few_nodes;
+        true ->
+            case all_slots_covered(State) of
+                false ->
+                    not_all_slots_covered;
+                true ->
+                    case check_replica_count(State) of
+                        false ->
+                            too_few_replicas;
+                        true ->
+                            ok
+                    end
+            end
+    end.
 
 all_slots_covered(State) ->
     %% check so that the slot map covers all slots. the slot map is sorted so it
