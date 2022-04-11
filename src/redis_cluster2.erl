@@ -76,7 +76,7 @@
         {slot_map_updated, ClusterSlotsReply :: slot_map(), Version :: non_neg_integer()} |
         {cluster_slots_error_response, Response :: binary()} |
         cluster_ok |
-        {cluster_nok, Reason :: master_down | master_queue_full | bad_slot_map}.
+        {cluster_nok, Reason :: master_down | master_queue_full | too_few_nodes | not_all_slots_covered | too_few_replicas}.
 
 
 
@@ -520,8 +520,4 @@ start_client(Addr, State) ->
     Pid.
 
 
-%% maps_without(Kss, Map0) ->
-%%     lists:foldl(fun(Ks, Map1) ->
-%%                         maps:without(Ks,
-                                
-                               
+

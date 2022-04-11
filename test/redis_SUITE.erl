@@ -361,7 +361,7 @@ t_kill_client(_) ->
     no_more_msgs().
 
 t_new_cluster_master(_) ->
-    R = start_cluster(),
+    R = start_cluster([{min_replicas, 0}]),
 
     %% Create new master
     cmd_log("docker run --name redis-7 -d --net=host --restart=on-failure redis redis-server --cluster-enabled yes --port 30007 --cluster-node-timeout 2000"),
@@ -391,29 +391,38 @@ t_new_cluster_master(_) ->
     %% Fetch with client. New connection should be opened and new slot map update
     {ok, Data} = redis:command(R, [<<"GET">>, Key], Key),
     ?MSG(#{msg_type := slot_map_updated}, 10000),
-
+    %% The new node is still connecting so there is a cluster_not_ok here. Maybe the cluster logic should
+    %% be changed so that the cluster is not reported as nok until a connect fails. On the other hand it is
+    %% good to only be in cluster_ok when everything us up and running fully.
+    ?MSG(#{msg_type := cluster_not_ok,reason := master_down}),
+    ?MSG(#{msg_type := connected, addr := {"127.0.0.1",30007}}),
+    ?MSG(#{msg_type := cluster_ok}),
     %% Move back the slot
     move_key(DestPort, SourcePort, Key),
 
     Pod = get_pod_name_from_port(30007),
-    cmd_log("docker stop " ++ Pod), 
-    %% Not sure if more cleanup is needed to remove from cluster..
+    cmd_log("docker stop " ++ Pod),
+
+    ?MSG(#{msg_type := socket_closed}),
+    ?MSG(#{msg_type := connect_error}),
+    ?MSG(#{msg_type := cluster_not_ok,reason := master_down}),
+    ?MSG(#{msg_type := slot_map_updated}),
+    ?MSG(#{msg_type := cluster_ok}),
     no_more_msgs().
 
 
 move_key(SourcePort, DestPort, Key) ->
     Slot = integer_to_list(redis_lib:hash(Key)),
     SourceNodeId = string:trim(cmd_log("redis-cli -p " ++ SourcePort ++ " CLUSTER MYID")),
-    DestNodeId = string:trim(cmd_log("redis-cli -p 30007 CLUSTER MYID")),
+    DestNodeId = string:trim(cmd_log("redis-cli -p " ++ DestPort ++ " CLUSTER MYID")),
 
-    cmd_log("redis-cli -p 30007 CLUSTER SETSLOT " ++ Slot ++ " IMPORTING " ++ SourceNodeId),
+    cmd_log("redis-cli -p " ++ DestPort ++ " CLUSTER SETSLOT " ++ Slot ++ " IMPORTING " ++ SourceNodeId),
     cmd_log("redis-cli -p " ++ SourcePort ++ " CLUSTER SETSLOT " ++ Slot ++ " MIGRATING " ++ DestNodeId),
-    cmd_log("redis-cli -p " ++ SourcePort ++ " MIGRATE 127.0.0.1 30007 " ++ binary_to_list(Key) ++ " 0 5000"),
+    cmd_log("redis-cli -p " ++ SourcePort ++ " MIGRATE 127.0.0.1 " ++ DestPort ++ " " ++ binary_to_list(Key) ++ " 0 5000"),
 
-    cmd_log("redis-cli -p 30007 CLUSTER SETSLOT " ++ Slot ++ " NODE " ++ DestNodeId),
-    cmd_log("redis-cli -p " ++ SourcePort ++ " CLUSTER SETSLOT " ++ Slot ++ " NODE " ++ DestNodeId),
+    cmd_log("redis-cli -p " ++ DestPort ++ " CLUSTER SETSLOT " ++ Slot ++ " NODE " ++ DestNodeId),
+    cmd_log("redis-cli -p " ++ SourcePort ++ " CLUSTER SETSLOT " ++ Slot ++ " NODE " ++ DestNodeId).
 
-    cmd_until("redis-cli -p 30007 GET " ++ binary_to_list(Key), binary_to_list(<<"dummydata">>)).
 
 
 start_cluster() ->
@@ -468,11 +477,20 @@ recv(Msg, Time) ->
     end.
 
 no_more_msgs() ->
-    receive Msg ->
-            error({unexpected,Msg})
-    after 0 ->
-            ok
+    {messages,Msgs} = erlang:process_info(self(), messages),
+    case  Msgs of
+        [] ->
+            ok;
+        Msgs ->
+            error({unexpected,Msgs})
     end.
+
+%% no_more_msgs() ->
+%%     receive Msg ->
+%%             error({unexpected,Msg})
+%%     after 0 ->
+%%             ok
+%%     end.
 
 scan_helper(Client, Curs0, Acc0) ->
     {ok, [Curs1, Keys]} = redis:command_client(Client, [<<"SCAN">>, Curs0]),
@@ -486,7 +504,7 @@ scan_helper(Client, Curs0, Acc0) ->
 
 cmd_log(Cmd) ->
     R = os:cmd(Cmd),
-    ct:pal("~p -> ~p\n", [Cmd, R]),
+    ct:pal("~p -> ~s\n", [Cmd, R]),
     R.
 
 cmd_until(Cmd, Regex) ->
