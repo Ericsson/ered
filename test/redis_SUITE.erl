@@ -18,7 +18,8 @@ all() ->
      t_split_data,
      t_queue_full,
      t_kill_client,
-     t_new_cluster_master
+     t_new_cluster_master,
+     t_ask_redirect
     ].
 
 
@@ -409,6 +410,48 @@ t_new_cluster_master(_) ->
     ?MSG(#{msg_type := slot_map_updated}),
     ?MSG(#{msg_type := cluster_ok}),
     no_more_msgs().
+
+t_ask_redirect(_) ->
+    R = start_cluster(),
+
+    %% Clear all old data
+    Clients = redis:get_clients(R),
+    [{ok, _} = redis:command_client(Client, [<<"FLUSHDB">>]) || Client <- Clients],
+
+    Key = <<"test_key">>,
+
+    Moved = cmd_log("redis-cli -p 30001 GET " ++ binary_to_list(Key)),
+    {SourcePort, DestPort} = case string:trim(lists:nth(2, string:split(Moved, ":"))) of
+                                 "" ->
+                                     %% the key was at 30001
+                                     {"30001", "30002"};
+                                 Port ->
+                                     {Port, "30001"}
+                             end,
+
+    Slot = integer_to_list(redis_lib:hash(Key)),
+    SourceNodeId = string:trim(cmd_log("redis-cli -p " ++ SourcePort ++ " CLUSTER MYID")),
+    DestNodeId = string:trim(cmd_log("redis-cli -p " ++ DestPort ++ " CLUSTER MYID")),
+
+    cmd_log("redis-cli -p " ++ DestPort ++ " CLUSTER SETSLOT " ++ Slot ++ " IMPORTING " ++ SourceNodeId),
+    cmd_log("redis-cli -p " ++ SourcePort ++ " CLUSTER SETSLOT " ++ Slot ++ " MIGRATING " ++ DestNodeId),
+
+    apa = redis:command(R, [[<<"GET">>, Key],
+                            [<<"PING">>] ,
+                            [<<"SET">>, Key, <<"DATA">>]],
+                        Key),
+
+
+    cmd_log("redis-cli -p " ++ SourcePort ++ " GET test_key"),
+    %cmd_log("redis-cli -p " ++ DestPort ++ " $20\r\nASKING\r\nGET test_key\r\n"),
+    %apa = redis:command(R, [[<<"SET">>, Key, <<"DATA">>], [<<"PING">>]], Key),
+
+    cmd_log("redis-cli -p " ++ DestPort ++ " CLUSTER SETSLOT " ++ Slot ++ " STABLE"),
+    cmd_log("redis-cli -p " ++ SourcePort ++ " CLUSTER SETSLOT " ++ Slot ++ " STABLE"),
+
+    apa= ok.
+
+
 
 
 move_key(SourcePort, DestPort, Key) ->
