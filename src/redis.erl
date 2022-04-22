@@ -91,6 +91,9 @@ handle_call({command, Command, Key}, From, State) ->
                               % {ask, Addr} -> TODO
                               % TRAGAIN
                               % etc..
+                              {ask, Addr} ->
+                                  gen_server:cast(Pid, {forward_command_asking, Command, From, Addr});
+                                  %gen_server:cast(Pid, {forward_command, add_asking(Command), From, Addr});
                               normal ->
                                   gen_server:reply(From, Reply)
                           end
@@ -102,7 +105,38 @@ handle_call({command, Command, Key}, From, State) ->
 handle_call(get_clients, _From, State) ->
     {reply, tuple_to_list(State#st.clients), State}.
 
+%% TODO move this, add single
+add_asking({redis_command, N, Commands}) ->
+    {redis_command, N*2, [[ <<"ASKING\r\n">>, Command] || Command<- Commands]}.
 
+remove_asking_ok_reply(Reply) ->
+    case Reply of
+        {ok, Results} ->
+            {ok, remove_even_ix_element(Results)};
+        Other ->
+            Other
+    end.
+
+remove_even_ix_element(Ls) ->
+    case Ls of
+        [] ->
+            [];
+        [_, X|Tail] ->
+            [X | remove_even_ix_element(Tail)]
+    end.
+
+%% connect_addr(Addr, State) ->
+%%     case maps:get(Addr, State#st.addr_map, not_found) of
+%%         not_found ->
+%%             Client = redis_cluster2:connect_node(State#st.cluster_pid, Addr),
+%%             {noreply, State#st{addr_map = maps:put(Addr, Client, State#st.addr_map)}};
+%%         Client ->
+%%             %% TODO special reply handling, move send logic to common help function
+%%             Fun = fun(Reply) -> gen_server:reply(From, Reply) end,
+%%             redis_client:request_cb(Client, Command, Fun),
+%%             {noreply, State}
+%%     end.
+    
 
 handle_cast({forward_command, Command, From, Addr}, State) ->
     case maps:get(Addr, State#st.addr_map, not_found) of
@@ -116,6 +150,23 @@ handle_cast({forward_command, Command, From, Addr}, State) ->
             Fun = fun(Reply) -> gen_server:reply(From, Reply) end,
             redis_client:request_cb(Client, Command, Fun),
             {noreply, State}
+    end;
+
+handle_cast({forward_command_asking, Command, From, Addr}, State) ->
+    {Client, State1} = connect_addr(Addr, State),
+    Command1 = add_asking(Command),
+    Fun = fun(Reply) -> gen_server:reply(From, remove_asking_ok_reply(Reply)) end,
+    redis_client:request_cb(Client, Command1, Fun),
+    {noreply, State1}.
+
+
+connect_addr(Addr, State) ->
+    case maps:get(Addr, State#st.addr_map, not_found) of
+        not_found ->
+            Client = redis_cluster2:connect_node(State#st.cluster_pid, Addr),
+            {Client, State#st{addr_map = maps:put(Addr, Client, State#st.addr_map)}};
+        Client ->
+            {Client, State}
     end.
 
 
@@ -190,16 +241,28 @@ create_lookup_table(N, L = [{Start, End, Val} | Rest], Acc) ->
 
 
 special_reply({ok, [Head|_Tail]}) ->
-    %% only consider the first element for pipeline for now.
-    %% if there are different slots in the pipeline and some are moved then
-    %% it will trigger more MOVED for the other slot when forwarded..
+    %% Only consider the first element in the pipeline. A pipeline "should" not
+    %% contain multiple keys. Setting or reading multiple keys is hopefully done
+    %% with some multi operation like MGET/MSET. If the first command is some
+    %% keyless comand then there would be trouble though.. I dont think its worth
+    %% to make this more complicated and/or costly unless there is a good
+    %% real world use case for it and right now I don't have it.
     special_reply({ok, Head});
+
 special_reply({ok, {error, <<"MOVED ", Tail/binary>>}}) ->
     %% looks like this ,<<"MOVED 14039 127.0.0.1:30006">>
     %% TODO should this be wrapped in a try catch if MOVED is malformed?
     [_Slot, AddrBin] = binary:split(Tail, <<" ">>),
-    [Host, Port] = binary:split(AddrBin, <<":">>),
+    %% Use trailing, IPv6 address can contain ':'
+    [Host, Port] = string:split(AddrBin, <<":">>, trailing),
     {moved, {binary_to_list(Host), binary_to_integer(Port)}};
+
+special_reply({ok, {error, <<"ASK ", Tail/binary>>}}) ->
+    %% Similar format to move
+    [_Slot, AddrBin] = binary:split(Tail, <<" ">>),
+    [Host, Port] = string:split(AddrBin, <<":">>, trailing),
+    {ask, {binary_to_list(Host), binary_to_integer(Port)}};
+
 special_reply(_) ->
     normal.
 

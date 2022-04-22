@@ -436,10 +436,11 @@ t_ask_redirect(_) ->
     cmd_log("redis-cli -p " ++ DestPort ++ " CLUSTER SETSLOT " ++ Slot ++ " IMPORTING " ++ SourceNodeId),
     cmd_log("redis-cli -p " ++ SourcePort ++ " CLUSTER SETSLOT " ++ Slot ++ " MIGRATING " ++ DestNodeId),
 
-    apa = redis:command(R, [[<<"GET">>, Key],
-                            [<<"PING">>] ,
-                            [<<"SET">>, Key, <<"DATA">>]],
-                        Key),
+    {ok,[undefined,<<"PONG">>,<<"OK">>]} = redis:command(R,
+                                                         [[<<"GET">>, Key],
+                                                          [<<"PING">>] ,
+                                                          [<<"SET">>, Key, <<"DATA">>]],
+                                                         Key),
 
 
     cmd_log("redis-cli -p " ++ SourcePort ++ " GET test_key"),
@@ -449,7 +450,7 @@ t_ask_redirect(_) ->
     cmd_log("redis-cli -p " ++ DestPort ++ " CLUSTER SETSLOT " ++ Slot ++ " STABLE"),
     cmd_log("redis-cli -p " ++ SourcePort ++ " CLUSTER SETSLOT " ++ Slot ++ " STABLE"),
 
-    apa= ok.
+    ok.
 
 
 
