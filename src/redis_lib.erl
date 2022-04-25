@@ -38,7 +38,7 @@ format_command(RawCommand) ->
     %% Maybe this could be kept as an iolist?
     %% TODO profile this.
     %% Since this is copied around a bit between processes it might be cheaper to keep it as a binary
-    %% since then it will be heap allocated if big. Just speculation
+    %% since then it will be heap allocated if big. Just pure speculation..
     iolist_to_binary(["*", Len, "\r\n", Elements]).
 
 

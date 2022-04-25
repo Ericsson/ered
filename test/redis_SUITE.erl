@@ -436,6 +436,10 @@ t_ask_redirect(_) ->
     cmd_log("redis-cli -p " ++ DestPort ++ " CLUSTER SETSLOT " ++ Slot ++ " IMPORTING " ++ SourceNodeId),
     cmd_log("redis-cli -p " ++ SourcePort ++ " CLUSTER SETSLOT " ++ Slot ++ " MIGRATING " ++ DestNodeId),
 
+    %% Test single command
+    {ok,undefined} = redis:command(R, [<<"GET">>, Key], Key),
+
+    %% Test multiple commands
     {ok,[undefined,<<"PONG">>,<<"OK">>]} = redis:command(R,
                                                          [[<<"GET">>, Key],
                                                           [<<"PING">>] ,

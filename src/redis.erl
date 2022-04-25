@@ -107,7 +107,15 @@ handle_call(get_clients, _From, State) ->
 
 %% TODO move this, add single
 add_asking({redis_command, N, Commands}) ->
-    {redis_command, N*2, [[ <<"ASKING\r\n">>, Command] || Command<- Commands]}.
+    case N of
+        single ->
+            {redis_command, 2, [ <<"ASKING\r\n">>, Commands]};
+        _ ->
+            {redis_command, N*2, [[ <<"ASKING\r\n">>, Command] || Command<- Commands]}
+    end.
+
+is_single_command({redis_command, N, _Commands}) ->
+    N == single.
 
 remove_asking_ok_reply(Reply) ->
     case Reply of
@@ -124,6 +132,15 @@ remove_even_ix_element(Ls) ->
         [_, X|Tail] ->
             [X | remove_even_ix_element(Tail)]
     end.
+
+remove_asking_ok_reply_single(Reply) ->
+    case Reply of
+        {ok, [_Ok, Result]} ->
+            {ok, Result};
+        Other ->
+            Other
+    end.
+ 
 
 %% connect_addr(Addr, State) ->
 %%     case maps:get(Addr, State#st.addr_map, not_found) of
@@ -155,7 +172,12 @@ handle_cast({forward_command, Command, From, Addr}, State) ->
 handle_cast({forward_command_asking, Command, From, Addr}, State) ->
     {Client, State1} = connect_addr(Addr, State),
     Command1 = add_asking(Command),
-    Fun = fun(Reply) -> gen_server:reply(From, remove_asking_ok_reply(Reply)) end,
+    Fun = case is_single_command(Command) of
+              true ->
+                  fun(Reply) -> gen_server:reply(From, remove_asking_ok_reply_single(Reply)) end;
+              false ->
+                  fun(Reply) -> gen_server:reply(From, remove_asking_ok_reply(Reply)) end
+          end,
     redis_client:request_cb(Client, Command1, Fun),
     {noreply, State1}.
 
