@@ -139,19 +139,6 @@ t_hard_failover(_) ->
 
     no_more_msgs().
 
-
-
-get_master_port(R) ->
-    [Client|_] = redis:get_clients(R),
-    {ok, SlotMap} = redis:command_client(Client, [<<"CLUSTER">>, <<"SLOTS">>]),
-    [[_SlotStart, _SlotEnd, [_Ip, Port |_] | _] | _] = SlotMap,
-    Port.
-
-get_pod_name_from_port(Port) ->
-    N = lists:last(integer_to_list(Port)),
-    "redis-" ++ [N].
-
-
 t_manual_failover(_) ->
     R = start_cluster(),
     %% "OK\n" = os:cmd("redis-cli -p 30005 CLUSTER FAILOVER"),
@@ -362,7 +349,8 @@ t_kill_client(_) ->
     no_more_msgs().
 
 t_new_cluster_master(_) ->
-    R = start_cluster([{min_replicas, 0}]),
+    R = start_cluster([{min_replicas, 0},
+                       {close_wait, 100}]),
 
     %% Create new master
     cmd_log("docker run --name redis-7 -d --net=host --restart=on-failure redis redis-server --cluster-enabled yes --port 30007 --cluster-node-timeout 2000"),
@@ -407,8 +395,9 @@ t_new_cluster_master(_) ->
     ?MSG(#{msg_type := socket_closed}),
     ?MSG(#{msg_type := connect_error}),
     ?MSG(#{msg_type := cluster_not_ok,reason := master_down}),
-    ?MSG(#{msg_type := slot_map_updated}),
+    ?MSG(#{msg_type := slot_map_updated}, 5000),
     ?MSG(#{msg_type := cluster_ok}),
+    ?MSG(#{msg_type := client_stopped}),
     no_more_msgs().
 
 t_ask_redirect(_) ->
@@ -421,13 +410,9 @@ t_ask_redirect(_) ->
     Key = <<"test_key">>,
 
     Moved = cmd_log("redis-cli -p 30001 GET " ++ binary_to_list(Key)),
-    {SourcePort, DestPort} = case string:trim(lists:nth(2, string:split(Moved, ":"))) of
-                                 "" ->
-                                     %% the key was at 30001
-                                     {"30001", "30002"};
-                                 Port ->
-                                     {Port, "30001"}
-                             end,
+
+    SourcePort = integer_to_list(get_master_from_key(R, Key)),
+    DestPort = integer_to_list(hd([Port || Port <- get_all_masters(R), Port /= SourcePort])),
 
     Slot = integer_to_list(redis_lib:hash(Key)),
     SourceNodeId = string:trim(cmd_log("redis-cli -p " ++ SourcePort ++ " CLUSTER MYID")),
@@ -568,8 +553,26 @@ cmd_until(Cmd, Regex) ->
             end
     end(20).
 
-%% redis_cli(Port, CmdList) ->
-%%     Args = [io_lib:format(" ~w ", Arg) || Arg <- [Port | CmdList]],
-%%     Cmd = lists:flatten(["redis-cli -p" | Args]),
-%%     string:trim(cmd_log(Cmd)).
 
+get_all_masters(R) ->
+    [Port || [SlotStart, SlotEnd, [_Ip, Port| _] | _] <- get_slot_map(R)].
+
+get_master_from_key(R, Key) ->
+    Slot = redis_lib:hash(Key),
+    hd([Port || [SlotStart, SlotEnd, [_Ip, Port| _] | _] <- get_slot_map(R), 
+                SlotStart =< Slot,
+                Slot =< SlotEnd]).
+
+
+get_slot_map(R) ->
+    [Client|_] = redis:get_clients(R),
+    {ok, SlotMap} = redis:command_client(Client, [<<"CLUSTER">>, <<"SLOTS">>]),
+    SlotMap.
+
+get_master_port(R) ->
+    [[_SlotStart, _SlotEnd, [_Ip, Port |_] | _] | _] = get_slot_map(R),
+    Port.
+
+get_pod_name_from_port(Port) ->
+    N = lists:last(integer_to_list(Port)),
+    "redis-" ++ [N].
