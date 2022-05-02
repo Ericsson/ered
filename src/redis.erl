@@ -20,7 +20,10 @@
              slots :: binary(),
              clients = {} :: tuple(), % of pid()
              slot_map_version = 0 :: non_neg_integer(),
-             addr_map = {}
+             addr_map = {},
+
+             try_again_delay :: non_neg_integer(),
+             redirect_attempts :: non_neg_integer()
             }).
 
 %%%===================================================================
@@ -69,9 +72,19 @@ init([Addrs, Opts1]) ->
     %% Register callback to get slot map updates
     InfoPids = [self() | proplists:get_value(info_pid, Opts1, [])],
     Opts2 = [{info_pid, InfoPids} | proplists:delete(info_pid, Opts1)],
-    {ok, ClusterPid} = redis_cluster2:start_link(Addrs, Opts2),
+
+    {TryAgainDelay, Opts3} = take_prop(try_again_delay, Opts2, 200),
+    {RedirectAttempts, Opts4} = take_prop(redirect_attempts, Opts3, 10),
+
+    %% TryAgainDelay = proplists:get_value(try_again_delay, Opts2, 200),
+    %% RedirectAttempts = proplists:get_value(redirect_attempts, Opts2, 10),
+
+    {ok, ClusterPid} = redis_cluster2:start_link(Addrs, Opts4),
     EmptySlots = create_lookup_table(0, [], <<>>),
-    {ok, #st{cluster_pid = ClusterPid, slots = EmptySlots}}.
+    {ok, #st{cluster_pid = ClusterPid,
+             slots = EmptySlots,
+             try_again_delay = TryAgainDelay,
+             redirect_attempts = RedirectAttempts}}.
 
 
 handle_call({command, Command, Key}, From, State) ->
@@ -153,7 +166,7 @@ send_command_to_slot(Command, Slot, From, State) ->
         0 ->
             gen_server:reply(From, {error, unmapped_slot});
         Ix ->
-            apa = ok,
+           % apa = ok,
             Client = element(Ix, State#st.clients),
             Fun = create_reply_fun(Command, Slot, Client, From, State),
             redis_client:request_cb(Client, Command, Fun)
@@ -281,6 +294,10 @@ remove_asking_ok_reply_single(Reply) ->
             Other
     end.
 
+take_prop(Key, List, Default) ->
+    Val = proplists:get_value(Key, List, Default),
+    NewList = proplists:delete(Key, List),
+    {Val, NewList}.
 
 
  

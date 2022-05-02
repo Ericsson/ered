@@ -9,7 +9,9 @@
          hash/1]).
 
 
--type request() :: {redis_command, non_neg_integer() | single, binary()}.
+-type request() :: {redis_command,
+                    non_neg_integer() | single,
+                    binary() | [binary()]}.
 
 -export_type([request/0]).
 
