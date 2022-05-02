@@ -409,10 +409,10 @@ t_ask_redirect(_) ->
 
     Key = <<"test_key">>,
 
-    Moved = cmd_log("redis-cli -p 30001 GET " ++ binary_to_list(Key)),
+    %Moved = cmd_log("redis-cli -p 30001 GET " ++ binary_to_list(Key)),
 
     SourcePort = integer_to_list(get_master_from_key(R, Key)),
-    DestPort = integer_to_list(hd([Port || Port <- get_all_masters(R), Port /= SourcePort])),
+    DestPort = integer_to_list(hd([Port || Port <- get_all_masters(R), integer_to_list(Port) /= SourcePort])),
 
     Slot = integer_to_list(redis_lib:hash(Key)),
     SourceNodeId = string:trim(cmd_log("redis-cli -p " ++ SourcePort ++ " CLUSTER MYID")),
@@ -421,10 +421,10 @@ t_ask_redirect(_) ->
     cmd_log("redis-cli -p " ++ DestPort ++ " CLUSTER SETSLOT " ++ Slot ++ " IMPORTING " ++ SourceNodeId),
     cmd_log("redis-cli -p " ++ SourcePort ++ " CLUSTER SETSLOT " ++ Slot ++ " MIGRATING " ++ DestNodeId),
 
-    %% Test single command
+    %% Test single command. unknown key leads to ASK redirection
     {ok,undefined} = redis:command(R, [<<"GET">>, Key], Key),
 
-    %% Test multiple commands
+    %% Test multiple commands. unknown key leads to ASK redirection.
     {ok,[undefined,<<"PONG">>,<<"OK">>]} = redis:command(R,
                                                          [[<<"GET">>, Key],
                                                           [<<"PING">>] ,
@@ -432,7 +432,9 @@ t_ask_redirect(_) ->
                                                          Key),
 
 
-    cmd_log("redis-cli -p " ++ SourcePort ++ " GET test_key"),
+    ok = redis:command(R, [<<"MGET">>, Key, <<"{test_key}2">>], Key),
+
+    %cmd_log("redis-cli -p " ++ SourcePort ++ " GET test_key"),
     %cmd_log("redis-cli -p " ++ DestPort ++ " $20\r\nASKING\r\nGET test_key\r\n"),
     %apa = redis:command(R, [[<<"SET">>, Key, <<"DATA">>], [<<"PING">>]], Key),
 

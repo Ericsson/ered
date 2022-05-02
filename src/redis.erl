@@ -82,21 +82,22 @@ handle_call({command, Command, Key}, From, State) ->
             {reply, {error, unmapped_slot}, State};
         Ix ->
             Client = element(Ix, State#st.clients),
-            Fun = fun(Reply) ->
-                          case special_reply(Reply) of
-                              {moved, Addr} ->
-                                  redis_cluster2:update_slots(State#st.cluster_pid, State#st.slot_map_version, Client),
-                                  gen_server:cast(Pid, {forward_command, Command, From, Addr});
-                              {ask, Addr} ->
-                                  gen_server:cast(Pid, {forward_command_asking, Command, From, Addr});
-                              try_again ->
-                                  Time = 500, % TODO make configurable
-                                  erlang:send_after(Time, Pid, {command_try_again, Command, From, Slot});
-                                    %gen_server:cast(Pid, {command_try_again, Command, From, Slot});
-                              normal ->
-                                  gen_server:reply(From, Reply)
-                          end
-                  end,
+            Fun = handle_reply_fun(Command, Slot, Client, From, State),
+            %% Fun = fun(Reply) ->
+            %%               case special_reply(Reply) of
+            %%                   {moved, Addr} ->
+            %%                       redis_cluster2:update_slots(State#st.cluster_pid, State#st.slot_map_version, Client),
+            %%                       gen_server:cast(Pid, {forward_command, Command, From, Addr});
+            %%                   {ask, Addr} ->
+            %%                       gen_server:cast(Pid, {forward_command_asking, Command, From, Addr});
+            %%                   try_again ->
+            %%                       Time = 500, % TODO make configurable
+            %%                       erlang:send_after(Time, Pid, {command_try_again, Command, From, Slot});
+            %%                         %gen_server:cast(Pid, {command_try_again, Command, From, Slot});
+            %%                   normal ->
+            %%                       gen_server:reply(From, Reply)
+            %%               end
+            %%       end,
             redis_client:request_cb(Client, Command, Fun),
             {noreply, State}
     end;
@@ -105,36 +106,36 @@ handle_call(get_clients, _From, State) ->
     {reply, tuple_to_list(State#st.clients), State}.
 
 
-handle_cast({forward_command, Command, From, Addr}, State) ->
+handle_cast({forward_command, Command, Slot, From, Addr}, State) ->
     {Client, State1} = connect_addr(Addr, State),
     %% Fun = fun(Reply) ->
     %%               case handle_special_reply(
     %%               gen_server:reply(From, Reply) end,
-    Fun = handle_reply_fun(Command, Client, From, State),
+    Fun = handle_reply_fun(Command, Slot, Client, From, State),
     redis_client:request_cb(Client, Command, Fun),
     {noreply, State1};
 
-handle_cast({forward_command_asking, Command, From, Addr}, State) ->
+handle_cast({forward_command_asking, Command, Slot, From, Addr}, State) ->
     {Client, State1} = connect_addr(Addr, State),
     Command1 = add_asking(Command),
-    HandleReplyFun = handle_reply_fun(Command, Client, From, State),
+    HandleReplyFun = handle_reply_fun(Command, Slot, Client, From, State),
     Fun = case is_single_command(Command) of
               true ->
-                  fun(Reply) -> HandleReplyFun(From, remove_asking_ok_reply_single(Reply)) end;
+                  fun(Reply) -> HandleReplyFun(remove_asking_ok_reply_single(Reply)) end;
               false ->
-                  fun(Reply) -> HandleReplyFun(From, remove_asking_ok_reply(Reply)) end
+                  fun(Reply) -> HandleReplyFun(remove_asking_ok_reply(Reply)) end
           end,
     redis_client:request_cb(Client, Command1, Fun),
     {noreply, State1}.
 
-handle_info({command_try_again, Command, From, Slot}, State) ->
+handle_info({command_try_again, Command, Slot, From, Slot}, State) ->
     case binary:at(State#st.slots, Slot) of
         0 ->
             gen_server:reply(From, {error, unmapped_slot});
         Ix ->
             apa = ok,
             Client = element(Ix, State#st.clients),
-            Fun = handle_reply_fun(Command, Client, From, State),
+            Fun = handle_reply_fun(Command, Slot, Client, From, State),
             redis_client:request_cb(Client, Command, Fun)
     end,
     {noreply, State};
@@ -204,18 +205,18 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-handle_reply_fun(Command, Client, From, State) ->
+handle_reply_fun(Command, Slot, Client, From, State) ->
     Pid = self(),
     fun(Reply) ->
             case special_reply(Reply) of
                 {moved, Addr} ->
                     redis_cluster2:update_slots(State#st.cluster_pid, State#st.slot_map_version, Client),
-                    gen_server:cast(Pid, {forward_command, Command, From, Addr});
+                    gen_server:cast(Pid, {forward_command, Command, Slot, From, Addr});
                 {ask, Addr} ->
-                    gen_server:cast(Pid, {forward_command_asking, Command, From, Addr});
+                    gen_server:cast(Pid, {forward_command_asking, Command, Slot, From, Addr});
                 try_again ->
                     Time = 500, % TODO make configurable
-                    erlang:send_after(Time, Pid, {command_try_again, Command, From, Slot});
+                    erlang:send_after(Time, Pid, {command_try_again, Command, Slot, From, Slot});
                     %%gen_server:cast(Pid, {command_try_again, Command, From, Slot});
                 normal ->
                     gen_server:reply(From, Reply)
