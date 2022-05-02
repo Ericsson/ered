@@ -87,13 +87,12 @@ handle_call({command, Command, Key}, From, State) ->
                               {moved, Addr} ->
                                   redis_cluster2:update_slots(State#st.cluster_pid, State#st.slot_map_version, Client),
                                   gen_server:cast(Pid, {forward_command, Command, From, Addr});
-                                  %gen_server:reply(From, Reply);
-                              % {ask, Addr} -> TODO
-                              % TRAGAIN
-                              % etc..
                               {ask, Addr} ->
                                   gen_server:cast(Pid, {forward_command_asking, Command, From, Addr});
-                                  %gen_server:cast(Pid, {forward_command, add_asking(Command), From, Addr});
+                              try_again ->
+                                  Time = 500, % TODO make configurable
+                                  erlang:send_after(Time, Pid, {command_try_again, Command, From, Slot});
+                                    %gen_server:cast(Pid, {command_try_again, Command, From, Slot});
                               normal ->
                                   gen_server:reply(From, Reply)
                           end
@@ -105,91 +104,64 @@ handle_call({command, Command, Key}, From, State) ->
 handle_call(get_clients, _From, State) ->
     {reply, tuple_to_list(State#st.clients), State}.
 
-%% TODO move this, add single
-add_asking({redis_command, N, Commands}) ->
-    case N of
-        single ->
-            {redis_command, 2, [ <<"ASKING\r\n">>, Commands]};
-        _ ->
-            {redis_command, N*2, [[ <<"ASKING\r\n">>, Command] || Command<- Commands]}
-    end.
-
-is_single_command({redis_command, N, _Commands}) ->
-    N == single.
-
-remove_asking_ok_reply(Reply) ->
-    case Reply of
-        {ok, Results} ->
-            {ok, remove_even_ix_element(Results)};
-        Other ->
-            Other
-    end.
-
-remove_even_ix_element(Ls) ->
-    case Ls of
-        [] ->
-            [];
-        [_, X|Tail] ->
-            [X | remove_even_ix_element(Tail)]
-    end.
-
-remove_asking_ok_reply_single(Reply) ->
-    case Reply of
-        {ok, [_Ok, Result]} ->
-            {ok, Result};
-        Other ->
-            Other
-    end.
- 
-
-%% connect_addr(Addr, State) ->
-%%     case maps:get(Addr, State#st.addr_map, not_found) of
-%%         not_found ->
-%%             Client = redis_cluster2:connect_node(State#st.cluster_pid, Addr),
-%%             {noreply, State#st{addr_map = maps:put(Addr, Client, State#st.addr_map)}};
-%%         Client ->
-%%             %% TODO special reply handling, move send logic to common help function
-%%             Fun = fun(Reply) -> gen_server:reply(From, Reply) end,
-%%             redis_client:request_cb(Client, Command, Fun),
-%%             {noreply, State}
-%%     end.
-    
 
 handle_cast({forward_command, Command, From, Addr}, State) ->
-    case maps:get(Addr, State#st.addr_map, not_found) of
-        not_found ->
-            Client = redis_cluster2:connect_node(State#st.cluster_pid, Addr),
-            Fun = fun(Reply) -> gen_server:reply(From, Reply) end,
-            redis_client:request_cb(Client, Command, Fun),
-            {noreply, State#st{addr_map = maps:put(Addr, Client, State#st.addr_map)}};
-        Client ->
-            %% TODO special reply handling, move send logic to common help function
-            Fun = fun(Reply) -> gen_server:reply(From, Reply) end,
-            redis_client:request_cb(Client, Command, Fun),
-            {noreply, State}
-    end;
+    {Client, State1} = connect_addr(Addr, State),
+    %% Fun = fun(Reply) ->
+    %%               case handle_special_reply(
+    %%               gen_server:reply(From, Reply) end,
+    Fun = handle_reply_fun(Command, Client, From, State),
+    redis_client:request_cb(Client, Command, Fun),
+    {noreply, State1};
 
 handle_cast({forward_command_asking, Command, From, Addr}, State) ->
     {Client, State1} = connect_addr(Addr, State),
     Command1 = add_asking(Command),
+    HandleReplyFun = handle_reply_fun(Command, Client, From, State),
     Fun = case is_single_command(Command) of
               true ->
-                  fun(Reply) -> gen_server:reply(From, remove_asking_ok_reply_single(Reply)) end;
+                  fun(Reply) -> HandleReplyFun(From, remove_asking_ok_reply_single(Reply)) end;
               false ->
-                  fun(Reply) -> gen_server:reply(From, remove_asking_ok_reply(Reply)) end
+                  fun(Reply) -> HandleReplyFun(From, remove_asking_ok_reply(Reply)) end
           end,
     redis_client:request_cb(Client, Command1, Fun),
     {noreply, State1}.
 
+handle_info({command_try_again, Command, From, Slot}, State) ->
+    case binary:at(State#st.slots, Slot) of
+        0 ->
+            gen_server:reply(From, {error, unmapped_slot});
+        Ix ->
+            apa = ok,
+            Client = element(Ix, State#st.clients),
+            Fun = handle_reply_fun(Command, Client, From, State),
+            redis_client:request_cb(Client, Command, Fun)
+    end,
+    {noreply, State};
 
-connect_addr(Addr, State) ->
-    case maps:get(Addr, State#st.addr_map, not_found) of
-        not_found ->
-            Client = redis_cluster2:connect_node(State#st.cluster_pid, Addr),
-            {Client, State#st{addr_map = maps:put(Addr, Client, State#st.addr_map)}};
-        Client ->
-            {Client, State}
-    end.
+
+%% handle_cast({forward_command, Command, From, Addr}, State) ->
+%%     {Client, State1} = connect_addr(Addr, State),
+%%     Fun = fun(Reply) -> gen_server:reply(From, Reply) end,
+%%     redis_client:request_cb(Client, Command, Fun),
+%%     {noreply, State1};
+
+%% handle_cast({command_try_again, Command, From, Addr}, State) ->
+%%     ....
+%%     {noreply, State1};
+
+%% handle_cast({forward_command_asking, Command, From, Addr}, State) ->
+%%     {Client, State1} = connect_addr(Addr, State),
+%%     Command1 = add_asking(Command),
+%%     Fun = case is_single_command(Command) of
+%%               true ->
+%%                   fun(Reply) -> gen_server:reply(From, remove_asking_ok_reply_single(Reply)) end;
+%%               false ->
+%%                   fun(Reply) -> gen_server:reply(From, remove_asking_ok_reply(Reply)) end
+%%           end,
+%%     redis_client:request_cb(Client, Command1, Fun),
+%%     {noreply, State1}.
+
 
 
 handle_info(#{msg_type := slot_map_updated}, State) ->
@@ -232,6 +204,24 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+handle_reply_fun(Command, Client, From, State) ->
+    Pid = self(),
+    fun(Reply) ->
+            case special_reply(Reply) of
+                {moved, Addr} ->
+                    redis_cluster2:update_slots(State#st.cluster_pid, State#st.slot_map_version, Client),
+                    gen_server:cast(Pid, {forward_command, Command, From, Addr});
+                {ask, Addr} ->
+                    gen_server:cast(Pid, {forward_command_asking, Command, From, Addr});
+                try_again ->
+                    Time = 500, % TODO make configurable
+                    erlang:send_after(Time, Pid, {command_try_again, Command, From, Slot});
+                    %%gen_server:cast(Pid, {command_try_again, Command, From, Slot});
+                normal ->
+                    gen_server:reply(From, Reply)
+            end
+    end.
+
 
 create_client_pid_tuple(AddrToPid, AddrToIx) ->
     %% Create a list with tuples where the first element is the index and the second is the pid
@@ -285,7 +275,58 @@ special_reply({ok, {error, <<"ASK ", Tail/binary>>}}) ->
     [Host, Port] = string:split(AddrBin, <<":">>, trailing),
     {ask, {binary_to_list(Host), binary_to_integer(Port)}};
 
+special_reply({ok, {error, _}}) ->
+    try_again;
+
 special_reply(_) ->
     normal.
 
 
+connect_addr(Addr, State) ->
+    case maps:get(Addr, State#st.addr_map, not_found) of
+        not_found ->
+            Client = redis_cluster2:connect_node(State#st.cluster_pid, Addr),
+            {Client, State#st{addr_map = maps:put(Addr, Client, State#st.addr_map)}};
+        Client ->
+            {Client, State}
+    end.
+
+
+add_asking({redis_command, N, Commands}) ->
+    case N of
+        single ->
+            {redis_command, 2, [ <<"ASKING\r\n">>, Commands]};
+        _ ->
+            {redis_command, N*2, [[ <<"ASKING\r\n">>, Command] || Command<- Commands]}
+    end.
+
+is_single_command({redis_command, N, _Commands}) ->
+    N == single.
+
+remove_asking_ok_reply(Reply) ->
+    case Reply of
+        {ok, Results} ->
+            {ok, remove_even_ix_element(Results)};
+        Other ->
+            Other
+    end.
+
+remove_even_ix_element(Ls) ->
+    case Ls of
+        [] ->
+            [];
+        [_, X|Tail] ->
+            [X | remove_even_ix_element(Tail)]
+    end.
+
+remove_asking_ok_reply_single(Reply) ->
+    case Reply of
+        {ok, [_Ok, Result]} ->
+            {ok, Result};
+        Other ->
+            Other
+    end.
+
+
+
+ 
