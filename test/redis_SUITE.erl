@@ -436,6 +436,9 @@ t_ask_redirect(_) ->
                                                          Key),
 
     %% The keys are set in different nodes. {test_key}2 needs an ASK redirect to retrive the value
+    %% {test_key}1 is in the MIGRATING node
+    %% {test_key}2 is in the IMPORTING node
+    %% {test_key}3 is not set
     {ok,[<<"DATA1">>, <<"DATA2">>, undefined]} = redis:command(R,
                                                                [[<<"GET">>, <<"{test_key}1">>],
                                                                 [<<"GET">>, <<"{test_key}2">>],
@@ -445,7 +448,7 @@ t_ask_redirect(_) ->
     %% A command with several keys with partial keys in the MIGRATING node will trigger a TRYAGAIN error
     %% {test_key}1 is in the MIGRATING node
     %% {test_key}2 is in the IMPORTING node
-    %% {test_key}3 is not set
+
     %% Why the ASK error here then? According to https://redis.io/commands/cluster-setslot/ documentation
     %% the MIGRATING node should trigger a TRYAGAIN. But when this is tested with redis_version:6.0.8 it leads
     %% to an ASK answer. ASKING the IMPORTING node will lead to a TRYAGAIN that will send the command back
@@ -456,13 +459,27 @@ t_ask_redirect(_) ->
     {ok,{error,<<"ASK", _/binary>>}} = redis:command(R,
                                                      [<<"MGET">>,
                                                       <<"{test_key}1">>,
-                                                      <<"{test_key}2">>,
-                                                      <<"{test_key}3">>],
+                                                      <<"{test_key}2">>],
                                                      Key),
 
-    
-    %cmd_log("redis-cli -p " ++ DestPort ++ " $20\r\nASKING\r\nGET test_key\r\n"),
-    %apa = redis:command(R, [[<<"SET">>, Key, <<"DATA">>], [<<"PING">>]], Key),
+    %% Try the running the same command again but trigger a MIGRATE to move {test_key}1 to the IMPORTING node.
+    %% This should lead to the command returning the data for both keys once it asks the correct node. 
+    Pid = self(),
+
+    %% run the command async
+    spawn_link(fun() ->
+                       Reply = redis:command(R,
+                                             [<<"MGET">>,
+                                              <<"{test_key}1">>,
+                                              <<"{test_key}2">>],
+                                             Key),
+                       Pid ! {the_reply, Reply}
+               end),
+    %% wait a bit to trigger the migration to let the client attempt to fetch and get redirected
+    timer:sleep(200),
+    cmd_log("redis-cli -p " ++ SourcePort ++ " MIGRATE 127.0.0.1 " ++ DestPort ++ " \"\" 0 5000 KEYS {test_key}1"),
+
+    {ok,[<<"DATA1">>,<<"DATA2">>]} =  receive {the_reply, Reply} -> Reply after 5000 -> error(no_reply) end,
 
     cmd_log("redis-cli -p " ++ DestPort ++ " CLUSTER SETSLOT " ++ Slot ++ " STABLE"),
     cmd_log("redis-cli -p " ++ SourcePort ++ " CLUSTER SETSLOT " ++ Slot ++ " STABLE"),
@@ -494,7 +511,6 @@ start_cluster(Opts) ->
 
     {ok, P} = redis:start_link(InitialNodes, [{info_pid, [self()]}] ++ Opts),
 
-%    ok = msg(#{msg_type => connected, addr => {localhost, 30001}}),
     ?MSG(#{msg_type := connected, addr := {localhost, 30001}}),
     ?MSG(#{msg_type := connected, addr := {localhost, 30002}}),
     ?MSG(#{msg_type := connected, addr := {localhost, 30003}}),
@@ -546,12 +562,6 @@ no_more_msgs() ->
             error({unexpected,Msgs})
     end.
 
-%% no_more_msgs() ->
-%%     receive Msg ->
-%%             error({unexpected,Msg})
-%%     after 0 ->
-%%             ok
-%%     end.
 
 scan_helper(Client, Curs0, Acc0) ->
     {ok, [Curs1, Keys]} = redis:command_client(Client, [<<"SCAN">>, Curs0]),

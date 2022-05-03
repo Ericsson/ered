@@ -103,21 +103,7 @@ handle_cast({forward_command_asking, Command, Slot, From, Addr, AttemptsLeft, Ol
     {Client, State1} = connect_addr(Addr, State),
     Command1 = add_asking(OldReply, Command),
     HandleReplyFun = create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft),
-    %% Fun = case is_single_command(Command) of
-    %%           true ->
-    %%               fun(Reply) -> HandleReplyFun(fix_ask_reply_single(Reply)) end;
-    %%           false ->
-    %%               fun(Reply) -> HandleReplyFun(remove_asking_ok_reply(Reply)) end
-    %%       end,
-    %Fun = fun(Reply) -> HandleReplyFun(fix_ask_reply(OldReply, Reply)) end,
-
-    Fun = fun(Reply) -> 
-                  Reply2 = fix_ask_reply(OldReply, Reply),
-                  io:format("asking_reply_fun, ~p\n", [{OldReply, Reply, Reply2}]),
-                  HandleReplyFun(Reply2)
-          end,
-
-    io:format("forward_command_asking, ~p\n", [{Command, OldReply, Command1}]),
+    Fun = fun(Reply) -> HandleReplyFun(fix_ask_reply(OldReply, Reply)) end,
     redis_client:request_cb(Client, Command1, Fun),
     {noreply, State1}.
 
@@ -185,8 +171,6 @@ create_reply_fun(_Command, _Slot, _Client, From, _State, 0) ->
 create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft) ->
     Pid = self(),
     fun(Reply) ->
-            %% TODO remove
-            io:format("~p\n", [{AttemptsLeft, Command, Reply}]),
             case check_result(Reply) of
                 normal ->
                     gen_server:reply(From, Reply);
@@ -258,36 +242,6 @@ parse_host_and_port(Bin) ->
     {binary_to_list(Host), binary_to_integer(Port)}.
 
 
-%% special_reply({ok, [Head|_Tail]}) ->
-%%     %% Only consider the first element in the pipeline. A pipeline "should" not
-%%     %% contain multiple keys. Setting or reading multiple keys is hopefully done
-%%     %% with some multi operation like MGET/MSET. If the first command is some
-%%     %% keyless comand then there would be trouble though.. I dont think its worth
-%%     %% to make this more complicated and/or costly unless there is a good
-%%     %% real world use case for it and right now I don't have it.
-%%     special_reply({ok, Head});
-
-%% special_reply({ok, {error, <<"MOVED ", Tail/binary>>}}) ->
-%%     %% looks like this ,<<"MOVED 14039 127.0.0.1:30006">>
-%%     %% TODO should this be wrapped in a try catch if MOVED is malformed?
-%%     [_Slot, AddrBin] = binary:split(Tail, <<" ">>),
-%%     %% Use trailing, IPv6 address can contain ':'
-%%     [Host, Port] = string:split(AddrBin, <<":">>, trailing),
-%%     {moved, {binary_to_list(Host), binary_to_integer(Port)}};
-
-%% special_reply({ok, {error, <<"ASK ", Tail/binary>>}}) ->
-%%     %% Similar format to move
-%%     [_Slot, AddrBin] = binary:split(Tail, <<" ">>),
-%%     [Host, Port] = string:split(AddrBin, <<":">>, trailing),
-%%     {ask, {binary_to_list(Host), binary_to_integer(Port)}};
-
-%% special_reply({ok, {error, <<"TRYAGAIN ", _/binary>>}}) ->
-%%     try_again;
-
-%% special_reply(_) ->
-%%     normal.
-
-
 connect_addr(Addr, State) ->
     case maps:get(Addr, State#st.addr_map, not_found) of
         not_found ->
@@ -323,18 +277,6 @@ fix_ask_reply(_OldReply, {ok, [_AskOk, Reply]}) ->
 fix_ask_reply(_, Other) ->
     Other.
 
-
-%% fix_ask_reply_single({ok, [_AskOk, Reply]}) ->
-%%     {ok, Reply};
-%% fix_ask_reply_single(Other) ->
-%%     Other.
-
-%% fix_ask_reply_pipeline({ok, OldReplies}, {ok, AskReplies}) ->
-%%     {ok, merge_ask_result([], [])};
-%% fix_ask_reply_pipeline(_, Other) ->
-%%     Other.
-
-
 merge_ask_result([], _) ->
     [];
 merge_ask_result([{error, <<"ASK ", _/binary>>} | Replies1], [_AskOk, Reply | Replies2]) ->
@@ -342,41 +284,6 @@ merge_ask_result([{error, <<"ASK ", _/binary>>} | Replies1], [_AskOk, Reply | Re
 merge_ask_result([Reply | Replies1], Replies2) ->
     [Reply | merge_ask_result(Replies1, Replies2)].
 
-
-%% add_asking({redis_command, N, Commands}) ->
-%%     case N of
-%%         single ->
-%%             {redis_command, 2, [ <<"ASKING\r\n">>, Commands]};
-%%         _ ->
-%%             {redis_command, N*2, [[ <<"ASKING\r\n">>, Command] || Command<- Commands]}
-%%     end.
-
-%% is_single_command({redis_command, N, _Commands}) ->
-%%     N == single.
-
-%% remove_asking_ok_reply(Reply) ->
-%%     case Reply of
-%%         {ok, Results} ->
-%%             {ok, remove_even_ix_element(Results)};
-%%         Other ->
-%%             Other
-%%     end.
-
-%% remove_even_ix_element(Ls) ->
-%%     case Ls of
-%%         [] ->
-%%             [];
-%%         [_, X|Tail] ->
-%%             [X | remove_even_ix_element(Tail)]
-%%     end.
-
-%% remove_asking_ok_reply_single(Reply) ->
-%%     case Reply of
-%%         {ok, [_Ok, Result]} ->
-%%             {ok, Result};
-%%         Other ->
-%%             Other
-%%     end.
 
 take_prop(Key, List, Default) ->
     Val = proplists:get_value(Key, List, Default),
