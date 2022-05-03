@@ -442,9 +442,25 @@ t_ask_redirect(_) ->
                                                                 [<<"GET">>, <<"{test_key}3">>]],
                                                                Key),
 
-    ok = redis:command(R, [<<"MGET">>, <<"{test_key}1">>, <<"{test_key}2">>, <<"{test_key}3">>], Key),
+    %% A command with several keys with partial keys in the MIGRATING node will trigger a TRYAGAIN error
+    %% {test_key}1 is in the MIGRATING node
+    %% {test_key}2 is in the IMPORTING node
+    %% {test_key}3 is not set
+    %% Why the ASK error here then? According to https://redis.io/commands/cluster-setslot/ documentation
+    %% the MIGRATING node should trigger a TRYAGAIN. But when this is tested with redis_version:6.0.8 it leads
+    %% to an ASK answer. ASKING the IMPORTING node will lead to a TRYAGAIN that will send the command back
+    %% to the MIGRATING node. When the attempt retrys run out the final reply will be from the MIGRATING node.
+    %% If attemts are set to an uneven number the final reply will be TRYAGAIN from the IMPORTING node.
+    %% Since the ASK redirect does not trigger the TRYAGAIN delay this means the time the client waits before
+    %% giving up in a TRYAGAIN scenario is effectively cut in half.
+    {ok,{error,<<"ASK", _/binary>>}} = redis:command(R,
+                                                     [<<"MGET">>,
+                                                      <<"{test_key}1">>,
+                                                      <<"{test_key}2">>,
+                                                      <<"{test_key}3">>],
+                                                     Key),
 
-    %cmd_log("redis-cli -p " ++ SourcePort ++ " GET test_key"),
+    
     %cmd_log("redis-cli -p " ++ DestPort ++ " $20\r\nASKING\r\nGET test_key\r\n"),
     %apa = redis:command(R, [[<<"SET">>, Key, <<"DATA">>], [<<"PING">>]], Key),
 

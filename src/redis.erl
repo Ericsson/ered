@@ -99,16 +99,25 @@ handle_cast({forward_command, Command, Slot, From, Addr, AttemptsLeft}, State) -
     redis_client:request_cb(Client, Command, Fun),
     {noreply, State1};
 
-handle_cast({forward_command_asking, Command, Slot, From, Addr, AttemptsLeft}, State) ->
+handle_cast({forward_command_asking, Command, Slot, From, Addr, AttemptsLeft, OldReply}, State) ->
     {Client, State1} = connect_addr(Addr, State),
-    Command1 = add_asking(Command),
+    Command1 = add_asking(OldReply, Command),
     HandleReplyFun = create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft),
-    Fun = case is_single_command(Command) of
-              true ->
-                  fun(Reply) -> HandleReplyFun(remove_asking_ok_reply_single(Reply)) end;
-              false ->
-                  fun(Reply) -> HandleReplyFun(remove_asking_ok_reply(Reply)) end
+    %% Fun = case is_single_command(Command) of
+    %%           true ->
+    %%               fun(Reply) -> HandleReplyFun(fix_ask_reply_single(Reply)) end;
+    %%           false ->
+    %%               fun(Reply) -> HandleReplyFun(remove_asking_ok_reply(Reply)) end
+    %%       end,
+    %Fun = fun(Reply) -> HandleReplyFun(fix_ask_reply(OldReply, Reply)) end,
+
+    Fun = fun(Reply) -> 
+                  Reply2 = fix_ask_reply(OldReply, Reply),
+                  io:format("asking_reply_fun, ~p\n", [{OldReply, Reply, Reply2}]),
+                  HandleReplyFun(Reply2)
           end,
+
+    io:format("forward_command_asking, ~p\n", [{Command, OldReply, Command1}]),
     redis_client:request_cb(Client, Command1, Fun),
     {noreply, State1}.
 
@@ -178,14 +187,14 @@ create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft) ->
     fun(Reply) ->
             %% TODO remove
             io:format("~p\n", [{AttemptsLeft, Command, Reply}]),
-            case special_reply(Reply) of
+            case check_result(Reply) of
                 normal ->
                     gen_server:reply(From, Reply);
                 {moved, Addr} ->
                     redis_cluster2:update_slots(State#st.cluster_pid, State#st.slot_map_version, Client),
                     gen_server:cast(Pid, {forward_command, Command, Slot, From, Addr, AttemptsLeft-1});
                 {ask, Addr} ->
-                    gen_server:cast(Pid, {forward_command_asking, Command, Slot, From, Addr, AttemptsLeft-1});
+                    gen_server:cast(Pid, {forward_command_asking, Command, Slot, From, Addr, AttemptsLeft-1, Reply});
                 try_again ->
                     erlang:send_after(State#st.try_again_delay, Pid, {command_try_again, Command, Slot, From, AttemptsLeft-1})
             end
@@ -215,39 +224,68 @@ create_lookup_table(N, L = [{Start, End, Val} | Rest], Acc) ->
             create_lookup_table(N+1, L, <<Acc/binary,0>>);
         N =< End -> % in range
             create_lookup_table(N+1, L, <<Acc/binary,Val>>);
-        true  ->
+        true ->
             create_lookup_table(N, Rest, Acc)
     end.
 
 
-special_reply({ok, [Head|_Tail]}) ->
-    %% Only consider the first element in the pipeline. A pipeline "should" not
-    %% contain multiple keys. Setting or reading multiple keys is hopefully done
-    %% with some multi operation like MGET/MSET. If the first command is some
-    %% keyless comand then there would be trouble though.. I dont think its worth
-    %% to make this more complicated and/or costly unless there is a good
-    %% real world use case for it and right now I don't have it.
-    special_reply({ok, Head});
+check_result({ok, Result}) when is_list(Result) ->
+    check_for_special_reply(Result);
+check_result({ok, Result}) ->
+    check_for_special_reply([Result]);
+check_result(_) ->
+    normal.
 
-special_reply({ok, {error, <<"MOVED ", Tail/binary>>}}) ->
-    %% looks like this ,<<"MOVED 14039 127.0.0.1:30006">>
-    %% TODO should this be wrapped in a try catch if MOVED is malformed?
-    [_Slot, AddrBin] = binary:split(Tail, <<" ">>),
+check_for_special_reply([]) ->
+    normal;
+check_for_special_reply([Head|Tail]) ->
+    case Head of
+        {error, <<"TRYAGAIN ", _/binary>>} ->
+            try_again;
+        {error, <<"MOVED ", Bin/binary>>} ->
+            {moved, parse_host_and_port(Bin)};
+        {error, <<"ASK ", Bin/binary>>} ->
+            {ask, parse_host_and_port(Bin)};
+        _ ->
+            check_for_special_reply(Tail)
+    end.
+
+parse_host_and_port(Bin) ->
+    %% looks like <<"MOVED 14039 127.0.0.1:30006">> or <<"ASK 15118 127.0.0.1:30002">>
+    [_Slot, AddrBin] = binary:split(Bin, <<" ">>),
     %% Use trailing, IPv6 address can contain ':'
     [Host, Port] = string:split(AddrBin, <<":">>, trailing),
-    {moved, {binary_to_list(Host), binary_to_integer(Port)}};
+    {binary_to_list(Host), binary_to_integer(Port)}.
 
-special_reply({ok, {error, <<"ASK ", Tail/binary>>}}) ->
-    %% Similar format to move
-    [_Slot, AddrBin] = binary:split(Tail, <<" ">>),
-    [Host, Port] = string:split(AddrBin, <<":">>, trailing),
-    {ask, {binary_to_list(Host), binary_to_integer(Port)}};
 
-special_reply({ok, {error, <<"TRYAGAIN ", _/binary>>}}) ->
-    try_again;
+%% special_reply({ok, [Head|_Tail]}) ->
+%%     %% Only consider the first element in the pipeline. A pipeline "should" not
+%%     %% contain multiple keys. Setting or reading multiple keys is hopefully done
+%%     %% with some multi operation like MGET/MSET. If the first command is some
+%%     %% keyless comand then there would be trouble though.. I dont think its worth
+%%     %% to make this more complicated and/or costly unless there is a good
+%%     %% real world use case for it and right now I don't have it.
+%%     special_reply({ok, Head});
 
-special_reply(_) ->
-    normal.
+%% special_reply({ok, {error, <<"MOVED ", Tail/binary>>}}) ->
+%%     %% looks like this ,<<"MOVED 14039 127.0.0.1:30006">>
+%%     %% TODO should this be wrapped in a try catch if MOVED is malformed?
+%%     [_Slot, AddrBin] = binary:split(Tail, <<" ">>),
+%%     %% Use trailing, IPv6 address can contain ':'
+%%     [Host, Port] = string:split(AddrBin, <<":">>, trailing),
+%%     {moved, {binary_to_list(Host), binary_to_integer(Port)}};
+
+%% special_reply({ok, {error, <<"ASK ", Tail/binary>>}}) ->
+%%     %% Similar format to move
+%%     [_Slot, AddrBin] = binary:split(Tail, <<" ">>),
+%%     [Host, Port] = string:split(AddrBin, <<":">>, trailing),
+%%     {ask, {binary_to_list(Host), binary_to_integer(Port)}};
+
+%% special_reply({ok, {error, <<"TRYAGAIN ", _/binary>>}}) ->
+%%     try_again;
+
+%% special_reply(_) ->
+%%     normal.
 
 
 connect_addr(Addr, State) ->
@@ -260,40 +298,85 @@ connect_addr(Addr, State) ->
     end.
 
 
-add_asking({redis_command, N, Commands}) ->
-    case N of
-        single ->
-            {redis_command, 2, [ <<"ASKING\r\n">>, Commands]};
-        _ ->
-            {redis_command, N*2, [[ <<"ASKING\r\n">>, Command] || Command<- Commands]}
-    end.
+add_asking(_, {redis_command, single, Command}) ->
+    {redis_command, 2, [ <<"ASKING\r\n">>, Command]};
 
-is_single_command({redis_command, N, _Commands}) ->
-    N == single.
+add_asking({ok, OldReplies}, {redis_command, _N, Commands}) ->
+    %% Extract only the commands with ASK redirection
+    AskCommands = add_asking_pipeline(OldReplies, Commands),
+    %% ASK commands + ASKING
+    N = length(AskCommands) * 2,
+    {redis_command, N, AskCommands}.
 
-remove_asking_ok_reply(Reply) ->
-    case Reply of
-        {ok, Results} ->
-            {ok, remove_even_ix_element(Results)};
-        Other ->
-            Other
-    end.
+add_asking_pipeline([], _) ->
+    [];
+add_asking_pipeline([{error, <<"ASK ", _/binary>>} |Replies], [Command |Commands]) ->
+    [[ <<"ASKING\r\n">>, Command] | add_asking_pipeline(Replies, Commands)];
+add_asking_pipeline([_ |Replies], [_ |Commands]) ->
+    add_asking_pipeline(Replies, Commands).
 
-remove_even_ix_element(Ls) ->
-    case Ls of
-        [] ->
-            [];
-        [_, X|Tail] ->
-            [X | remove_even_ix_element(Tail)]
-    end.
 
-remove_asking_ok_reply_single(Reply) ->
-    case Reply of
-        {ok, [_Ok, Result]} ->
-            {ok, Result};
-        Other ->
-            Other
-    end.
+fix_ask_reply({ok, OldReplies}, {ok, NewReplies}) when is_list(OldReplies) ->
+    {ok, merge_ask_result(OldReplies, NewReplies)};
+fix_ask_reply(_OldReply, {ok, [_AskOk, Reply]}) ->
+    {ok, Reply};
+fix_ask_reply(_, Other) ->
+    Other.
+
+
+%% fix_ask_reply_single({ok, [_AskOk, Reply]}) ->
+%%     {ok, Reply};
+%% fix_ask_reply_single(Other) ->
+%%     Other.
+
+%% fix_ask_reply_pipeline({ok, OldReplies}, {ok, AskReplies}) ->
+%%     {ok, merge_ask_result([], [])};
+%% fix_ask_reply_pipeline(_, Other) ->
+%%     Other.
+
+
+merge_ask_result([], _) ->
+    [];
+merge_ask_result([{error, <<"ASK ", _/binary>>} | Replies1], [_AskOk, Reply | Replies2]) ->
+    [Reply | merge_ask_result(Replies1, Replies2)];
+merge_ask_result([Reply | Replies1], Replies2) ->
+    [Reply | merge_ask_result(Replies1, Replies2)].
+
+
+%% add_asking({redis_command, N, Commands}) ->
+%%     case N of
+%%         single ->
+%%             {redis_command, 2, [ <<"ASKING\r\n">>, Commands]};
+%%         _ ->
+%%             {redis_command, N*2, [[ <<"ASKING\r\n">>, Command] || Command<- Commands]}
+%%     end.
+
+%% is_single_command({redis_command, N, _Commands}) ->
+%%     N == single.
+
+%% remove_asking_ok_reply(Reply) ->
+%%     case Reply of
+%%         {ok, Results} ->
+%%             {ok, remove_even_ix_element(Results)};
+%%         Other ->
+%%             Other
+%%     end.
+
+%% remove_even_ix_element(Ls) ->
+%%     case Ls of
+%%         [] ->
+%%             [];
+%%         [_, X|Tail] ->
+%%             [X | remove_even_ix_element(Tail)]
+%%     end.
+
+%% remove_asking_ok_reply_single(Reply) ->
+%%     case Reply of
+%%         {ok, [_Ok, Result]} ->
+%%             {ok, Result};
+%%         Other ->
+%%             Other
+%%     end.
 
 take_prop(Key, List, Default) ->
     Val = proplists:get_value(Key, List, Default),
