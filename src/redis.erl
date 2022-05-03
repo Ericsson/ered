@@ -76,9 +76,6 @@ init([Addrs, Opts1]) ->
     {TryAgainDelay, Opts3} = take_prop(try_again_delay, Opts2, 200),
     {RedirectAttempts, Opts4} = take_prop(redirect_attempts, Opts3, 10),
 
-    %% TryAgainDelay = proplists:get_value(try_again_delay, Opts2, 200),
-    %% RedirectAttempts = proplists:get_value(redirect_attempts, Opts2, 10),
-
     {ok, ClusterPid} = redis_cluster2:start_link(Addrs, Opts4),
     EmptySlots = create_lookup_table(0, [], <<>>),
     {ok, #st{cluster_pid = ClusterPid,
@@ -89,23 +86,23 @@ init([Addrs, Opts1]) ->
 
 handle_call({command, Command, Key}, From, State) ->
     Slot = redis_lib:hash(Key),
-    send_command_to_slot(Command, Slot, From, State),
+    send_command_to_slot(Command, Slot, From, State, State#st.redirect_attempts),
     {noreply, State};
 
 handle_call(get_clients, _From, State) ->
     {reply, tuple_to_list(State#st.clients), State}.
 
 
-handle_cast({forward_command, Command, Slot, From, Addr}, State) ->
+handle_cast({forward_command, Command, Slot, From, Addr, AttemptsLeft}, State) ->
     {Client, State1} = connect_addr(Addr, State),
-    Fun = create_reply_fun(Command, Slot, Client, From, State),
+    Fun = create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft),
     redis_client:request_cb(Client, Command, Fun),
     {noreply, State1};
 
-handle_cast({forward_command_asking, Command, Slot, From, Addr}, State) ->
+handle_cast({forward_command_asking, Command, Slot, From, Addr, AttemptsLeft}, State) ->
     {Client, State1} = connect_addr(Addr, State),
     Command1 = add_asking(Command),
-    HandleReplyFun = create_reply_fun(Command, Slot, Client, From, State),
+    HandleReplyFun = create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft),
     Fun = case is_single_command(Command) of
               true ->
                   fun(Reply) -> HandleReplyFun(remove_asking_ok_reply_single(Reply)) end;
@@ -115,8 +112,8 @@ handle_cast({forward_command_asking, Command, Slot, From, Addr}, State) ->
     redis_client:request_cb(Client, Command1, Fun),
     {noreply, State1}.
 
-handle_info({command_try_again, Command, Slot, From}, State) ->
-    send_command_to_slot(Command, Slot, From, State),
+handle_info({command_try_again, Command, Slot, From, AttemptsLeft}, State) ->
+    send_command_to_slot(Command, Slot, From, State, AttemptsLeft),
     {noreply, State};
 
 
@@ -161,32 +158,36 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-send_command_to_slot(Command, Slot, From, State) ->
+send_command_to_slot(Command, Slot, From, State, AttemptsLeft) ->
     case binary:at(State#st.slots, Slot) of
         0 ->
             gen_server:reply(From, {error, unmapped_slot});
         Ix ->
-           % apa = ok,
             Client = element(Ix, State#st.clients),
-            Fun = create_reply_fun(Command, Slot, Client, From, State),
+            Fun = create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft),
             redis_client:request_cb(Client, Command, Fun)
     end,
     ok.
 
-create_reply_fun(Command, Slot, Client, From, State) ->
+
+create_reply_fun(_Command, _Slot, _Client, From, _State, 0) ->
+    fun(Reply) -> gen_server:reply(From, Reply) end;
+
+create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft) ->
     Pid = self(),
     fun(Reply) ->
+            %% TODO remove
+            io:format("~p\n", [{AttemptsLeft, Command, Reply}]),
             case special_reply(Reply) of
+                normal ->
+                    gen_server:reply(From, Reply);
                 {moved, Addr} ->
                     redis_cluster2:update_slots(State#st.cluster_pid, State#st.slot_map_version, Client),
-                    gen_server:cast(Pid, {forward_command, Command, Slot, From, Addr});
+                    gen_server:cast(Pid, {forward_command, Command, Slot, From, Addr, AttemptsLeft-1});
                 {ask, Addr} ->
-                    gen_server:cast(Pid, {forward_command_asking, Command, Slot, From, Addr});
+                    gen_server:cast(Pid, {forward_command_asking, Command, Slot, From, Addr, AttemptsLeft-1});
                 try_again ->
-                    Time = 500,
-                    erlang:send_after(Time, Pid, {command_try_again, Command, Slot, From});
-                normal ->
-                    gen_server:reply(From, Reply)
+                    erlang:send_after(State#st.try_again_delay, Pid, {command_try_again, Command, Slot, From, AttemptsLeft-1})
             end
     end.
 
@@ -242,7 +243,7 @@ special_reply({ok, {error, <<"ASK ", Tail/binary>>}}) ->
     [Host, Port] = string:split(AddrBin, <<":">>, trailing),
     {ask, {binary_to_list(Host), binary_to_integer(Port)}};
 
-special_reply({ok, {error, _}}) ->
+special_reply({ok, {error, <<"TRYAGAIN ", _/binary>>}}) ->
     try_again;
 
 special_reply(_) ->
