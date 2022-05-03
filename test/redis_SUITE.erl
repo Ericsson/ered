@@ -418,21 +418,31 @@ t_ask_redirect(_) ->
     SourceNodeId = string:trim(cmd_log("redis-cli -p " ++ SourcePort ++ " CLUSTER MYID")),
     DestNodeId = string:trim(cmd_log("redis-cli -p " ++ DestPort ++ " CLUSTER MYID")),
 
+    %% Set "{test_key}1" in MIGRATING node
+    {ok,<<"OK">>} = redis:command(R, [<<"SET">>, <<"{test_key}1">>, <<"DATA1">>], Key),
+
     cmd_log("redis-cli -p " ++ DestPort ++ " CLUSTER SETSLOT " ++ Slot ++ " IMPORTING " ++ SourceNodeId),
     cmd_log("redis-cli -p " ++ SourcePort ++ " CLUSTER SETSLOT " ++ Slot ++ " MIGRATING " ++ DestNodeId),
 
     %% Test single command. unknown key leads to ASK redirection
     {ok,undefined} = redis:command(R, [<<"GET">>, Key], Key),
 
-    %% Test multiple commands. unknown key leads to ASK redirection.
+    %% Test multiple commands. unknown key leads to ASK redirection. The {test_key}2 will be set
+    %% in IMPORTING node after command
     {ok,[undefined,<<"PONG">>,<<"OK">>]} = redis:command(R,
-                                                         [[<<"GET">>, Key],
+                                                         [[<<"GET">>, <<"{test_key}2">>],
                                                           [<<"PING">>] ,
-                                                          [<<"SET">>, Key, <<"DATA">>]],
+                                                          [<<"SET">>, <<"{test_key}2">>, <<"DATA2">>]],
                                                          Key),
 
+    %% The keys are set in different nodes. {test_key}2 needs an ASK redirect to retrive the value
+    {ok,[<<"DATA1">>, <<"DATA2">>, undefined]} = redis:command(R,
+                                                               [[<<"GET">>, <<"{test_key}1">>],
+                                                                [<<"GET">>, <<"{test_key}2">>],
+                                                                [<<"GET">>, <<"{test_key}3">>]],
+                                                               Key),
 
-    ok = redis:command(R, [<<"MGET">>, Key, <<"{test_key}2">>], Key),
+    ok = redis:command(R, [<<"MGET">>, <<"{test_key}1">>, <<"{test_key}2">>, <<"{test_key}3">>], Key),
 
     %cmd_log("redis-cli -p " ++ SourcePort ++ " GET test_key"),
     %cmd_log("redis-cli -p " ++ DestPort ++ " $20\r\nASKING\r\nGET test_key\r\n"),
