@@ -481,9 +481,21 @@ t_ask_redirect(_) ->
 
     {ok,[<<"DATA1">>,<<"DATA2">>]} =  receive {the_reply, Reply} -> Reply after 5000 -> error(no_reply) end,
 
+    %% So far there should not be any new slot map update
+    no_more_msgs(),
+
+    %% Finalize the migration
     cmd_log("redis-cli -p " ++ DestPort ++ " CLUSTER SETSLOT " ++ Slot ++ " STABLE"),
     cmd_log("redis-cli -p " ++ SourcePort ++ " CLUSTER SETSLOT " ++ Slot ++ " STABLE"),
 
+    cmd_log("redis-cli -p " ++ DestPort ++ " CLUSTER SETSLOT " ++ Slot ++ " NODE " ++ DestNodeId),
+    cmd_log("redis-cli -p " ++ SourcePort ++ " CLUSTER SETSLOT " ++ Slot ++ " NODE "++ DestNodeId),
+
+    timer:sleep(200),
+    %% Now this should lead to a moved redirection and a slotmap update
+    {ok,undefined} = redis:command(R, [<<"GET">>, Key], Key),
+    #{slot_map := SlotMap} = msg(msg_type, slot_map_updated, 1000),
+    no_more_msgs(),
     ok.
 
 
