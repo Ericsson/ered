@@ -130,8 +130,8 @@
 %%%===================================================================
 %%% API
 %%%===================================================================
-start_link(Addrs, Opts) ->
-    gen_server:start_link(?MODULE, [Addrs, Opts], []).
+start_link(Addrs, Opts) -> gen_server:start_link(?MODULE, [Addrs,
+Opts], []).
 
 stop(ServerRef) ->
     gen_server:stop(ServerRef).
@@ -165,7 +165,7 @@ init([Addrs, Opts]) ->
                  %% ({max_waiting, Val}, S)     -> S#state{waiting = q_new(Val)};
                  %% ({max_pending, Val}, S)     -> S#state{pending = q_new(Val)};
                  %% ({reconnect_wait, Val}, S)  -> S#state{reconnect_wait = Val};
-                  ({info_pid, Val}, S)        -> S#st{info_pid = Val};
+                  ({info_pid, Val}, S)          -> S#st{info_pid = Val};
                   ({update_slot_wait, Val}, S) -> S#st{update_slot_wait = Val};
                   ({client_opts, Val}, S)     -> S#st{client_opts = Val};
                   ({min_replicas, Val}, S)     -> S#st{min_replicas = Val};
@@ -433,7 +433,7 @@ format_info_msg(Msg, State) ->
 %            {Ip, Port} = Addr,
             #{msg_type => MsgType,
               reason => Reason,
-              master => sets:is_element(Addr, State#st.up),
+              master => sets:is_element(Addr, State#st.masters),
               %% ip => Ip,
               %% port => Port,
               addr => Addr,

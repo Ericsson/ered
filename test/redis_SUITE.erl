@@ -491,7 +491,6 @@ t_ask_redirect(_) ->
     cmd_log("redis-cli -p " ++ DestPort ++ " CLUSTER SETSLOT " ++ Slot ++ " NODE " ++ DestNodeId),
     cmd_log("redis-cli -p " ++ SourcePort ++ " CLUSTER SETSLOT " ++ Slot ++ " NODE "++ DestNodeId),
 
-    timer:sleep(200),
     %% Now this should lead to a moved redirection and a slotmap update
     {ok,undefined} = redis:command(R, [<<"GET">>, Key], Key),
     #{slot_map := SlotMap} = msg(msg_type, slot_map_updated, 1000),
