@@ -2,7 +2,7 @@
 
 %% TODO: Split this module into several?
 
--export([format_request/1,
+-export([format_command/1,
          slotmap_master_slots/1,
          slotmap_master_nodes/1,
          slotmap_all_nodes/1,
@@ -15,26 +15,26 @@
 
 -export_type([request/0]).
 
--spec format_request(binary() | iolist() | request()) -> request().
+-spec format_command(binary() | iolist() | request()) -> request().
 
-format_request(Command = {redis_command, _, _}) ->
+format_command(Command = {redis_command, _, _}) ->
     Command;
 
-format_request(Data) when is_binary(Data) ->
-    format_request([Data]);
+format_command(Data) when is_binary(Data) ->
+    format_command([Data]);
 
-format_request([]) ->
+format_command([]) ->
     error({badarg, []});
 
-format_request(RawCommands = [E|_]) when is_list(E) ->
-    Commands = [format_command(RawCommand) || RawCommand <- RawCommands],
+format_command(RawCommands = [E|_]) when is_list(E) ->
+    Commands = [command_to_bin(RawCommand) || RawCommand <- RawCommands],
     {redis_command, length(RawCommands), Commands};
 
-format_request(RawCommand) ->
-    Command = format_command(RawCommand),
+format_command(RawCommand) ->
+    Command = command_to_bin(RawCommand),
     {redis_command, single, Command}.
 
-format_command(RawCommand) ->
+command_to_bin(RawCommand) ->
     Len = integer_to_list(length(RawCommand)),
     Elements = [["$", integer_to_list(size(Bin)), "\r\n", Bin, "\r\n"] || Bin <- RawCommand],
     %% Maybe this could be kept as an iolist?

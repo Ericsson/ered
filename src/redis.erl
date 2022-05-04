@@ -39,7 +39,7 @@ command(ServerRef, Command, Key) ->
     command(ServerRef, Command, Key, infinity).
 
 command(ServerRef, Command, Key, Timeout) ->
-    C = redis_lib:format_request(Command),
+    C = redis_lib:format_command(Command),
     gen_server:call(ServerRef, {command, C, Key}, Timeout).
 
 command_all(ServerRef, Command) ->
@@ -49,7 +49,7 @@ command_all(ServerRef, Command, Timeout) ->
     %% Send command in sequence to all instances.
     %% This could be done in parallel but but keeping it easy and
     %% aligned with eredis_cluster for now
-    Cmd = redis_lib:format_request(Command),
+    Cmd = redis_lib:format_command(Command),
     [redis_client:request(ClientRef, Cmd, Timeout) || ClientRef <- get_clients(ServerRef)].
 
 command_client(ClientRef, Command) ->

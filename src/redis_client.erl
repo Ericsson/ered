@@ -84,10 +84,10 @@ request(ServerRef, Request) ->
     request(ServerRef, Request, infinity).
 
 request(ServerRef, Request, Timeout) ->
-    gen_server:call(ServerRef, {request, redis_lib:format_request(Request)}, Timeout).
+    gen_server:call(ServerRef, {request, redis_lib:format_command(Request)}, Timeout).
 
 request_cb(ServerRef, Request, CallbackFun) ->
-    gen_server:cast(ServerRef, {request, redis_lib:format_request(Request), CallbackFun}).
+    gen_server:cast(ServerRef, {request, redis_lib:format_command(Request), CallbackFun}).
 
 %%%===================================================================
 %%% gen_server callbacks
