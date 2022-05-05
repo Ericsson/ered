@@ -1,6 +1,6 @@
 -module(redis_connection).
 
--export([connect/2, connect/3, connect_async/3, request/2, request/3, request_async/3]).
+-export([connect/2, connect/3, connect_async/3, command/2, command/3, command_async/3]).
 
 
 %% -type option() ::
@@ -10,7 +10,7 @@
 %%          {response_timeout, non_neg_integer()}
 
 % record(recvst {socket, refs = [], push_cb}).
-% f(P), P = redis:connect("192.168.1.5", 6379), redis:request(P, <<"ping\r\n">>).
+% f(P), P = redis:connect("192.168.1.5", 6379), redis:command(P, <<"ping\r\n">>).
 
 %% TODO
 %%
@@ -23,10 +23,10 @@
 -eport_type([opts/0,
              result/0]).
 
-request(Connection, Data) ->
-    request(Connection, Data, 10000).
+command(Connection, Data) ->
+    command(Connection, Data, 10000).
 
-request(Connection, Data, Timeout) ->
+command(Connection, Data, Timeout) ->
     link(Connection),
     Ref = make_ref(),
     Connection ! {send, self(), Ref, redis_command:convert_to(Data)},
@@ -38,7 +38,7 @@ request(Connection, Data, Timeout) ->
             {error, timeout}
     end.
 
-request_async(Connection, Data, Ref) ->
+command_async(Connection, Data, Ref) ->
     Connection ! {send, self(), Ref, redis_command:convert_to(Data)},
     ok.
 
@@ -109,20 +109,6 @@ recv_loop({ParseResult, State}) ->
            end,
     recv_loop(Next).
 
-%% recv_loop({ParseResult, State}) ->
-%%     Next = try
-%%                case ParseResult of
-%%                    {need_more, BytesNeeded, ParserState} ->
-%%                        read_socket(BytesNeeded, ParserState, State);
-%%                    {done, Value, ParserState} ->
-%%                        handle_result(Value, ParserState, State)
-%%                end
-%%            catch % handle done, parse error, recv error
-%%                throw:Error ->
-%%                    State#recv_state.master_pid ! Error
-%%            end,
-%%     recv_loop(Next).
-
 read_socket(BytesNeeded, ParserState, State) ->
     State1 = update_waiting(0, State),
     WaitTime = get_timeout(State1),
@@ -130,7 +116,7 @@ read_socket(BytesNeeded, ParserState, State) ->
         {ok, Data} ->
             {redis_parser:continue(Data, ParserState), State1};
         {error, timeout} when State1#recv_st.waiting == [] ->
-            %% no requests pending, try again
+            %% no command pending, try again
             read_socket(BytesNeeded, ParserState, State1);
         {error, Reason} ->
             throw(Reason)

@@ -10,9 +10,9 @@
 split_data_test() ->
     Data = iolist_to_binary([<<"A">> || _ <- lists:seq(0,3000)]),
     {ok, Conn1} = redis_connection:connect("127.0.0.1", 6379),
-    redis_connection:request(Conn1, [<<"hello">>, <<"3">>]),
-    <<"OK">> = redis_connection:request(Conn1, [<<"set">>, <<"key1">>, Data]),
-    Data = redis_connection:request(Conn1, [<<"get">>, <<"key1">>]).
+    redis_connection:command(Conn1, [<<"hello">>, <<"3">>]),
+    <<"OK">> = redis_connection:command(Conn1, [<<"set">>, <<"key1">>, Data]),
+    Data = redis_connection:command(Conn1, [<<"get">>, <<"key1">>]).
 
 trailing_reply_test() ->
     Pid = self(),
@@ -36,10 +36,10 @@ trailing_reply_test() ->
     {ok, Conn1} = redis_connection:connect("127.0.0.1", Port, [{batch_size, 1},
                                                                {tcp_options, [{recbuf, 524288}]}]),
     ?debugFmt("~w", [Conn1]),
-    redis_connection:request_async(Conn1, [<<"ping">>], ping1),
+    redis_connection:command_async(Conn1, [<<"ping">>], ping1),
     receive sent_big_nasty -> ok end,
     MalformedCommand = {redis_command, 1, undefined},
-    redis_connection:request_async(Conn1, MalformedCommand, no_ref),
+    redis_connection:command_async(Conn1, MalformedCommand, no_ref),
 
     %% make sure the ping is received before the connection is shut down
 

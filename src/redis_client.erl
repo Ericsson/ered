@@ -212,7 +212,7 @@ process_requests(State) ->
         (NumWaiting > 0) and (NumPending < State#st.opts#opts.max_pending) and (State#st.connection_pid /= none) ->
             {Request, NewWaiting} = q_out(State#st.waiting),
             Data = get_request_payload(Request),
-            redis_connection:request_async(State#st.connection_pid, Data, {request_reply, State#st.connection_pid}),
+            redis_connection:command_async(State#st.connection_pid, Data, {request_reply, State#st.connection_pid}),
             process_requests(State#st{pending = q_in(Request, State#st.pending),
                                       waiting = NewWaiting});
 
@@ -317,7 +317,7 @@ init(MainPid, ConnectionPid, Opts) ->
         [] ->
             {ok, undefined};
         Commands ->
-            redis_connection:request_async(ConnectionPid, Commands, init_request_reply),
+            redis_connection:command_async(ConnectionPid, Commands, init_request_reply),
             receive
                 {init_request_reply, Reply} ->
                     case [Reason || {error, Reason} <- Reply] of
