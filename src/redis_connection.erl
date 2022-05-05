@@ -1,6 +1,6 @@
 -module(redis_connection).
 
--export([connect/2, connect/3, connect_async/3, request/2, request/3, request_async/3, request_async_raw/3]).
+-export([connect/2, connect/3, connect_async/3, request/2, request/3, request_async/3]).
 
 
 %% -type option() ::
@@ -40,10 +40,6 @@ request(Connection, Data, Timeout) ->
 
 request_async(Connection, Data, Ref) ->
     Connection ! {send, self(), Ref, redis_command:convert_to(Data)},
-    ok.
-
-request_async_raw(Connection, Data, Ref) ->
-    Connection ! {send, self(), Ref, {redis_command, 1, Data}},
     ok.
 
 connect(Host, Port) ->
@@ -202,55 +198,6 @@ update_waiting(_Timeout, State) ->
 %% ++++++++++++++++++++++++++++++++++++++
 %% Send logic
 %% ++++++++++++++++++++++++++++++++++++++
-%% send_loop(Socket, RecvPid, BatchSize) ->
-%%     {Refs, Datas} = lists:unzip([{{N, Pid, Ref, []}, Data} ||
-%%                                     {send, Pid, Ref, {redis_command, N, Data}} <- receive_multiple(BatchSize)]),
-%%     Time = erlang:monotonic_time(millisecond),
-%%     case gen_tcp:send(Socket, Datas) of
-%%         ok ->
-%%             %% send to recv proc to fetch the response
-%%             RecvPid ! {requests, Refs, Time},
-%%             send_loop(Socket, RecvPid, BatchSize);
-%%         {error, Reason} ->
-%%             % Give recv_loop time to finish processing
-%%             process_flag(trap_exit, true),
-%%             % This will shut down recv_loop if it is waiting on socket
-%%             gen_tcp:shutdown(Socket, read_write),
-%%             % This will shut down recv_loop if it is waiting for a reference
-%%             RecvPid ! close_down,
-%%             % Ok, recv done, time to die
-%%             receive {'EXIT', _, _} -> ok end,
-%%             Reason
-%%     end.
-
-
-
-
-%% receive_messages() ->
-%%     receive_multiple(N)
-
-%% collect_data([], Acc) ->
-%%     {data, Acc};
-%% collect_data([{recv_exit, Reason}|_], _Acc) ->
-%%     {recv_exit, Reason};
-%% collect_data([{send, Pid, Ref, {redis_command, N, Data} | Msgs], {Refs, Data}}) ->
-%%     RefInfo = {N, Pid, Ref, []},
-%%     collect_data(Msgs, {RefIn
-
-%% receive_multiple(N) ->
-%%     %% Always get atleast one message
-%%     [receive Msg -> Msg end | receive_multiple_rest(N-1)].
-
-%% receive_multiple_rest(0) ->
-%%     [];
-%% receive_multiple_rest(N) ->
-%%     receive Msg ->
-%%             [Msg | receive_multiple_rest(N-1)]
-%%     after 0 ->
-%%             []
-%%     end.
-
-
 send_loop(Socket, RecvPid, BatchSize) ->
     case receive_data(BatchSize) of
         {recv_exit, Reason} ->
@@ -288,7 +235,8 @@ receive_data(N, Time, Acc) ->
             case Msg of
                 {recv_exit, Reason} ->
                     {recv_exit, Reason};
-                {send, Pid, Ref, {redis_command, Count, Data}} ->
+                {send, Pid, Ref, Commands} ->
+                    {Count, Data} = redis_command:get_count_and_data(Commands),
                     RefInfo = {Count, Pid, Ref, []},
                     Acc1 = [{RefInfo, Data} | Acc],
                     receive_data(N, 0, Acc1)
@@ -296,19 +244,3 @@ receive_data(N, Time, Acc) ->
     after Time ->
             receive_data(0, 0, Acc)
     end.
-
-
-%%     %% Always get atleast one message
-%%     [receive Msg -> Msg end | receive_multiple_rest(N-1)].
-
-%% receive_multiple_rest(0) ->
-%%     [];
-%% receive_multiple_rest(N) ->
-%%     receive Msg ->
-%%             [Msg | receive_multiple_rest(N-1)]
-%%     after Time ->
-%%             []
-%%     end.
-
-
-

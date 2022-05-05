@@ -5,23 +5,6 @@
 -compile([export_all]).
 
 
-%% TODO this requires a running redis instance, move to common test
-
-%% push_test() ->
-%%     Pid = self(),
-%%     CB = fun(V) -> Pid ! V end,
-%%     Conn1 = redis_connection:connect("127.0.0.1", 6379, [{push_cb, CB}]),
-%%     Result1 = redis_connection:request(Conn1, [<<"hello">>, <<"3">>]),
-%%     3 = maps:get(<<"proto">>, Result1),
-%%     [<<"subscribe">>,<<"first">>,1] = redis_connection:request(Conn1, [<<"subscribe">>, <<"first">>]),
-%%     <<"PONG">> = redis_connection:request(Conn1, [<<"ping">>]),
-
-%%     Conn2 = redis_connection:connect("127.0.0.1", 6379),
-%%     Result2 = redis_connection:request(Conn2, [<<"publish">>, <<"first">>, <<"hi">>]),
-%%     true = is_integer(Result2),
-
-%%     [<<"message">>, <<"first">>, <<"hi">>] = receive Msg -> Msg after 1000 -> timeout end,
-%%     <<"PONG">> = redis_connection:request(Conn1, [<<"ping">>]).
 
 
 split_data_test() ->
@@ -54,16 +37,16 @@ trailing_reply_test() ->
                                                                {tcp_options, [{recbuf, 524288}]}]),
     ?debugFmt("~w", [Conn1]),
     redis_connection:request_async(Conn1, [<<"ping">>], ping1),
-%    process_flag(trap_exit, true),
     receive sent_big_nasty -> ok end,
-    redis_connection:request_async_raw(Conn1, undefined, apa),
+    MalformedCommand = {redis_command, 1, undefined},
+    redis_connection:request_async(Conn1, MalformedCommand, no_ref),
+
     %% make sure the ping is received before the connection is shut down
 
     ?debugMsg("waiting for ping"),
 
     receive {ping1, _} -> ok after 2000 -> exit(waiting_for_ping) end,
     ?debugMsg("got ping"),
-%    {'EXIT', Conn1, {send_error, einval}} = receive Msg -> Msg end,
     {socket_closed, Conn1, {send_exit, einval}} = receive Msg -> Msg end,
     ensure_empty().
 

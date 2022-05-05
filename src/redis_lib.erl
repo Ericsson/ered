@@ -2,7 +2,7 @@
 
 %% TODO: Split this module into several?
 
--export([format_command/1,
+-export([
          slotmap_master_slots/1,
          slotmap_master_nodes/1,
          slotmap_all_nodes/1,

@@ -1,6 +1,7 @@
 -module(redis_command).
 
 -export([convert_to/1,
+         get_count_and_data/1,
          add_asking/2,
          check_result/1,
          fix_ask_reply/2]).
@@ -40,6 +41,8 @@ command_to_bin(RawCommand) ->
     iolist_to_binary(["*", Len, "\r\n", Elements]).
 
 
+get_count_and_data({redis_command, Count, Data}) ->
+    {Count, Data}.
 
 check_result({ok, Result}) when is_list(Result) ->
     check_for_special_reply(Result);
