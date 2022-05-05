@@ -29,7 +29,7 @@ request(Connection, Data) ->
 request(Connection, Data, Timeout) ->
     link(Connection),
     Ref = make_ref(),
-    Connection ! {send, self(), Ref, redis_lib:format_command(Data)},
+    Connection ! {send, self(), Ref, redis_command:convert_to(Data)},
     receive {Ref, Value} ->
             unlink(Connection),
             Value
@@ -39,7 +39,7 @@ request(Connection, Data, Timeout) ->
     end.
 
 request_async(Connection, Data, Ref) ->
-    Connection ! {send, self(), Ref, redis_lib:format_command(Data)},
+    Connection ! {send, self(), Ref, redis_command:convert_to(Data)},
     ok.
 
 request_async_raw(Connection, Data, Ref) ->

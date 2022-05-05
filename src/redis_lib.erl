@@ -9,39 +9,6 @@
          hash/1]).
 
 
--type request() :: {redis_command,
-                    non_neg_integer() | single,
-                    binary() | [binary()]}.
-
--export_type([request/0]).
-
--spec format_command(binary() | iolist() | request()) -> request().
-
-format_command(Command = {redis_command, _, _}) ->
-    Command;
-
-format_command(Data) when is_binary(Data) ->
-    format_command([Data]);
-
-format_command([]) ->
-    error({badarg, []});
-
-format_command(RawCommands = [E|_]) when is_list(E) ->
-    Commands = [command_to_bin(RawCommand) || RawCommand <- RawCommands],
-    {redis_command, length(RawCommands), Commands};
-
-format_command(RawCommand) ->
-    Command = command_to_bin(RawCommand),
-    {redis_command, single, Command}.
-
-command_to_bin(RawCommand) ->
-    Len = integer_to_list(length(RawCommand)),
-    Elements = [["$", integer_to_list(size(Bin)), "\r\n", Bin, "\r\n"] || Bin <- RawCommand],
-    %% Maybe this could be kept as an iolist?
-    %% TODO profile this.
-    %% Since this is copied around a bit between processes it might be cheaper to keep it as a binary
-    %% since then it will be heap allocated if big. Just pure speculation..
-    iolist_to_binary(["*", Len, "\r\n", Elements]).
 
 
 slotmap_master_slots(ClusterSlotsReply) ->

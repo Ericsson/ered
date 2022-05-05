@@ -39,7 +39,7 @@ command(ServerRef, Command, Key) ->
     command(ServerRef, Command, Key, infinity).
 
 command(ServerRef, Command, Key, Timeout) ->
-    C = redis_lib:format_command(Command),
+    C = redis_command:convert_to(Command),
     gen_server:call(ServerRef, {command, C, Key}, Timeout).
 
 command_all(ServerRef, Command) ->
@@ -49,7 +49,7 @@ command_all(ServerRef, Command, Timeout) ->
     %% Send command in sequence to all instances.
     %% This could be done in parallel but but keeping it easy and
     %% aligned with eredis_cluster for now
-    Cmd = redis_lib:format_command(Command),
+    Cmd = redis_command:convert_to(Command),
     [redis_client:request(ClientRef, Cmd, Timeout) || ClientRef <- get_clients(ServerRef)].
 
 command_client(ClientRef, Command) ->
@@ -101,9 +101,9 @@ handle_cast({forward_command, Command, Slot, From, Addr, AttemptsLeft}, State) -
 
 handle_cast({forward_command_asking, Command, Slot, From, Addr, AttemptsLeft, OldReply}, State) ->
     {Client, State1} = connect_addr(Addr, State),
-    Command1 = add_asking(OldReply, Command),
+    Command1 = redis_command:add_asking(OldReply, Command),
     HandleReplyFun = create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft),
-    Fun = fun(Reply) -> HandleReplyFun(fix_ask_reply(OldReply, Reply)) end,
+    Fun = fun(Reply) -> HandleReplyFun(redis_command:fix_ask_reply(OldReply, Reply)) end,
     redis_client:request_cb(Client, Command1, Fun),
     {noreply, State1}.
 
@@ -171,7 +171,7 @@ create_reply_fun(_Command, _Slot, _Client, From, _State, 0) ->
 create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft) ->
     Pid = self(),
     fun(Reply) ->
-            case check_result(Reply) of
+            case redis_command:check_result(Reply) of
                 normal ->
                     gen_server:reply(From, Reply);
                 {moved, Addr} ->
@@ -213,35 +213,6 @@ create_lookup_table(N, L = [{Start, End, Val} | Rest], Acc) ->
     end.
 
 
-check_result({ok, Result}) when is_list(Result) ->
-    check_for_special_reply(Result);
-check_result({ok, Result}) ->
-    check_for_special_reply([Result]);
-check_result(_) ->
-    normal.
-
-check_for_special_reply([]) ->
-    normal;
-check_for_special_reply([Head|Tail]) ->
-    case Head of
-        {error, <<"TRYAGAIN ", _/binary>>} ->
-            try_again;
-        {error, <<"MOVED ", Bin/binary>>} ->
-            {moved, parse_host_and_port(Bin)};
-        {error, <<"ASK ", Bin/binary>>} ->
-            {ask, parse_host_and_port(Bin)};
-        _ ->
-            check_for_special_reply(Tail)
-    end.
-
-parse_host_and_port(Bin) ->
-    %% looks like <<"MOVED 14039 127.0.0.1:30006">> or <<"ASK 15118 127.0.0.1:30002">>
-    [_Slot, AddrBin] = binary:split(Bin, <<" ">>),
-    %% Use trailing, IPv6 address can contain ':'
-    [Host, Port] = string:split(AddrBin, <<":">>, trailing),
-    {binary_to_list(Host), binary_to_integer(Port)}.
-
-
 connect_addr(Addr, State) ->
     case maps:get(Addr, State#st.addr_map, not_found) of
         not_found ->
@@ -250,39 +221,6 @@ connect_addr(Addr, State) ->
         Client ->
             {Client, State}
     end.
-
-
-add_asking(_, {redis_command, single, Command}) ->
-    {redis_command, 2, [ <<"ASKING\r\n">>, Command]};
-
-add_asking({ok, OldReplies}, {redis_command, _N, Commands}) ->
-    %% Extract only the commands with ASK redirection
-    AskCommands = add_asking_pipeline(OldReplies, Commands),
-    %% ASK commands + ASKING
-    N = length(AskCommands) * 2,
-    {redis_command, N, AskCommands}.
-
-add_asking_pipeline([], _) ->
-    [];
-add_asking_pipeline([{error, <<"ASK ", _/binary>>} |Replies], [Command |Commands]) ->
-    [[ <<"ASKING\r\n">>, Command] | add_asking_pipeline(Replies, Commands)];
-add_asking_pipeline([_ |Replies], [_ |Commands]) ->
-    add_asking_pipeline(Replies, Commands).
-
-
-fix_ask_reply({ok, OldReplies}, {ok, NewReplies}) when is_list(OldReplies) ->
-    {ok, merge_ask_result(OldReplies, NewReplies)};
-fix_ask_reply(_OldReply, {ok, [_AskOk, Reply]}) ->
-    {ok, Reply};
-fix_ask_reply(_, Other) ->
-    Other.
-
-merge_ask_result([], _) ->
-    [];
-merge_ask_result([{error, <<"ASK ", _/binary>>} | Replies1], [_AskOk, Reply | Replies2]) ->
-    [Reply | merge_ask_result(Replies1, Replies2)];
-merge_ask_result([Reply | Replies1], Replies2) ->
-    [Reply | merge_ask_result(Replies1, Replies2)].
 
 
 take_prop(Key, List, Default) ->

@@ -36,7 +36,7 @@
 -type request_reply()    :: {ok, redis_connection:result()} | {error, request_error()}.
 -type request_error()    :: queue_overflow | node_down | {client_stopped, reason()}.
 -type request_callback() :: fun((request_reply()) -> any()).
--type request_item()     :: {request, redis_lib:request(), request_callback()}.
+-type request_item()     :: {request, redis_command:command(), request_callback()}.
 -type request_queue()    :: {Size :: non_neg_integer(), queue:queue(request_item())}.
 
 
@@ -84,10 +84,10 @@ request(ServerRef, Request) ->
     request(ServerRef, Request, infinity).
 
 request(ServerRef, Request, Timeout) ->
-    gen_server:call(ServerRef, {request, redis_lib:format_command(Request)}, Timeout).
+    gen_server:call(ServerRef, {request, redis_command:convert_to(Request)}, Timeout).
 
 request_cb(ServerRef, Request, CallbackFun) ->
-    gen_server:cast(ServerRef, {request, redis_lib:format_command(Request), CallbackFun}).
+    gen_server:cast(ServerRef, {request, redis_command:convert_to(Request), CallbackFun}).
 
 %%%===================================================================
 %%% gen_server callbacks
