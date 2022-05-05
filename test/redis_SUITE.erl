@@ -44,7 +44,7 @@ init_per_suite(Config) ->
     timer:sleep(1000),
     lists:foreach(fun(Port) ->
 			  {ok,Pid} = redis_client:start_link("127.0.0.1", Port, []),
-			  {ok, <<"PONG">>} = redis_client:request(Pid, <<"ping">>)
+			  {ok, <<"PONG">>} = redis_client:command(Pid, <<"ping">>)
 		  end,
 		  [30001, 30002, 30003, 30004, 30005, 30006]),
     os:cmd(" echo 'yes' | docker run --name redis-cluster --net=host -i redis redis-cli --cluster create 127.0.0.1:30001 127.0.0.1:30002 127.0.0.1:30003 127.0.0.1:30004 127.0.0.1:30005 127.0.0.1:30006 --cluster-replicas 1"),
@@ -256,14 +256,14 @@ scan_delete(Client) ->
 scan_cmd(Client, Cursor) ->
     Pid = self(),
     Callback = fun(Response) -> Pid ! {scan, Response} end,
-    redis:command_client_cb(Client, [<<"SCAN">>, Cursor, <<"COUNT">>, integer_to_binary(100), <<"MATCH">>, <<"otherkey*">>], Callback).
+    redis:command_client_async(Client, [<<"SCAN">>, Cursor, <<"COUNT">>, integer_to_binary(100), <<"MATCH">>, <<"otherkey*">>], Callback).
 
 unlink_cmd(Client, []) ->
     0;
 unlink_cmd(Client, Keys) ->
     Pid = self(),
     Callback = fun(Response) -> Pid ! {unlink, Response} end,
-    redis:command_client_cb(Client, [[<<"UNLINK">>, Key] || Key <- Keys], Callback),
+    redis:command_client_async(Client, [[<<"UNLINK">>, Key] || Key <- Keys], Callback),
     1.
 
 group_by_hash(Keys) ->
@@ -317,7 +317,7 @@ t_queue_full(_) ->
     Pid = self(),
 
     fun Loop(0) -> ok;
-        Loop(N) -> redis:command_client_cb(C, [<<"PING">>], fun(Reply) -> Pid ! {reply, Reply} end),
+        Loop(N) -> redis:command_client_async(C, [<<"PING">>], fun(Reply) -> Pid ! {reply, Reply} end),
                    Loop(N-1)
     end(21),
 

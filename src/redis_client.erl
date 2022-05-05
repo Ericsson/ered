@@ -8,8 +8,8 @@
 
 -export([start_link/3,
          stop/1,
-         request/2, request/3,
-         request_cb/3]).
+         command/2, command/3,
+         command_async/3]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -33,11 +33,11 @@
          max_pending = 128      :: non_neg_integer()
         }).
 
--type request_reply()    :: {ok, redis_connection:result()} | {error, request_error()}.
--type request_error()    :: queue_overflow | node_down | {client_stopped, reason()}.
--type request_callback() :: fun((request_reply()) -> any()).
--type request_item()     :: {request, redis_command:command(), request_callback()}.
--type request_queue()    :: {Size :: non_neg_integer(), queue:queue(request_item())}.
+-type command_reply()    :: {ok, redis_connection:result()} | {error, command_error()}.
+-type command_error()    :: queue_overflow | node_down | {client_stopped, reason()}.
+-type command_callback() :: fun((command_reply()) -> any()).
+-type command_item()     :: {command, redis_command:command(), command_callback()}.
+-type command_queue()    :: {Size :: non_neg_integer(), queue:queue(command_item())}.
 
 
 
@@ -46,8 +46,8 @@
          connection_pid = none,
          last_status = none,
 
-         waiting = q_new() :: request_queue(),
-         pending = q_new() :: request_queue(),
+         waiting = q_new() :: command_queue(),
+         pending = q_new() :: command_queue(),
 
          cluster_id = undefined :: undefined | binary(),
 
@@ -80,14 +80,14 @@ start_link(Host, Port, Opts) ->
 stop(ServerRef) ->
     gen_server:stop(ServerRef).
 
-request(ServerRef, Request) ->
-    request(ServerRef, Request, infinity).
+command(ServerRef, Command) ->
+    command(ServerRef, Command, infinity).
 
-request(ServerRef, Request, Timeout) ->
-    gen_server:call(ServerRef, {request, redis_command:convert_to(Request)}, Timeout).
+command(ServerRef, Command, Timeout) ->
+    gen_server:call(ServerRef, {command, redis_command:convert_to(Command)}, Timeout).
 
-request_cb(ServerRef, Request, CallbackFun) ->
-    gen_server:cast(ServerRef, {request, redis_command:convert_to(Request), CallbackFun}).
+command_async(ServerRef, Command, CallbackFun) ->
+    gen_server:cast(ServerRef, {command, redis_command:convert_to(Command), CallbackFun}).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -112,30 +112,30 @@ init([Host, Port, OptsList]) ->
     spawn_link(fun() -> connect(Pid, Opts) end),
     {ok, start_node_down_timer(#st{opts = Opts})}.
 
-handle_call({request, Request}, From, State) ->
+handle_call({command, Command}, From, State) ->
     Fun = fun(Reply) -> gen_server:reply(From, Reply) end,
-    handle_cast({request, Request, Fun}, State).
+    handle_cast({command, Command, Fun}, State).
 
 
-handle_cast(Request, State) ->
+handle_cast(Command, State) ->
     if
         State#st.node_down ->
-            {noreply, reply_request(Request, {error, node_down})};
+            {noreply, reply_command(Command, {error, node_down})};
         true ->
-            {noreply, process_requests(State#st{waiting = q_in(Request, State#st.waiting)})}
+            {noreply, process_commands(State#st{waiting = q_in(Command, State#st.waiting)})}
     end.
 
 
-handle_info({{request_reply, Pid}, Reply}, State = #st{pending = Pending, connection_pid = Pid}) ->
+handle_info({{command_reply, Pid}, Reply}, State = #st{pending = Pending, connection_pid = Pid}) ->
     case q_out(Pending) of
         empty ->
             {noreply, State};
-        {Request, NewPending} ->
-            reply_request(Request, {ok, Reply}),
-            {noreply, process_requests(State#st{pending = NewPending})}
+        {Command, NewPending} ->
+            reply_command(Command, {ok, Reply}),
+            {noreply, process_commands(State#st{pending = NewPending})}
     end;
 
-handle_info({request_reply, _Pid, _Reply}, State) ->
+handle_info({command_reply, _Pid, _Reply}, State) ->
     %% Stray message from a defunct client? ignore!
     {noreply, State};
 
@@ -152,11 +152,11 @@ handle_info({connected, Pid, ClusterId}, State) ->
     erlang:cancel_timer(State#st.node_down_timer),
     State1 = State#st{connection_pid = Pid, cluster_id = ClusterId, node_down_timer = none},
     State2 = report_connection_status(connection_up, State1),
-    {noreply, process_requests(State2#st{node_down = false})};
+    {noreply, process_commands(State2#st{node_down = false})};
 
 handle_info({timeout, TimerRef, node_down}, State) when TimerRef == State#st.node_down_timer ->
     State1 = reply_all({error, node_down}, State),
-    {noreply, process_requests(State1#st{node_down = true})};
+    {noreply, process_commands(State1#st{node_down = true})};
 
 
 handle_info({timeout, _TimerRef, _Msg}, State) ->
@@ -165,9 +165,9 @@ handle_info({timeout, _TimerRef, _Msg}, State) ->
 
 terminate(Reason, State) ->
     %% This could be done more gracefully by killing the connection process if up
-    %% and waiting for trailing request replies and incoming requests. This would
+    %% and waiting for trailing command replies and incoming commands. This would
     %% mean introducing a separate stop function and a stopped state.
-    %% For now just cancel all requests and die
+    %% For now just cancel all commands and die
     reply_all({error, {client_stopped, Reason}}, State),
     report_connection_status({connection_down, {client_stopped, Reason}}, State),
     ok.
@@ -182,8 +182,8 @@ format_status(_Opt, Status) ->
 %%% Internal functions
 %%%===================================================================
 reply_all(Reply, State = #st{waiting = Waiting, pending = Pending}) ->
-    [reply_request(Request, Reply) || Request <- q_to_list(Pending)],
-    [reply_request(Request, Reply) || Request <- q_to_list(Waiting)],
+    [reply_command(Command, Reply) || Command <- q_to_list(Pending)],
+    [reply_command(Command, Reply) || Command <- q_to_list(Waiting)],
     State#st{waiting = q_new(), pending = q_new()}.
 
 
@@ -199,28 +199,28 @@ connection_down(Reason, State) ->
     State1 = State#st{waiting = q_join(State#st.pending, State#st.waiting),
                       pending = q_new(),
                       connection_pid = none},
-    State2 = process_requests(State1),
+    State2 = process_commands(State1),
     State3 = report_connection_status(Reason, State2),
     start_node_down_timer(State3).
 
 
 %%%%%%
-process_requests(State) ->
+process_commands(State) ->
     NumWaiting = q_len(State#st.waiting),
     NumPending = q_len(State#st.pending),
     if
         (NumWaiting > 0) and (NumPending < State#st.opts#opts.max_pending) and (State#st.connection_pid /= none) ->
-            {Request, NewWaiting} = q_out(State#st.waiting),
-            Data = get_request_payload(Request),
-            redis_connection:command_async(State#st.connection_pid, Data, {request_reply, State#st.connection_pid}),
-            process_requests(State#st{pending = q_in(Request, State#st.pending),
+            {Command, NewWaiting} = q_out(State#st.waiting),
+            Data = get_command_payload(Command),
+            redis_connection:command_async(State#st.connection_pid, Data, {command_reply, State#st.connection_pid}),
+            process_commands(State#st{pending = q_in(Command, State#st.pending),
                                       waiting = NewWaiting});
 
         (NumWaiting > State#st.opts#opts.max_waiting) and (State#st.queue_full_event_sent) ->
-            drop_requests(State);
+            drop_commands(State);
 
         NumWaiting > State#st.opts#opts.max_waiting ->
-            drop_requests(
+            drop_commands(
               report_connection_status(queue_full, State#st{queue_full_event_sent = true}));
 
         (NumWaiting < State#st.opts#opts.queue_ok_level) and (State#st.queue_full_event_sent) ->
@@ -230,12 +230,12 @@ process_requests(State) ->
             State
     end.
 
-drop_requests(State) ->
+drop_commands(State) ->
     case q_len(State#st.waiting) > State#st.opts#opts.max_waiting of
         true ->
-            {OldRequest, NewWaiting} = q_out(State#st.waiting),
-            reply_request(OldRequest, {error, queue_overflow}),
-            drop_requests(State#st{waiting = NewWaiting});
+            {OldCommand, NewWaiting} = q_out(State#st.waiting),
+            reply_command(OldCommand, {error, queue_overflow}),
+            drop_commands(State#st{waiting = NewWaiting});
         false  ->
             State
     end.
@@ -262,11 +262,11 @@ q_len({Size, _Q}) ->
     Size.
 
 
-reply_request({request, _, Fun}, Reply) ->
+reply_command({command, _, Fun}, Reply) ->
     Fun(Reply).
 
-get_request_payload({request, Request, _Fun}) ->
-    Request.
+get_command_payload({command, Command, _Fun}) ->
+    Command.
 
 report_connection_status(Status, State = #st{last_status = Status}) ->
     State;
@@ -317,9 +317,9 @@ init(MainPid, ConnectionPid, Opts) ->
         [] ->
             {ok, undefined};
         Commands ->
-            redis_connection:command_async(ConnectionPid, Commands, init_request_reply),
+            redis_connection:command_async(ConnectionPid, Commands, init_command_reply),
             receive
-                {init_request_reply, Reply} ->
+                {init_command_reply, Reply} ->
                     case [Reason || {error, Reason} <- Reply] of
                         [] when Opts#opts.use_cluster_id ->
                             {ok, hd(Reply)};

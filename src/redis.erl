@@ -8,7 +8,7 @@
          stop/1,
          command/3, command/4,
          command_all/2, command_all/3,
-         command_client/2, command_client/3, command_client_cb/3,
+         command_client/2, command_client/3, command_client_async/3,
          get_clients/1]).
 
 %% gen_server callbacks
@@ -50,16 +50,16 @@ command_all(ServerRef, Command, Timeout) ->
     %% This could be done in parallel but but keeping it easy and
     %% aligned with eredis_cluster for now
     Cmd = redis_command:convert_to(Command),
-    [redis_client:request(ClientRef, Cmd, Timeout) || ClientRef <- get_clients(ServerRef)].
+    [redis_client:command(ClientRef, Cmd, Timeout) || ClientRef <- get_clients(ServerRef)].
 
 command_client(ClientRef, Command) ->
     command_client(ClientRef, Command, infinity).
 
 command_client(ClientRef, Command, Timeout) ->
-    redis_client:request(ClientRef, Command, Timeout).
+    redis_client:command(ClientRef, Command, Timeout).
 
-command_client_cb(ClientRef, Command, CallbackFun) ->
-    redis_client:request_cb(ClientRef, Command, CallbackFun).
+command_client_async(ClientRef, Command, CallbackFun) ->
+    redis_client:command_async(ClientRef, Command, CallbackFun).
 
 get_clients(ServerRef) ->
     gen_server:call(ServerRef, get_clients).
@@ -96,7 +96,7 @@ handle_call(get_clients, _From, State) ->
 handle_cast({forward_command, Command, Slot, From, Addr, AttemptsLeft}, State) ->
     {Client, State1} = connect_addr(Addr, State),
     Fun = create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft),
-    redis_client:request_cb(Client, Command, Fun),
+    redis_client:command_async(Client, Command, Fun),
     {noreply, State1};
 
 handle_cast({forward_command_asking, Command, Slot, From, Addr, AttemptsLeft, OldReply}, State) ->
@@ -104,7 +104,7 @@ handle_cast({forward_command_asking, Command, Slot, From, Addr, AttemptsLeft, Ol
     Command1 = redis_command:add_asking(OldReply, Command),
     HandleReplyFun = create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft),
     Fun = fun(Reply) -> HandleReplyFun(redis_command:fix_ask_reply(OldReply, Reply)) end,
-    redis_client:request_cb(Client, Command1, Fun),
+    redis_client:command_async(Client, Command1, Fun),
     {noreply, State1}.
 
 handle_info({command_try_again, Command, Slot, From, AttemptsLeft}, State) ->
@@ -160,7 +160,7 @@ send_command_to_slot(Command, Slot, From, State, AttemptsLeft) ->
         Ix ->
             Client = element(Ix, State#st.clients),
             Fun = create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft),
-            redis_client:request_cb(Client, Command, Fun)
+            redis_client:command_async(Client, Command, Fun)
     end,
     ok.
 

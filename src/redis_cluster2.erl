@@ -388,7 +388,7 @@ stop_periodic_slot_info_request(State) ->
 send_slot_info_request(Node, State) ->
     Pid = self(),
     Cb = fun(Answer) -> Pid ! {slot_info, State#st.slot_map_version, Answer} end,
-    redis_client:request_cb(Node, [<<"CLUSTER">>, <<"SLOTS">>], Cb).
+    redis_client:command_async(Node, [<<"CLUSTER">>, <<"SLOTS">>], Cb).
 
 
 

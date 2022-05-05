@@ -31,7 +31,7 @@ request_t() ->
 		       receive ok -> ok end
 	       end),
     Client = start_client(Port),
-    {ok, <<"pong">>} = redis_client:request(Client, <<"ping">>).
+    {ok, <<"pong">>} = redis_client:command(Client, <<"ping">>).
 
 
 fail_connect_t() ->
@@ -59,7 +59,7 @@ fail_parse_t() ->
     Client = start_client(Port),
     Pid = self(),
     spawn_link(fun() ->
-		       Pid ! redis_client:request(Client, <<"ping">>)
+		       Pid ! redis_client:command(Client, <<"ping">>)
 	       end),
     expect_connection_up(Client),
     Reason = {recv_exit, {parse_error,{invalid_data,<<"&pong">>}}},
@@ -94,7 +94,7 @@ bad_request_t() ->
 	       end),
     Client = start_client(Port),
     expect_connection_up(Client),
-    ?_assertException(error, badarg, redis_client:request(Client, bad_request)).
+    ?_assertException(error, badarg, redis_client:command(Client, bad_request)).
 
 
 server_buffer_full_t() ->
@@ -125,7 +125,7 @@ server_buffer_full_t() ->
     expect_connection_up(Client),
 
     Pid = self(),
-    [redis_client:request_cb(Client, <<"ping">>, fun(Reply) -> Pid ! {N, Reply} end) || N <- lists:seq(1,11)],
+    [redis_client:command_async(Client, <<"ping">>, fun(Reply) -> Pid ! {N, Reply} end) || N <- lists:seq(1,11)],
     receive {connection_status, _, queue_full} -> ok end,
     {6, {error, queue_overflow}} = get_msg(),
     receive {connection_status, _, queue_ok} -> ok end,
@@ -162,7 +162,7 @@ server_buffer_full_reconnect_t() ->
 
     Pid = self(),
     %% 5 messages will be pending, 5 messages in queue
-    [redis_client:request_cb(Client, <<"ping">>, fun(Reply) -> Pid ! {N, Reply} end) || N <- lists:seq(1,11)],
+    [redis_client:command_async(Client, <<"ping">>, fun(Reply) -> Pid ! {N, Reply} end) || N <- lists:seq(1,11)],
     receive {connection_status, _ClientInfo, queue_full} -> ok end,
     %% 1 message over the limit, first one in queue gets kicked out
     {6, {error, queue_overflow}} = get_msg(),
@@ -193,7 +193,7 @@ server_buffer_full_node_goes_down_t() ->
     expect_connection_up(Client),
 
     Pid = self(),
-    [redis_client:request_cb(Client, <<"ping">>, fun(Reply) -> Pid ! {N, Reply} end) || N <- lists:seq(1,11)],
+    [redis_client:command_async(Client, <<"ping">>, fun(Reply) -> Pid ! {N, Reply} end) || N <- lists:seq(1,11)],
     receive {connection_status, _ClientInfo, queue_full} -> ok end,
     {6, {error, queue_overflow}} = get_msg(),
     receive {connection_status, _ClientInfo, {socket_closed, {recv_exit, closed}}} -> ok end,
@@ -229,7 +229,7 @@ send_timeout_t() ->
     Client = start_client(Port, [{connection_opts, [{response_timeout, 100}]}]),
     expect_connection_up(Client),
     Pid = self(),
-    redis_client:request_cb(Client, <<"ping">>, fun(Reply) -> Pid ! {reply, Reply} end),
+    redis_client:command_async(Client, <<"ping">>, fun(Reply) -> Pid ! {reply, Reply} end),
     % this should come after max 1000ms
     receive {connection_status, _ClientInfo, {socket_closed, {recv_exit, timeout}}} -> ok after 2000 -> error(timeout) end,
     expect_connection_up(Client),
