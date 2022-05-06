@@ -9,6 +9,10 @@
          hash/1]).
 
 
+-export_type([slot_map/0]).
+
+-type slot_map_node() :: [binary() | non_neg_integer()]. % [Ip::binary(), Port::non_neg_integer(), Id::binary()].
+-type slot_map() :: [non_neg_integer() | slot_map_node()]. %[SlotStart::non_neg_integer(), SlotEnd::non_neg_integer(), [slot_map_node()]]
 
 
 slotmap_master_slots(ClusterSlotsReply) ->

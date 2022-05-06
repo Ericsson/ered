@@ -8,7 +8,8 @@
          stop/1,
          command/3, command/4,
          command_all/2, command_all/3,
-         command_client/2, command_client/3, command_client_async/3,
+         command_client/2, command_client/3,
+         command_client_async/3,
          get_clients/1]).
 
 %% gen_server callbacks
