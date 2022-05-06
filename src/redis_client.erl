@@ -55,7 +55,7 @@
          node_down = false :: boolean(),
 
          node_down_timer = none :: none | reference(),
-         opts :: undefined | #opts{}
+         opts = #opts{}%:: undefined | #opts{}
 
         }).
 
@@ -282,9 +282,12 @@ report_connection_status(Status, State) ->
 send_info(Msg, State) ->
     Pid = State#st.opts#opts.info_pid,
     case Pid of
-        none -> ok;
-        _ -> Pid ! Msg % TODO add more info
-    end.
+        none ->
+            ok;
+        _ ->
+            Pid ! Msg
+    end,
+    ok.
 
 
 connect(Pid, Opts) -> % Host, Port, Opts, ReconnectWait, ConnectTimeout) ->
