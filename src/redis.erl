@@ -27,15 +27,68 @@
              redirect_attempts :: non_neg_integer()
             }).
 
+
+-type opt() ::
+        %% If there is a TRYAGAIN response from Redis then wait
+        %% this many milliseconds before re-sending the command
+        {try_again_delay, non_neg_integer()} |
+        %% Only do these many retries or re-sends before giving
+        %% up and returning the result. This affects ASK, MOVED
+        %% and TRYAGAIN responses
+        {redirect_attempts, non_neg_integer()} |
+        redis_cluster2:opt().
+
+-type addr() :: redis_cluster2:addr().
+-type server_ref() :: pid().
+-type command() :: redis_command:raw_command().
+-type command_pipeline() :: redis_command:raw_command_pipeline().
+-type reply() :: redis_client:command_reply().
+-type reply_pipeline() :: redis_client:command_reply_pipeline().
+-type key() :: binary().
+-type client_ref() :: redis_client:client_ref().
+
 %%%===================================================================
 %%% API
 %%%===================================================================
+
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec start_link([addr()], [opt()]) -> {ok, server_ref()} | {error, term()}.
+%%
+%% Start the main process. This will also start the cluster handling
+%% process which will set up clients to the provided addresses and
+%% fetch the cluster slot map. Once there is a complete slot map and
+%% all Redis node clients are connected this process is ready to
+%% server requests.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 start_link(Addrs, Opts) ->
     gen_server:start_link(?MODULE, [Addrs, Opts], []).
 
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec stop(server_ref()) -> ok.
+%%
+%% Stop the main process. This will also stop the cluster handling
+%% process and in turn disconnect and stop all clients.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 stop(ServerRef) ->
     gen_server:stop(ServerRef).
 
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec command(server_ref(), command(), key()) -> reply();
+             (server_ref(), command_pipeline(), key()) -> reply_pipeline().
+
+-spec command(server_ref(), command(), key(), timeout()) -> reply();
+             (server_ref(), command_pipeline(), key(), timeout()) -> reply_pipeline().
+%%
+%% Send a command to the Redis cluster. The command will be routed to
+%% the correct Redis node client based on the provided key.
+%% If the command is a single command then it is represented as a
+%% list of binaries where the first binary is the Redis command
+%% to execute and the rest of the binaries are the arguments.
+%% If the command is a pipeline, e.g. multiple commands to executed
+%% then they need to all map to the same slot for things to
+%% work as expected.
+%% Command/3 is the same as setting the timeout to infinity.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 command(ServerRef, Command, Key) ->
     command(ServerRef, Command, Key, infinity).
 
@@ -43,6 +96,15 @@ command(ServerRef, Command, Key, Timeout) ->
     C = redis_command:convert_to(Command),
     gen_server:call(ServerRef, {command, C, Key}, Timeout).
 
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec command_all(server_ref(), command()) -> [reply()];
+                 (server_ref(), command_pipeline()) -> [reply_pipeline()].
+
+-spec command_all(server_ref(), command(), timeout()) -> [reply()];
+                 (server_ref(), command_pipeline(), timeout()) -> [reply_pipeline()].
+%%
+%% Send the same command to all connected master Redis nodes.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 command_all(ServerRef, Command) ->
     command_all(ServerRef, Command, infinity).
 
@@ -53,15 +115,39 @@ command_all(ServerRef, Command, Timeout) ->
     Cmd = redis_command:convert_to(Command),
     [redis_client:command(ClientRef, Cmd, Timeout) || ClientRef <- get_clients(ServerRef)].
 
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec command_client(client_ref(), command()) -> [reply()];
+                    (client_ref(), command_pipeline()) -> [reply_pipeline()].
+
+-spec command_client(client_ref(), command(), timeout()) -> [reply()];
+                    (client_ref(), command_pipeline(), timeout()) -> [reply_pipeline()].
+%%
+%% Send the command to a specific Redis client without any client routing.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 command_client(ClientRef, Command) ->
     command_client(ClientRef, Command, infinity).
 
 command_client(ClientRef, Command, Timeout) ->
     redis_client:command(ClientRef, Command, Timeout).
 
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec command_client_async(client_ref(), command(), fun()) -> ok;
+                          (client_ref(), command_pipeline(), fun()) -> ok.
+
+%%
+%% Send command to a specific Redis client in asynchronous fashion. The
+%% provided callback function will be called with the reply. Note that
+%% the callback function will executing in the redis client process and
+%% should not hang or perform any lengthy task.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 command_client_async(ClientRef, Command, CallbackFun) ->
     redis_client:command_async(ClientRef, Command, CallbackFun).
 
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec get_clients(server_ref()) -> [client_ref()].
+%%
+%% Get all Redis master node clients
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 get_clients(ServerRef) ->
     gen_server:call(ServerRef, get_clients).
 
@@ -228,6 +314,3 @@ take_prop(Key, List, Default) ->
     Val = proplists:get_value(Key, List, Default),
     NewList = proplists:delete(Key, List),
     {Val, NewList}.
-
-
- 

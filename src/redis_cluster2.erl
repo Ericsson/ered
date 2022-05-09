@@ -15,6 +15,9 @@
          terminate/2, code_change/3, format_status/2]).
 
 
+-export_type([opt/0,
+              addr/0]).
+
 %% from gen_sever.erl
 -type server_ref() ::
         pid()
@@ -27,7 +30,7 @@
 
 
 
-
+-type opt() :: {any(), any()}.
 
 
 

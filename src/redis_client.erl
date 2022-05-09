@@ -33,11 +33,12 @@
          max_pending = 128      :: non_neg_integer()
         }).
 
--type command_reply()    :: {ok, redis_connection:result()} | {error, command_error()}.
--type command_error()    :: queue_overflow | node_down | {client_stopped, reason()}.
--type command_callback() :: fun((command_reply()) -> any()).
--type command_item()     :: {command, redis_command:command(), command_callback()}.
--type command_queue()    :: {Size :: non_neg_integer(), queue:queue(command_item())}.
+-type command_reply()          :: {ok, redis_connection:result()} | {error, command_error()}.
+-type command_reply_pipeline() :: {ok, [redis_connection:result()]} | {error, command_error()}.
+-type command_error()          :: queue_overflow | node_down | {client_stopped, reason()}.
+-type command_callback()       :: fun((command_reply()) -> any()).
+-type command_item()           :: {command, redis_command:command(), command_callback()}.
+-type command_queue()          :: {Size :: non_neg_integer(), queue:queue(command_item())}.
 
 
 
@@ -67,9 +68,14 @@
 -type reason()      :: term(). % ssl reasons are of type any so no point being more specific
 -type down_reason() :: {client_stopped | connect_error | init_error | socket_closed, reason()}.
 -type info_msg()    :: {connection_status, client_info(), status()}.
+-type client_ref()  :: pid().
 
-
--export_type([info_msg/0, addr/0]).
+-export_type([info_msg/0,
+              addr/0,
+              command_reply/0,
+              command_reply_pipeline/0,
+              client_ref/0
+             ]).
 
 %%%===================================================================
 %%% API

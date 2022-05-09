@@ -10,7 +10,12 @@
                     non_neg_integer() | single,
                     binary() | [binary()]}.
 
--export_type([command/0]).
+-type raw_command() :: [binary()].
+-type raw_command_pipeline() :: [raw_command()].
+
+-export_type([command/0,
+              raw_command/0,
+              raw_command_pipeline/0]).
 
 -spec convert_to(binary() | iolist() | command()) -> command().
 
