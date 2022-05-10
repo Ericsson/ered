@@ -17,10 +17,10 @@
 
 -export_type([info_msg/0,
               addr/0,
-              command_reply/0,
-              command_reply_pipeline/0,
               server_ref/0,
-              opt/0
+              opt/0,
+              reply/0,
+              reply_fun/0
              ]).
 
 
@@ -63,8 +63,7 @@
 -type command_reply()          :: {ok, redis_connection:result()} | {error, command_error()}.
 -type command_reply_pipeline() :: {ok, [redis_connection:result()]} | {error, command_error()}.
 -type command_error()          :: queue_overflow | node_down | {client_stopped, reason()}.
--type command_callback()       :: fun((command_reply()) -> any()).
--type command_item()           :: {command, redis_command:redis_command(), command_callback()}.
+-type command_item()           :: {command, redis_command:redis_command(), reply_fun()}.
 -type command_queue()          :: {Size :: non_neg_integer(), queue:queue(command_item())}.
 
 -type reply()       :: command_reply() | command_reply_pipeline().

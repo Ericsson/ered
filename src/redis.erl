@@ -38,13 +38,12 @@
         {redirect_attempts, non_neg_integer()} |
         redis_cluster2:opt().
 
--type addr() :: redis_cluster2:addr().
+-type addr()       :: redis_cluster2:addr().
 -type server_ref() :: pid().
--type command() :: redis_command:raw_command().
--type command_pipeline() :: redis_command:raw_command_pipeline().
--type reply() :: redis_client:command_reply().
--type reply_pipeline() :: redis_client:command_reply_pipeline().
--type key() :: binary().
+-type command()    :: redis_command:command().
+-type reply()      :: redis_client:reply().
+-type reply_fun()  :: redis_client:reply_fun().
+-type key()        :: binary().
 -type client_ref() :: redis_client:server_ref().
 
 %%%===================================================================
@@ -73,11 +72,8 @@ stop(ServerRef) ->
     gen_server:stop(ServerRef).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec command(server_ref(), command(), key()) -> reply();
-             (server_ref(), command_pipeline(), key()) -> reply_pipeline().
-
--spec command(server_ref(), command(), key(), timeout()) -> reply();
-             (server_ref(), command_pipeline(), key(), timeout()) -> reply_pipeline().
+-spec command(server_ref(), command(), key()) -> reply().
+-spec command(server_ref(), command(), key(), timeout()) -> reply().
 %%
 %% Send a command to the Redis cluster. The command will be routed to
 %% the correct Redis node client based on the provided key.
@@ -97,11 +93,8 @@ command(ServerRef, Command, Key, Timeout) ->
     gen_server:call(ServerRef, {command, C, Key}, Timeout).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec command_all(server_ref(), command()) -> [reply()];
-                 (server_ref(), command_pipeline()) -> [reply_pipeline()].
-
--spec command_all(server_ref(), command(), timeout()) -> [reply()];
-                 (server_ref(), command_pipeline(), timeout()) -> [reply_pipeline()].
+-spec command_all(server_ref(), command()) -> [reply()].
+-spec command_all(server_ref(), command(), timeout()) -> [reply()].
 %%
 %% Send the same command to all connected master Redis nodes.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -116,11 +109,8 @@ command_all(ServerRef, Command, Timeout) ->
     [redis_client:command(ClientRef, Cmd, Timeout) || ClientRef <- get_clients(ServerRef)].
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec command_client(client_ref(), command()) -> [reply()];
-                    (client_ref(), command_pipeline()) -> [reply_pipeline()].
-
--spec command_client(client_ref(), command(), timeout()) -> [reply()];
-                    (client_ref(), command_pipeline(), timeout()) -> [reply_pipeline()].
+-spec command_client(client_ref(), command()) -> reply().
+-spec command_client(client_ref(), command(), timeout()) -> reply().
 %%
 %% Send the command to a specific Redis client without any client routing.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -131,9 +121,7 @@ command_client(ClientRef, Command, Timeout) ->
     redis_client:command(ClientRef, Command, Timeout).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec command_client_async(client_ref(), command(), fun()) -> ok;
-                          (client_ref(), command_pipeline(), fun()) -> ok.
-
+-spec command_client_async(client_ref(), command(), reply_fun()) -> ok.
 %%
 %% Send command to a specific Redis client in asynchronous fashion. The
 %% provided callback function will be called with the reply. Note that
