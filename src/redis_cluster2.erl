@@ -18,37 +18,17 @@
 -export_type([opt/0,
               addr/0]).
 
-%% from gen_sever.erl
--type server_ref() ::
-        pid()
-      | (LocalName :: atom())
-      | {Name :: atom(), Node :: atom()}
-      | {'global', GlobalName :: term()}
-      | {'via', RegMod :: module(), ViaName :: term()}.
 
--type addr() :: redis_client:addr(). %{inet:socket_address()|inet:hostname(), inet:port_number()}.
-
-
-
--type opt() :: {any(), any()}.
-
-
-
-
-%-type node_state() :: {init|connection_up|connection_down, pid()}.
-
--record(st, {% default_node :: undefined | {addr(), node_state()}, % will be used as default for slot map updates unless down
-
+-record(st, {
              cluster_state = nok :: ok | nok,
              initial_nodes = [] :: [addr()],
-             nodes = #{} :: #{addr() => pid()}, % TODO, rename to clients?
+             nodes = #{} :: #{addr() => pid()},
              up = new_set([]),
              masters = new_set([]),
              queue_full = new_set([]),
              slot_map = [],
              slot_map_version = 1,
              slot_timer_ref = none,
-%             node_ids = #{},
 
              info_pid = [] :: [pid()],
              update_delay = 1000, % 1s delay between slot map update requests
@@ -60,50 +40,80 @@
             }).
 
 
-% TODO
+-type addr() :: redis_client:addr().
+-type server_ref() :: pid().
+-type client_ref() :: redis_client:client_ref().
 
-% [ ] setting to allow partial slot maps?
-% [ ] DNS change?
-% [ ] add node if to info
-% [ ] Resolve DNS addr
-% [ ] Add master-replica distinction in connection status/ connection status for replica
-
-
-% node_id = #{id => sock_addr}
-% node_addr = #{sock_addr => pid}
-% node_status = #{pid => init|up|down}
-
-
-%% -record(nd, {id, sock_addr, client_pid, status}
-
-
-
-
+-type opt() ::
+        %% List of pids to receive cluster info messages. See redis_info_msg module.
+        {info_pid, [pid()]} |
+        %% CLUSTER SLOTS command is used to fetch slots from the Redis cluster.
+        %% This value sets how long to wait before trying to send the command again.
+        {update_slot_wait, non_neg_integer()} |
+        %% Options passed to the client
+        {client_opts, [redis_client:opt()]} |
+        %% For each Redis master node, the min number of replicas for the cluster
+        %% to be considered OK.
+        {min_replicas, non_neg_integer()} |
+        %% How long to delay the closing of clients that are no longer part of
+        %% the slot map. The delay is needed so that messages sent to the client
+        %% are not lost in transit.
+        {close_wait, non_neg_integer()}.
 
 
 %%%===================================================================
 %%% API
 %%%===================================================================
-start_link(Addrs, Opts) -> gen_server:start_link(?MODULE, [Addrs,
-Opts], []).
 
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec start_link([addr()], [opt()]) -> {ok, server_ref()} | {error, term()}.
+%%
+%% Start the cluster process. Clients will be set up to the provided
+%% addresses and cluster information will be retrieved.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+start_link(Addrs, Opts) ->
+    gen_server:start_link(?MODULE, [Addrs, Opts], []).
+
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec stop(server_ref()) -> ok.
+%%
+%% Stop the cluster handling process and in turn disconnect and stop
+%% all clients.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 stop(ServerRef) ->
     gen_server:stop(ServerRef).
 
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec update_slots(server_ref(), non_neg_integer(), client_ref()) -> ok.
+%%
+%% Trigger a CLUSTER SLOTS command towards the specified Redis node if
+%% the slot map version provided is the same as the one stored in the
+%% cluster process state. This is used when a cluster state change is
+%% detected with a MOVED redirection.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 update_slots(ServerRef, SlotMapVersion, Node) ->
     gen_server:cast(ServerRef, {trigger_map_update, SlotMapVersion, Node}).
 
-% -------------------------------------------------------------------
--spec get_slot_map_info(server_ref()) -> 
-          {
-           SlotMapVersion :: non_neg_integer(),
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec get_slot_map_info(server_ref()) ->
+          {SlotMapVersion :: non_neg_integer(),
            SlotMap :: redis_lib:slot_map(),
-           Clients :: #{addr() => pid()}
-          }.
-
+           Clients :: #{addr() => pid()}}.
+%%
+%% Fetch the cluster information. This provides the current slot map
+%% and a map with all the clients.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 get_slot_map_info(ServerRef) ->
     gen_server:call(ServerRef, get_slot_map_info).
 
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec connect_node(server_ref(), addr()) -> client_ref().
+%%
+%% Connect a client to the address and return a client reference. If a
+%% client already exists for the address return a reference. This is
+%% useful when a MOVE redirection is given to a address that has not
+%% been seen before.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 connect_node(ServerRef, Addr) ->
     gen_server:call(ServerRef, {connect_node, Addr}).
 
@@ -111,24 +121,17 @@ connect_node(ServerRef, Addr) ->
 %%% gen_server callbacks
 %%%===================================================================
 
-%inet:ip_address() | inet:hostname()
 init([Addrs, Opts]) ->
-%    process_flag(trap_exit, true),
     State = lists:foldl(
-              fun%% ({connection_opts, Val}, S) -> S#state{connection_opts = Val};
-                 %% ({max_waiting, Val}, S)     -> S#state{waiting = q_new(Val)};
-                 %% ({max_pending, Val}, S)     -> S#state{pending = q_new(Val)};
-                 %% ({reconnect_wait, Val}, S)  -> S#state{reconnect_wait = Val};
-                  ({info_pid, Val}, S)          -> S#st{info_pid = Val};
+              fun ({info_pid, Val}, S)         -> S#st{info_pid = Val};
                   ({update_slot_wait, Val}, S) -> S#st{update_slot_wait = Val};
-                  ({client_opts, Val}, S)     -> S#st{client_opts = Val};
+                  ({client_opts, Val}, S)      -> S#st{client_opts = Val};
                   ({min_replicas, Val}, S)     -> S#st{min_replicas = Val};
-                  ({close_wait, Val}, S)     -> S#st{close_wait = Val};
-                  (Other, _)                  -> error({badarg, Other})
+                  ({close_wait, Val}, S)       -> S#st{close_wait = Val};
+                  (Other, _)                   -> error({badarg, Other})
               end,
               #st{},
               Opts),
-
     {ok, State#st{initial_nodes = Addrs,
                   nodes = maps:from_list([{Addr, start_client(Addr, State)} || Addr <- Addrs])}}.
 
