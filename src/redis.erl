@@ -45,7 +45,7 @@
 -type reply() :: redis_client:command_reply().
 -type reply_pipeline() :: redis_client:command_reply_pipeline().
 -type key() :: binary().
--type client_ref() :: redis_client:client_ref().
+-type client_ref() :: redis_client:server_ref().
 
 %%%===================================================================
 %%% API

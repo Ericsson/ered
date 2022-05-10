@@ -6,14 +6,16 @@
          check_result/1,
          fix_ask_reply/2]).
 
--type command() :: {redis_command,
-                    non_neg_integer() | single,
-                    binary() | [binary()]}.
+-type redis_command() ::
+        {redis_command, non_neg_integer() | single, binary() | [binary()]}.
 
 -type raw_command() :: [binary()].
 -type raw_command_pipeline() :: [raw_command()].
 
+-type command() :: redis_command() | raw_command() | raw_command_pipeline().
+
 -export_type([command/0,
+              redis_command/0,
               raw_command/0,
               raw_command_pipeline/0]).
 

@@ -15,6 +15,14 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3, format_status/2]).
 
+-export_type([info_msg/0,
+              addr/0,
+              command_reply/0,
+              command_reply_pipeline/0,
+              server_ref/0,
+              opt/0
+             ]).
+
 
 -record(opts,
         {
@@ -32,15 +40,6 @@
          max_waiting = 5000     :: non_neg_integer(),
          max_pending = 128      :: non_neg_integer()
         }).
-
--type command_reply()          :: {ok, redis_connection:result()} | {error, command_error()}.
--type command_reply_pipeline() :: {ok, [redis_connection:result()]} | {error, command_error()}.
--type command_error()          :: queue_overflow | node_down | {client_stopped, reason()}.
--type command_callback()       :: fun((command_reply()) -> any()).
--type command_item()           :: {command, redis_command:command(), command_callback()}.
--type command_queue()          :: {Size :: non_neg_integer(), queue:queue(command_item())}.
-
-
 
 -record(st,
         {
@@ -60,6 +59,17 @@
 
         }).
 
+
+-type command_reply()          :: {ok, redis_connection:result()} | {error, command_error()}.
+-type command_reply_pipeline() :: {ok, [redis_connection:result()]} | {error, command_error()}.
+-type command_error()          :: queue_overflow | node_down | {client_stopped, reason()}.
+-type command_callback()       :: fun((command_reply()) -> any()).
+-type command_item()           :: {command, redis_command:redis_command(), command_callback()}.
+-type command_queue()          :: {Size :: non_neg_integer(), queue:queue(command_item())}.
+
+-type reply()       :: command_reply() | command_reply_pipeline().
+-type reply_fun()   :: fun((reply()) -> any()).
+
 -type host()        :: inet:socket_address() | inet:hostname().
 -type addr()        :: {host(), inet:port_number()}.
 -type node_id()     :: binary() | undefined.
@@ -68,30 +78,79 @@
 -type reason()      :: term(). % ssl reasons are of type any so no point being more specific
 -type down_reason() :: {client_stopped | connect_error | init_error | socket_closed, reason()}.
 -type info_msg()    :: {connection_status, client_info(), status()}.
--type client_ref()  :: pid().
+-type server_ref()  :: pid().
 
--export_type([info_msg/0,
-              addr/0,
-              command_reply/0,
-              command_reply_pipeline/0,
-              client_ref/0
-             ]).
+-type opt() ::
+        %% Options passed to the connection module
+        {connection_opts, [redis_connection:opt()]} |
+        %% Max number of commands allowed to wait in queue.
+        {max_waiting, non_neg_integer()} |
+        %% Max number of commands to be pending, i.e. sent to client
+        %% and waiting for a response.
+        {max_pending, non_neg_integer()} |
+        %% If the queue has been full then it is considered ok
+        %% again when it reaches this level
+        {queue_ok_level, non_neg_integer()} |
+        %% How long to wait to reconnect after a failed connect attempt
+        {reconnect_wait, non_neg_integer()} |
+        %% Pid to send status messages to
+        {info_pid, none | pid()} |
+        %% What RESP (REdis Serialization Protocol) version to use
+        {resp_version, 2..3} |
+        %% If there is a connection problem and the connection is
+        %% not recovered before this timeout then the client considers
+        %% the node down and will clear it's queue and reject all new
+        %% commands until connection is restored.
+        {node_down_timeout, non_neg_integer()} |
+        %% Set if the CLUSTER ID should be fetched used in info messages.
+        %% (not useful if the client is used outside of a cluster)
+        {use_cluster_id, boolean()}.
 
 %%%===================================================================
 %%% API
 %%%===================================================================
+
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec start_link(host(), inet:port_number(), [opt()]) ->
+          {ok, server_ref()} | {error, term()}.
+%%
+%% Start the client process. Create a connection towards the provided
+%% address.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 start_link(Host, Port, Opts) ->
     gen_server:start_link(?MODULE, [Host, Port, Opts], []).
 
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec stop(server_ref()) -> ok.
+%%
+%% Stop the client process. Cancel all commands in queue. Take down
+%% connection.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 stop(ServerRef) ->
     gen_server:stop(ServerRef).
 
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec command(server_ref(), redis_command:command()) -> reply().
+-spec command(server_ref(), redis_command:command(), timeout()) -> reply().
+%%
+%% Send a command to the connected Redis node. The argument can be a
+%% single command as a list of binaries, a pipeline of command as a
+%% list of commands or a formatted redis_command.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 command(ServerRef, Command) ->
     command(ServerRef, Command, infinity).
 
 command(ServerRef, Command, Timeout) ->
     gen_server:call(ServerRef, {command, redis_command:convert_to(Command)}, Timeout).
 
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec command_async(server_ref(), redis_command:command(), reply_fun()) -> ok.
+%%
+%% asynchronous fashion. The provided callback function will be called
+%% with the reply. Note that the callback function will executing in
+%% the redis client process and should not hang or perform any lengthy
+%% task.
+%%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 command_async(ServerRef, Command, CallbackFun) ->
     gen_server:cast(ServerRef, {command, redis_command:convert_to(Command), CallbackFun}).
 

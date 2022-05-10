@@ -42,7 +42,7 @@
 
 -type addr() :: redis_client:addr().
 -type server_ref() :: pid().
--type client_ref() :: redis_client:client_ref().
+-type client_ref() :: redis_client:server_ref().
 
 -type opt() ::
         %% List of pids to receive cluster info messages. See redis_info_msg module.
