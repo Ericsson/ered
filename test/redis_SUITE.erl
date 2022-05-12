@@ -141,7 +141,6 @@ t_hard_failover(_) ->
 
 t_manual_failover(_) ->
     R = start_cluster(),
-    %% "OK\n" = os:cmd("redis-cli -p 30005 CLUSTER FAILOVER"),
     SlotMaps = redis:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>]),
     ct:pal("~p\n", [SlotMaps]),
     [Client|_] = redis:get_clients(R),
@@ -273,28 +272,7 @@ group_by_hash(Keys) ->
                 end,
                 #{},
                 Keys).
- 
 
-
-%% 6> inet_db:add_host({127,0,0,2}, [apa]).  
-
-%% 33> inet_db:set_lookup([file]). 
-%% ok
-%% 34> inet_tcp:getaddrs(apa).                    
-%% {ok,[{127,0,0,2}]}
-%% 35> 
-
-
-
-%% TEST blocked master, slot update other node
-%% TEST connect no redis instance
-%% TEST cluster move
-%% TEST incomplete map connection status
-%% TEST pipeline
-%% TEST non-contiguous slots
-%% TEST TCP close from Redis, no alarm
-%% TEST packets dropped after reconnect timeout
-%% TEST DNS map to invalid addr, try next one
 
 %% Test to send and receive a big data packet. The read should be split
 t_split_data(_) ->
@@ -321,7 +299,6 @@ t_queue_full(_) ->
                    Loop(N-1)
     end(21),
 
-%    receive {reply, {error, queue_overflow}} -> ok after 10000 -> error(no_queue_overflow) end,
     recv({reply, {error, queue_overflow}}, 1000),
     [ct:pal("~p\n", [os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " CLIENT UNPAUSE")]) || Port <- Ports],
     msg(msg_type, queue_full),

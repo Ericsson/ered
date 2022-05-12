@@ -2,11 +2,6 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
--compile([export_all]).
-
-
-
-
 split_data_test() ->
     Data = iolist_to_binary([<<"A">> || _ <- lists:seq(0,3000)]),
     {ok, Conn1} = redis_connection:connect("127.0.0.1", 6379),
@@ -62,9 +57,3 @@ nested_list(1) ->
     <<"+A\r\n">>;
 nested_list(N) ->
    ["*", integer_to_list(N), "\r\n", [nested_list(N-1) || _ <- lists:seq(1, N)]].
-
-
-nested_list1(1) ->
-    <<"A">>;
-nested_list1(N) ->
-    [nested_list1(N-1) || _ <- lists:seq(1, N)].

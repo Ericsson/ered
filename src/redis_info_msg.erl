@@ -3,7 +3,6 @@
 -export([connection_status/3,
          slot_map_updated/3,
          cluster_slots_error_response/2,
-         cluster_slots_error_response/2,
          cluster_ok/1,
          cluster_nok/2
         ]).
@@ -48,11 +47,7 @@
           reason := master_down | master_node_queue_full | bad_slot_map}.
 
 
-
-
 -type addr() :: redis_client:addr().
--type slot_map() :: redis_lib:slot_map().
-
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec connection_status(redis_client:info_msg(), boolean(), [pid()]) -> ok.

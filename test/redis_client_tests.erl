@@ -261,14 +261,12 @@ expect_connection_up(Client) ->
     expect_connection_up(Client, infinity).
 
 expect_connection_up(Client, Timeout) ->
-    %% {connection_status, {<0.258.0>,{"127.0.0.1",55339},undefined}, connection_up}
     {connection_status, {Client,Addr,_undefined}, connection_up} = get_msg(Timeout).
 
 expect_connection_down(Client) ->
     expect_connection_down(Client, infinity).
 
 expect_connection_down(Client, Timeout) ->
-    %% {connection_status, {<0.250.0>,{"127.0.0.1",0},undefined}, {connection_down, {connect_error,econnrefused}}}
     {connection_status, {Client,Addr,_undefined}, {connection_down, Reason}} = get_msg(Timeout),
     Reason.
 
@@ -291,8 +289,4 @@ start_client(Port, Opt) ->
     {ok, Client} = redis_client:start_link("127.0.0.1", Port, [{info_pid, self()}, {resp_version,2}] ++ Opt),
     Client.
 
-%% close
-%% connect resp3/password/etc
-%% Add test description
-%% Add help function for receive
 
