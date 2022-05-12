@@ -16,13 +16,15 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3, format_status/2]).
 
+%%%===================================================================
+%%% Definitions
+%%%===================================================================
 
 -record(st, {cluster_pid :: pid(),
              slots :: binary(),
              clients = {} :: tuple(), % of pid()
              slot_map_version = 0 :: non_neg_integer(),
              addr_map = {},
-
              try_again_delay :: non_neg_integer(),
              redirect_attempts :: non_neg_integer()
             }).

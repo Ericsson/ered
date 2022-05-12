@@ -102,13 +102,11 @@ parse_blob_error(Bytes) ->
 parse_blob_string(Bytes) ->
     {cont, fun(Data) -> {done, Data} end, Bytes + 2}. % + 2 for /r/n
 
-
 parse_size(Data) ->
     case parse_integer(Data) of
 	Val when Val < 0 -> throw({parse_error, {invalid_size, Val}});
 	Val -> Val
     end.
-
 
 parse_integer(Data) ->
     try binary_to_integer(Data)
@@ -146,7 +144,6 @@ aggregate(Fun, Next) ->
 	    end
     end.
 
-
 parse_set(Acc) ->
     fun(done) -> Acc;
        (Val) -> parse_set(Acc#{Val => true})
@@ -161,7 +158,6 @@ parse_map(Acc, Key) ->
 		{Val, Key}   -> parse_map(Acc#{Key => Val}, none)
 	    end
     end.
-
 
 parse_array(Acc) ->
     fun(done) -> lists:reverse(Acc);

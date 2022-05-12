@@ -1,27 +1,45 @@
 -module(redis_connection).
 
--export([connect/2, connect/3, connect_async/3, command/2, command/3, command_async/3]).
+-export([connect/2,
+         connect/3,
+         connect_async/3,
+         command/2, command/3,
+         command_async/3]).
 
-
-%% -type option() ::
-%%         {batch_size, non_neg_integer()} |
-%%         {tcp_options, [inet:inet_backend() | connect_option()]} |
-%%         {push_cb, fun(
-%%          {response_timeout, non_neg_integer()}
-
-% record(recvst {socket, refs = [], push_cb}).
-% f(P), P = redis:connect("192.168.1.5", 6379), redis:command(P, <<"ping\r\n">>).
-
-%% TODO
-%%
-%% send quit at close
-
--type opts() :: any().
--type result() :: redis_parser:parse_result().
-
-
--eport_type([opts/0,
+-eport_type([opt/0,
              result/0]).
+
+
+%%%===================================================================
+%%% Definitions
+%%%===================================================================
+-record(recv_st, {socket :: gen_tcp:socket(),
+                  push_cb :: push_cb(),
+                  timeout :: non_neg_integer(), % miliseconds
+                  waiting = [] :: [wait_info()],
+                  waiting_since :: undefined | integer() % erlang:monotonic_time(millisecond)
+                 }).
+
+-type opt() ::
+        %% If commands are queued up in the process message queue this is the max
+        %% amount of messages that will be received and sent in one call
+        {batch_size, non_neg_integer()} |
+        %% Options passed to gen_tcp:connect
+        {tcp_options, [inet:inet_backend()|gen_tcp:options()]} |
+        %% Callback for push notifications
+        {push_cb, push_cb()} |
+        %% Timeout when waiting for a response from Redis. milliseconds
+        {response_timeout, non_neg_integer()}.
+
+-type result() :: redis_parser:parse_result().
+-type push_cb() :: fun((result()) -> any()).
+-type wait_info() :: {N :: non_neg_integer() | single, pid(), Ref :: any(), Acc :: [result()]}.
+% Acc used to store partial pipeline results
+
+%%%===================================================================
+%%% API
+%%%===================================================================
+
 
 command(Connection, Data) ->
     command(Connection, Data, 10000).
@@ -78,16 +96,13 @@ connect_async(Addr, Port, Opts) ->
                       Master ! {connect_error, SendPid, Reason}
               end
       end).
+%%%===================================================================
+%%% Internal functions
+%%%===================================================================
 
-%% ++++++++++++++++++++++++++++++++++++++
+
 %% Receive logic
-%% ++++++++++++++++++++++++++++++++++++++
--record(recv_st, {socket,
-                  push_cb,
-                  timeout,
-                  waiting = [],
-                  waiting_since}).
-
+ 
 
 recv_loop(Socket, PushCB, Timeout) ->
     ParseInit = redis_parser:next(redis_parser:init()),

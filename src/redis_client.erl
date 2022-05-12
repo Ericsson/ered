@@ -26,19 +26,19 @@
 
 -record(opts,
         {
-         host                   :: host(),
-         port                   :: inet:port_number(),
-         connection_opts = []   :: [redis_connection:opts()],
-         resp_version = 3       :: 2..3,
+         host :: host(),
+         port :: inet:port_number(),
+         connection_opts = [] :: [redis_connection:opts()],
+         resp_version = 3 :: 2..3,
          use_cluster_id = false :: boolean(),
-         reconnect_wait = 1000  :: non_neg_integer(),
+         reconnect_wait = 1000 :: non_neg_integer(),
 
-         node_down_timeout = 3000   :: non_neg_integer(),
-         info_pid = none        :: none | pid(),
-         queue_ok_level = 2000  :: non_neg_integer(),
+         node_down_timeout = 3000 :: non_neg_integer(),
+         info_pid = none :: none | pid(),
+         queue_ok_level = 2000 :: non_neg_integer(),
 
-         max_waiting = 5000     :: non_neg_integer(),
-         max_pending = 128      :: non_neg_integer()
+         max_waiting = 5000 :: non_neg_integer(),
+         max_pending = 128 :: non_neg_integer()
         }).
 
 -record(st,
