@@ -9,6 +9,9 @@
 -type redis_command() ::
         {redis_command, non_neg_integer() | single, binary() | [binary()]}.
 
+%% TODO document difference with pipeline and non-pipeline
+%% Handling of pipeline vs non-pipeline is not so nice. Since a pipeline
+
 -type raw_command() :: [binary()].
 -type raw_command_pipeline() :: [raw_command()].
 

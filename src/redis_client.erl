@@ -69,7 +69,7 @@
 -type reply()       :: command_reply() | command_reply_pipeline().
 -type reply_fun()   :: fun((reply()) -> any()).
 
--type host()        :: inet:socket_address() | inet:hostname().
+-type host()        :: redis_connection:host().
 -type addr()        :: {host(), inet:port_number()}.
 -type node_id()     :: binary() | undefined.
 -type client_info() :: {pid(), addr(), node_id()}.
@@ -145,11 +145,11 @@ command(ServerRef, Command, Timeout) ->
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec command_async(server_ref(), redis_command:command(), reply_fun()) -> ok.
 %%
-%% asynchronous fashion. The provided callback function will be called
-%% with the reply. Note that the callback function will executing in
-%% the redis client process and should not hang or perform any lengthy
-%% task.
-%%- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+%% Send a command to the connected Redis node in asynchronous
+%% fashion. The provided callback function will be called with the
+%% reply. Note that the callback function will executing in the redis
+%% client process and should not hang or perform any lengthy task.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 command_async(ServerRef, Command, CallbackFun) ->
     gen_server:cast(ServerRef, {command, redis_command:convert_to(Command), CallbackFun}).
 

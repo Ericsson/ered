@@ -33,33 +33,26 @@
 
 -type result() :: redis_parser:parse_result().
 -type push_cb() :: fun((result()) -> any()).
--type wait_info() :: {N :: non_neg_integer() | single, pid(), Ref :: any(), Acc :: [result()]}.
-% Acc used to store partial pipeline results
-
+-type wait_info() ::
+        {N :: non_neg_integer() | single,
+         pid(),
+         Ref :: any(),
+         Acc :: [result()]}. % Acc used to store partial pipeline results
+-type host() :: inet:socket_address() | inet:hostname().
+-type connect_result() :: {ok, connection_ref()} | {error, timeout | inet:posix()}.
+-type connection_ref() :: pid().
 %%%===================================================================
 %%% API
 %%%===================================================================
 
-
-command(Connection, Data) ->
-    command(Connection, Data, 10000).
-
-command(Connection, Data, Timeout) ->
-    link(Connection),
-    Ref = make_ref(),
-    Connection ! {send, self(), Ref, redis_command:convert_to(Data)},
-    receive {Ref, Value} ->
-            unlink(Connection),
-            Value
-    after Timeout ->
-            unlink(Connection),
-            {error, timeout}
-    end.
-
-command_async(Connection, Data, Ref) ->
-    Connection ! {send, self(), Ref, redis_command:convert_to(Data)},
-    ok.
-
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec connect(host(), inet:port_number()) -> connect_result().
+-spec connect(host(), inet:port_number(), [opt()]) -> connect_result().
+%%
+%% Connect to Redis node. Start send and receive process.
+%% When the connection is closed a socket_closed message will be sent.
+%% to the calling process.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 connect(Host, Port) ->
     connect(Host, Port, []).
 
@@ -72,6 +65,15 @@ connect(Host, Port, Opts) ->
             {error, Reason}
     end.
 
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec connect_async(host(), inet:port_number(), [opt()]) -> connect_result().
+%%
+%% Connect to Redis node. Start send and receive process.
+%% The function will return before connect is completed and a connected or
+%% connect_error message will be sent to the calling process.
+%% When the connection is closed a socket_closed message will be sent.
+%% to the calling process.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 connect_async(Addr, Port, Opts) ->
     [error({badarg, BadOpt}) || BadOpt <- proplists:get_keys(Opts) -- [batch_size, tcp_options, push_cb, response_timeout]],
     BatchSize = proplists:get_value(batch_size, Opts, 16),
@@ -96,13 +98,48 @@ connect_async(Addr, Port, Opts) ->
                       Master ! {connect_error, SendPid, Reason}
               end
       end).
+
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec command(client_ref(), redis_command:command()) -> reply().
+-spec command(client_ref(), redis_command:command(), timeout()) -> reply().
+%%
+%% Send a command to the connected Redis node. The argument can be a
+%% single command as a list of binaries, a pipeline of command as a
+%% list of commands or a formatted redis_command.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+command(Connection, Command) ->
+    command(Connection, Command, 10000).
+
+command(Connection, Command, Timeout) ->
+    link(Connection),
+    Ref = make_ref(),
+    Connection ! {send, self(), Ref, redis_command:convert_to(Command)},
+    receive {Ref, Value} ->
+            unlink(Connection),
+            Value
+    after Timeout ->
+            unlink(Connection),
+            {error, timeout}
+    end.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec command_async(client_ref(), redis_command:command(), reply_fun()) -> ok.
+%%
+%% Send a command to the connected Redis node in asynchronous
+%% fashion. The provided callback function will be called with the
+%% reply. Note that the callback function will executing in the redis
+%% client process and should not hang or perform any lengthy task.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+command_async(Connection, Data, Ref) ->
+    Connection ! {send, self(), Ref, redis_command:convert_to(Data)},
+    ok.
+
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
 
-
+%%
 %% Receive logic
- 
+%%
 
 recv_loop(Socket, PushCB, Timeout) ->
     ParseInit = redis_parser:next(redis_parser:init()),
@@ -196,9 +233,10 @@ update_waiting(Timeout, State) when State#recv_st.waiting == [] ->
 update_waiting(_Timeout, State) ->
     State.
 
-%% ++++++++++++++++++++++++++++++++++++++
+%%
 %% Send logic
-%% ++++++++++++++++++++++++++++++++++++++
+%%
+
 send_loop(Socket, RecvPid, BatchSize) ->
     case receive_data(BatchSize) of
         {recv_exit, Reason} ->
