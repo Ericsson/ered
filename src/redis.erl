@@ -29,7 +29,6 @@
              redirect_attempts :: non_neg_integer()
             }).
 
-
 -type opt() ::
         %% If there is a TRYAGAIN response from Redis then wait
         %% this many milliseconds before re-sending the command

@@ -66,7 +66,7 @@ connect(Host, Port, Opts) ->
     end.
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec connect_async(host(), inet:port_number(), [opt()]) -> connect_result().
+-spec connect_async(host(), inet:port_number(), [opt()]) -> connection_ref().
 %%
 %% Connect to Redis node. Start send and receive process.
 %% The function will return before connect is completed and a connected or
@@ -100,8 +100,8 @@ connect_async(Addr, Port, Opts) ->
       end).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec command(client_ref(), redis_command:command()) -> reply().
--spec command(client_ref(), redis_command:command(), timeout()) -> reply().
+-spec command(connection_ref(), redis_command:command()) -> result().
+-spec command(connection_ref(), redis_command:command(), timeout()) -> result().
 %%
 %% Send a command to the connected Redis node. The argument can be a
 %% single command as a list of binaries, a pipeline of command as a
@@ -122,7 +122,7 @@ command(Connection, Command, Timeout) ->
             {error, timeout}
     end.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec command_async(client_ref(), redis_command:command(), reply_fun()) -> ok.
+-spec command_async(connection_ref(), redis_command:command(), any()) -> ok.
 %%
 %% Send a command to the connected Redis node in asynchronous
 %% fashion. The provided callback function will be called with the
@@ -259,9 +259,6 @@ send_loop(Socket, RecvPid, BatchSize) ->
                     {send_exit, Reason}
             end
     end.
-
-
-
 
 receive_data(N) ->
     receive_data(N, infinity, []).

@@ -2,28 +2,47 @@
 
 -export([convert_to/1,
          get_count_and_data/1,
-         add_asking/2,
          check_result/1,
+         add_asking/2,
          fix_ask_reply/2]).
-
--type redis_command() ::
-        {redis_command, non_neg_integer() | single, binary() | [binary()]}.
-
-%% TODO document difference with pipeline and non-pipeline
-%% Handling of pipeline vs non-pipeline is not so nice. Since a pipeline
-
--type raw_command() :: [binary()].
--type raw_command_pipeline() :: [raw_command()].
-
--type command() :: redis_command() | raw_command() | raw_command_pipeline().
 
 -export_type([command/0,
               redis_command/0,
               raw_command/0,
               raw_command_pipeline/0]).
+%%%===================================================================
+%%% Definitions
+%%%===================================================================
 
--spec convert_to(binary() | iolist() | command()) -> command().
+%% The difference between a pipeline with N 1 and a with 'single'
+%% command is that the pipeline will return the result in a list. It
+%% would be nice to skip the 'single' and treat it as a pipeline with
+%% N 1 and just unpack it from the list in the calling process. The
+%% problem is when returning the result with a callback function in
+%% async. It could be handled by wrapping the callback fun in another
+%% fun that unpacks it. Not sure what is worse..
+-type redis_command() ::
+        {redis_command, single, binary()} | %% single command
+        {redis_command, non_neg_integer(), [iolist()]}. %% pipeline command
 
+
+-type raw_command() :: [binary()].
+-type raw_command_pipeline() :: [raw_command()].
+-type command() :: redis_command() | raw_command() | raw_command_pipeline().
+-type ok_result() :: {ok, redis_parser:parse_result()}.
+
+%%%===================================================================
+%%% API
+%%%===================================================================
+
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec convert_to(command()) -> redis_command().
+%%
+%% Convert a command or list of commands to RESP format
+%% (REdis Serialization Protocol).
+%% Commands are given as a list of binaries where the first element
+%% is the command and the rest are arguments.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 convert_to(Command = {redis_command, _, _}) ->
     Command;
 
@@ -50,10 +69,21 @@ command_to_bin(RawCommand) ->
     %% since then it will be heap allocated if big. Just pure speculation..
     iolist_to_binary(["*", Len, "\r\n", Elements]).
 
-
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec get_count_and_data(redis_command()) ->
+          {non_neg_integer(), [iolist()]} | {single, binary}.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 get_count_and_data({redis_command, Count, Data}) ->
     {Count, Data}.
 
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec check_result(ok_result() | any()) ->
+          normal |
+          try_again |
+          {moved | ask, redis_lib:addr()}.
+%%
+%% Check for results that need special handling.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 check_result({ok, Result}) when is_list(Result) ->
     check_for_special_reply(Result);
 check_result({ok, Result}) ->
@@ -83,11 +113,19 @@ parse_host_and_port(Bin) ->
     {binary_to_list(Host), binary_to_integer(Port)}.
 
 
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec add_asking(ok_result(), redis_command()) -> redis_command().
+%%
+%% Add ASKING for commands that got an ASK error. The Redis result is needed
+%% to filter out what commands to keep.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 add_asking(_, {redis_command, single, Command}) ->
     {redis_command, 2, [ <<"ASKING\r\n">>, Command]};
 
 add_asking({ok, OldReplies}, {redis_command, _N, Commands}) ->
-    %% Extract only the commands with ASK redirection
+    %% Extract only the commands with ASK redirection. Even if all commands go to
+    %% the same slot it does not have to be the same key. When using hash tags
+    %% for instance.
     AskCommands = add_asking_pipeline(OldReplies, Commands),
     %% ASK commands + ASKING
     N = length(AskCommands) * 2,
@@ -101,6 +139,12 @@ add_asking_pipeline([_ |Replies], [_ |Commands]) ->
     add_asking_pipeline(Replies, Commands).
 
 
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec fix_ask_reply(ok_result(), ok_result()) -> ok_result().
+%%
+%% Remove the OK reply from the ASKING command in the result and insert
+%% the other command replies into the old result, replacing the ASK errors
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 fix_ask_reply({ok, OldReplies}, {ok, NewReplies}) when is_list(OldReplies) ->
     {ok, merge_ask_result(OldReplies, NewReplies)};
 fix_ask_reply(_OldReply, {ok, [_AskOk, Reply]}) ->

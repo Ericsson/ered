@@ -1,10 +1,19 @@
 -module(redis_parser).
 
--export([init/0, next/1, continue/2]).
+-export([init/0,
+         next/1,
+         continue/2]).
 
-%% -----------------------------------------------------------------------------
-%% Definitions
-%% -----------------------------------------------------------------------------
+-export_type([parse_return/0,
+              parse_result/0
+             ]).
+%%%===================================================================
+%%% Definitions
+%%%===================================================================
+-record(parser_state, {data = <<>> :: binary(), % Data left
+		       next = fun parse_initial/1 :: parse_function(), % Next parsing action
+		       bytes_needed = 0 :: bytes_needed() % Bytes required to complete action, 0 is unspecified
+		      }).
 
 -type bytes_needed() :: non_neg_integer().
 
@@ -15,31 +24,40 @@
 			{attribute, parse_result(), parse_result()} | {push | parse_result()}.
 
 
--record(parser_state, {data = <<>> :: binary(), % Data left
-		       next = fun parse_initial/1 :: parse_function(), % Next parsing action
-		       bytes_needed = 0 :: bytes_needed() % Bytes required to complete action, 0 is unspecified
-		      }).
-
 -type parse_return() :: {done, parse_result(), #parser_state{}} | {need_more, bytes_needed(), #parser_state{}}.
-%% -----------------------------------------------------------------------------
-%% API
-%% -----------------------------------------------------------------------------
+
+%%%===================================================================
+%%% API
+%%%===================================================================
+
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec init() -> #parser_state{}.
+%%
+%% Init empty parser continuation
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 init() ->
     #parser_state{}.
 
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec next(#parser_state{}) -> parse_return().
+%%
+%% Get next result or continuation.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 next(State) ->
     parse(State).
 
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec continue(binary(), #parser_state{}) -> parse_return().
+%%
+%% Feed more data to the parser. Get next result or continuation.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 continue(NewData, State) ->
     Data = State#parser_state.data,
     parse(State#parser_state{data = <<Data/binary, NewData/binary>>}).
 
-%% -----------------------------------------------------------------------------
-%% Internal functions
-%% -----------------------------------------------------------------------------
+%%%===================================================================
+%%% Internal functions
+%%%===================================================================
 
 parse(State=#parser_state{data=Data, next=Fun, bytes_needed=Bytes}) ->
     case token(Data, Bytes) of
@@ -71,19 +89,19 @@ parse_initial(Token) ->
 	<<"+", Rest/binary>> -> {done, Rest}; % Simple string
 	<<"-", Rest/binary>> -> {done, {error, Rest}}; % error string
 	<<":", Rest/binary>> -> {done, parse_integer(Rest)};
-	<<"$-1"           >> -> {done, undefined}; % null bulk string
-	<<"$?">>             -> parse_stream_string(); % bulk/blob string
+	<<"$-1">>           -> {done, undefined}; % null bulk string
+	<<"$?">>            -> parse_stream_string(); % bulk/blob string
 	<<"$", Rest/binary>> -> parse_blob_string(parse_size(Rest)); % bulk/blob string
-	<<"*-1"           >> -> {done, undefined}; % null parse_array
+	<<"*-1">>           -> {done, undefined}; % null parse_array
 	<<"*?">>             -> aggregate_stream(parse_array([]));
 	<<"*", Rest/binary>> -> aggregate_N(parse_size(Rest), parse_array([]));
 	%% RESP3
-	<<"_"             >> -> {done, undefined}; % Null
-	<<",inf"          >> -> {done, inf}; % float inifinity
-	<<",-inf"         >> -> {done, neg_inf}; % negative infinity
+	<<"_" >>             -> {done, undefined}; % Null
+	<<",inf">>          -> {done, inf}; % float inifinity
+	<<",-inf">>         -> {done, neg_inf}; % negative infinity
 	<<",", Rest/binary>> -> {done, parse_float(Rest)};
-	<<"#t"            >> -> {done, true};
-	<<"#f"            >> -> {done, false};
+	<<"#t">>            -> {done, true};
+	<<"#f">>            -> {done, false};
 	<<"!", Rest/binary>> -> parse_blob_error(parse_size(Rest));
 	<<"=", Rest/binary>> -> parse_blob_string(parse_size(Rest)); % Verbatim string
 	<<"(", Rest/binary>> -> {done, parse_integer(Rest)}; % big int

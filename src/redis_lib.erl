@@ -1,20 +1,32 @@
 -module(redis_lib).
 
-%% TODO: Split this module into several?
-
 -export([
          slotmap_master_slots/1,
          slotmap_master_nodes/1,
          slotmap_all_nodes/1,
          hash/1]).
 
-
 -export_type([slot_map/0]).
 
--type slot_map_node() :: [binary() | non_neg_integer()]. % [Ip::binary(), Port::non_neg_integer(), Id::binary()].
--type slot_map() :: [non_neg_integer() | slot_map_node()]. %[SlotStart::non_neg_integer(), SlotEnd::non_neg_integer(), [slot_map_node()]]
+%%%===================================================================
+%%% Definitions
+%%%===================================================================
 
 
+-type slot_map_node() :: [binary() | non_neg_integer()].
+-type slot_map() :: [non_neg_integer() | slot_map_node()].
+-type addr() :: {host(), inet:port_number()}.
+-type host() :: inet:socket_address() | inet:hostname().
+
+%%%===================================================================
+%%% API
+%%%===================================================================
+
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec slotmap_master_slots(slot_map()) -> [{integer(), integer(), addr()}].
+%%
+%% Get slot range and master node addresses
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 slotmap_master_slots(ClusterSlotsReply) ->
 
     %% [[10923,16383,
@@ -38,11 +50,20 @@ slotmap_master_slots(ClusterSlotsReply) ->
                || [SlotStart, SlotEnd, Master | _] <- ClusterSlotsReply],
     lists:sort(SlotMap).
 
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec slotmap_master_nodes(slot_map()) -> [addr()].
+%%
+%% Get master node addresses
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 slotmap_master_nodes(ClusterSlotsReply) ->
     Nodes = [node_info(Master) || [_SlotStart, _SlotEnd, Master | _] <- ClusterSlotsReply],
     lists:sort(Nodes).
 
-
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec slotmap_all_nodes(slot_map()) -> [addr()].
+%%
+%% Get all node addresses
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 slotmap_all_nodes(ClusterSlotsReply) ->
     AllNodes = [lists:map(fun node_info/1, Nodes) || [_SlotStart, _SlotEnd | Nodes] <- ClusterSlotsReply],
     lists:sort(lists:append(AllNodes)).
@@ -50,6 +71,11 @@ slotmap_all_nodes(ClusterSlotsReply) ->
 node_info([Ip, Port |_]) ->
     {binary_to_list(Ip), Port}.
 
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec hash(binary()) -> non_neg_integer().
+%%
+%% Redis hash function (CRC16)
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 hash(Key) ->
     crc16(0, Key) rem 16384.
 
@@ -87,7 +113,7 @@ hash(Key) ->
 		  16#6e,16#17,16#7e,16#36,16#4e,16#55,16#5e,16#74,16#2e,16#93,16#3e,16#b2,16#0e,16#d1,16#1e,16#f0
 		>>).
 
-% key1 -> 9189
+
 crc16(Crc, <<>>) ->
     Crc;
 crc16(Crc, <<B, Bs/binary>>) ->
