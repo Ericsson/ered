@@ -1,10 +1,13 @@
 -module(redis_client).
 
+%% Queues messages for a specific node. Manages reconnects and resends
+%% in case of error. Reports connection status with status messages.
+%% This is implemented as one gen_server for message queue and a
+%% separate process to handle reconnects.
+
 -behaviour(gen_server).
 
 %% API
-
-
 
 -export([start_link/3,
          stop/1,
@@ -23,6 +26,9 @@
               reply_fun/0
              ]).
 
+%%%===================================================================
+%%% Definitions
+%%%===================================================================
 
 -record(opts,
         {
@@ -60,13 +66,11 @@
         }).
 
 
--type command_reply()          :: {ok, redis_connection:result()} | {error, command_error()}.
--type command_reply_pipeline() :: {ok, [redis_connection:result()]} | {error, command_error()}.
 -type command_error()          :: queue_overflow | node_down | {client_stopped, reason()}.
 -type command_item()           :: {command, redis_command:redis_command(), reply_fun()}.
 -type command_queue()          :: {Size :: non_neg_integer(), queue:queue(command_item())}.
 
--type reply()       :: command_reply() | command_reply_pipeline().
+-type reply()       :: {ok, redis_connection:result()} | {error, command_error()}.
 -type reply_fun()   :: fun((reply()) -> any()).
 
 -type host()        :: redis_connection:host().
@@ -222,7 +226,6 @@ handle_info({timeout, TimerRef, node_down}, State) when TimerRef == State#st.nod
     State1 = reply_all({error, node_down}, State),
     {noreply, process_commands(State1#st{node_down = true})};
 
-
 handle_info({timeout, _TimerRef, _Msg}, State) ->
     {noreply, State}.
 
@@ -304,6 +307,7 @@ drop_commands(State) ->
             State
     end.
 
+%% Some wrapper functions for queue + size for n(1) len checks
 q_new() ->
     {0, queue:new()}.
 
@@ -354,7 +358,7 @@ send_info(Msg, State) ->
     ok.
 
 
-connect(Pid, Opts) -> % Host, Port, Opts, ReconnectWait, ConnectTimeout) ->
+connect(Pid, Opts) ->
     Result = redis_connection:connect(Opts#opts.host, Opts#opts.port, Opts#opts.connection_opts),
     case Result of
         {error, Reason} ->

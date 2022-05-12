@@ -1,5 +1,9 @@
-
 -module(redis).
+
+%% External API for using connecting and sending commands to Redis cluster.
+%%
+%% This module is responsible for doing the command routing to the correct
+%% redis node and handle command redirection replies.
 
 -behaviour(gen_server).
 
@@ -159,7 +163,6 @@ init([Addrs, Opts1]) ->
              try_again_delay = TryAgainDelay,
              redirect_attempts = RedirectAttempts}}.
 
-
 handle_call({command, Command, Key}, From, State) ->
     Slot = redis_lib:hash(Key),
     send_command_to_slot(Command, Slot, From, State, State#st.redirect_attempts),
@@ -167,7 +170,6 @@ handle_call({command, Command, Key}, From, State) ->
 
 handle_call(get_clients, _From, State) ->
     {reply, tuple_to_list(State#st.clients), State}.
-
 
 handle_cast({forward_command, Command, Slot, From, Addr, AttemptsLeft}, State) ->
     {Client, State1} = connect_addr(Addr, State),
@@ -186,8 +188,6 @@ handle_cast({forward_command_asking, Command, Slot, From, Addr, AttemptsLeft, Ol
 handle_info({command_try_again, Command, Slot, From, AttemptsLeft}, State) ->
     send_command_to_slot(Command, Slot, From, State, AttemptsLeft),
     {noreply, State};
-
-
 
 handle_info(#{msg_type := slot_map_updated}, State) ->
     {MapVersion, ClusterMap, AddrToPid} = redis_cluster2:get_slot_map_info(State#st.cluster_pid),
@@ -240,7 +240,6 @@ send_command_to_slot(Command, Slot, From, State, AttemptsLeft) ->
     end,
     ok.
 
-
 create_reply_fun(_Command, _Slot, _Client, From, _State, 0) ->
     fun(Reply) -> gen_server:reply(From, Reply) end;
 
@@ -288,7 +287,6 @@ create_lookup_table(N, L = [{Start, End, Val} | Rest], Acc) ->
             create_lookup_table(N, Rest, Acc)
     end.
 
-
 connect_addr(Addr, State) ->
     case maps:get(Addr, State#st.addr_map, not_found) of
         not_found ->
@@ -297,7 +295,6 @@ connect_addr(Addr, State) ->
         Client ->
             {Client, State}
     end.
-
 
 take_prop(Key, List, Default) ->
     Val = proplists:get_value(Key, List, Default),

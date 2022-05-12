@@ -1,5 +1,10 @@
 -module(redis_cluster2).
 
+%% Cluster handling module. Keeps track of clients and keeps the slot map
+%% up to date. Cluster status can be monitored by subscribing to info
+%% messages.
+
+
 -behaviour(gen_server).
 
 %% API

@@ -6,7 +6,8 @@
          slotmap_all_nodes/1,
          hash/1]).
 
--export_type([slot_map/0]).
+-export_type([slot_map/0,
+              addr/0]).
 
 %%%===================================================================
 %%% Definitions

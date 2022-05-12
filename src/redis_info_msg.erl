@@ -1,5 +1,7 @@
 -module(redis_info_msg).
 
+%% Functions used to format and send info messages
+
 -export([connection_status/3,
          slot_map_updated/3,
          cluster_slots_error_response/2,
@@ -9,6 +11,10 @@
 
 
 -export_type([info_msg/0]).
+
+%%%===================================================================
+%%% Definitions
+%%%===================================================================
 
 -type node_info(MsgType, Reason) ::
         #{msg_type := MsgType,
@@ -48,6 +54,10 @@
 
 
 -type addr() :: redis_client:addr().
+
+%%%===================================================================
+%%% API
+%%%===================================================================
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec connection_status(redis_client:info_msg(), boolean(), [pid()]) -> ok.

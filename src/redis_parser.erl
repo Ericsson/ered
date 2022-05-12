@@ -1,5 +1,7 @@
 -module(redis_parser).
 
+%% RESP3 (REdis Serialization Protocol) parser.
+
 -export([init/0,
          next/1,
          continue/2]).
@@ -7,9 +9,11 @@
 -export_type([parse_return/0,
               parse_result/0
              ]).
+
 %%%===================================================================
 %%% Definitions
 %%%===================================================================
+
 -record(parser_state, {data = <<>> :: binary(), % Data left
 		       next = fun parse_initial/1 :: parse_function(), % Next parsing action
 		       bytes_needed = 0 :: bytes_needed() % Bytes required to complete action, 0 is unspecified

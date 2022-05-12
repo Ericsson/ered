@@ -1,5 +1,7 @@
 -module(redis_command).
 
+%% Command formatting and related functions.
+
 -export([convert_to/1,
          get_count_and_data/1,
          check_result/1,

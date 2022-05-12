@@ -1,5 +1,13 @@
 -module(redis_connection).
 
+%% Managing the socket, sending commands and receiving replies.
+%% Batches messages from the process queue. One process handles
+%% writing to the socket and one handles the reading and decoding.
+%% After a command is sent in the sending process a message is sent to
+%% the reading process informing it about how many replies to expect
+%% and who expects the result. No reconnection handling, if there is
+%% an error the processes will exit.
+
 -export([connect/2,
          connect/3,
          connect_async/3,
