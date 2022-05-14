@@ -43,10 +43,10 @@ init_per_suite(Config) ->
     ct:pal(R),
     timer:sleep(1000),
     lists:foreach(fun(Port) ->
-			  {ok,Pid} = redis_client:start_link("127.0.0.1", Port, []),
-			  {ok, <<"PONG">>} = redis_client:command(Pid, <<"ping">>)
-		  end,
-		  [30001, 30002, 30003, 30004, 30005, 30006]),
+                          {ok,Pid} = redis_client:start_link("127.0.0.1", Port, []),
+                          {ok, <<"PONG">>} = redis_client:command(Pid, <<"ping">>)
+                  end,
+                  [30001, 30002, 30003, 30004, 30005, 30006]),
     os:cmd(" echo 'yes' | docker run --name redis-cluster --net=host -i redis redis-cli --cluster create 127.0.0.1:30001 127.0.0.1:30002 127.0.0.1:30003 127.0.0.1:30004 127.0.0.1:30005 127.0.0.1:30006 --cluster-replicas 1"),
 
     %% Wait for cluster to be fully up. If not then we get a "CLUSTERDOWN The cluster is down" error when sending commands.
@@ -56,12 +56,12 @@ init_per_suite(Config) ->
 
 end_per_suite(Config) ->
     os:cmd("docker stop redis-cluster; docker rm redis-cluster;"
-	   "docker stop redis-1; docker rm redis-1;"
-	   "docker stop redis-2; docker rm redis-2;"
-	   "docker stop redis-3; docker rm redis-3;"
-	   "docker stop redis-4; docker rm redis-4;"
-	   "docker stop redis-5; docker rm redis-5;"
-	   "docker stop redis-6; docker rm redis-6;"
+           "docker stop redis-1; docker rm redis-1;"
+           "docker stop redis-2; docker rm redis-2;"
+           "docker stop redis-3; docker rm redis-3;"
+           "docker stop redis-4; docker rm redis-4;"
+           "docker stop redis-5; docker rm redis-5;"
+           "docker stop redis-6; docker rm redis-6;"
            "docker stop redis-7; docker rm redis-7"). % redis-7 used in t_new_cluster_master
 
 

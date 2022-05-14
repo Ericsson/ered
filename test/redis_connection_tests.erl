@@ -16,16 +16,16 @@ trailing_reply_test() ->
     ?debugFmt("~w", [size(BigNastyData)]),
 
     spawn_link(fun() ->
-		       {ok, ListenSock} = gen_tcp:listen(0, [binary, {active , false}]),
-		       {ok, Port} = inet:port(ListenSock),
-		       Pid ! {port, Port},
-		       {ok, Sock} = gen_tcp:accept(ListenSock),
-		       {ok, <<"*1\r\n$4\r\nping\r\n">>} = gen_tcp:recv(Sock, 0),
-		       ok = gen_tcp:send(Sock, BigNastyData),
-		       ok = gen_tcp:shutdown(Sock, write),
-		       Pid ! sent_big_nasty,
-		       receive ok -> ok end
-	       end),
+                       {ok, ListenSock} = gen_tcp:listen(0, [binary, {active , false}]),
+                       {ok, Port} = inet:port(ListenSock),
+                       Pid ! {port, Port},
+                       {ok, Sock} = gen_tcp:accept(ListenSock),
+                       {ok, <<"*1\r\n$4\r\nping\r\n">>} = gen_tcp:recv(Sock, 0),
+                       ok = gen_tcp:send(Sock, BigNastyData),
+                       ok = gen_tcp:shutdown(Sock, write),
+                       Pid ! sent_big_nasty,
+                       receive ok -> ok end
+               end),
     {port, Port} = receive_msg(),
     %% increase receive buffer to fit the whole nasty data package
     {ok, Conn1} = redis_connection:connect("127.0.0.1", Port, [{batch_size, 1},

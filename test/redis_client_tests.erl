@@ -25,11 +25,11 @@ request_t() ->
     {ok, ListenSock} = gen_tcp:listen(0, [binary, {active , false}]),
     {ok, Port} = inet:port(ListenSock),
     spawn_link(fun() ->
-		       {ok, Sock} = gen_tcp:accept(ListenSock),
-		       {ok, <<"*1\r\n$4\r\nping\r\n">>} = gen_tcp:recv(Sock, 0),
-		       ok = gen_tcp:send(Sock, <<"+pong\r\n">>),
-		       receive ok -> ok end
-	       end),
+                       {ok, Sock} = gen_tcp:accept(ListenSock),
+                       {ok, <<"*1\r\n$4\r\nping\r\n">>} = gen_tcp:recv(Sock, 0),
+                       ok = gen_tcp:send(Sock, <<"+pong\r\n">>),
+                       receive ok -> ok end
+               end),
     Client = start_client(Port),
     {ok, <<"pong">>} = redis_client:command(Client, <<"ping">>).
 
@@ -45,22 +45,22 @@ fail_parse_t() ->
     {ok, ListenSock} = gen_tcp:listen(0, [binary, {active , false}]),
     {ok, Port} = inet:port(ListenSock),
     spawn_link(fun() ->
-		       {ok, Sock} = gen_tcp:accept(ListenSock),
-		       {ok, <<"*1\r\n$4\r\nping\r\n">>} = gen_tcp:recv(Sock, 0),
-		       %% bad format of message
-		       ok = gen_tcp:send(Sock, <<"&pong\r\n">>),
+                       {ok, Sock} = gen_tcp:accept(ListenSock),
+                       {ok, <<"*1\r\n$4\r\nping\r\n">>} = gen_tcp:recv(Sock, 0),
+                       %% bad format of message
+                       ok = gen_tcp:send(Sock, <<"&pong\r\n">>),
 
-		       %% resend from client
-		       {ok, Sock2} = gen_tcp:accept(ListenSock),
-		       {ok, <<"*1\r\n$4\r\nping\r\n">>} = gen_tcp:recv(Sock2, 0),
-		       ok = gen_tcp:send(Sock2, <<"+pong\r\n">>),
-		       receive ok -> ok end
-	       end),
+                       %% resend from client
+                       {ok, Sock2} = gen_tcp:accept(ListenSock),
+                       {ok, <<"*1\r\n$4\r\nping\r\n">>} = gen_tcp:recv(Sock2, 0),
+                       ok = gen_tcp:send(Sock2, <<"+pong\r\n">>),
+                       receive ok -> ok end
+               end),
     Client = start_client(Port),
     Pid = self(),
     spawn_link(fun() ->
-		       Pid ! redis_client:command(Client, <<"ping">>)
-	       end),
+                       Pid ! redis_client:command(Client, <<"ping">>)
+               end),
     expect_connection_up(Client),
     Reason = {recv_exit, {parse_error,{invalid_data,<<"&pong">>}}},
     receive {connection_status, _ClientInfo, {socket_closed, Reason}} -> ok end,
@@ -72,13 +72,13 @@ server_close_socket_t() ->
     {ok, ListenSock} = gen_tcp:listen(0, [binary, {active , false}]),
     {ok, Port} = inet:port(ListenSock),
     spawn_link(fun() ->
-		       {ok, Sock} = gen_tcp:accept(ListenSock),
-		       gen_tcp:close(Sock),
+                       {ok, Sock} = gen_tcp:accept(ListenSock),
+                       gen_tcp:close(Sock),
 
-		       %% resend from client
-		       {ok, Sock2} = gen_tcp:accept(ListenSock),
-		       receive ok -> ok end
-	       end),
+                       %% resend from client
+                       {ok, Sock2} = gen_tcp:accept(ListenSock),
+                       receive ok -> ok end
+               end),
     Client = start_client(Port),
     expect_connection_up(Client),
     receive {connection_status, _ClientInfo, {socket_closed, {recv_exit, closed}}} -> ok end,
@@ -89,9 +89,9 @@ bad_request_t() ->
     {ok, ListenSock} = gen_tcp:listen(0, [binary, {active , false}]),
     {ok, Port} = inet:port(ListenSock),
     spawn_link(fun() ->
-		       {ok, Sock} = gen_tcp:accept(ListenSock),
-		       receive ok -> ok end
-	       end),
+                       {ok, Sock} = gen_tcp:accept(ListenSock),
+                       receive ok -> ok end
+               end),
     Client = start_client(Port),
     expect_connection_up(Client),
     ?_assertException(error, badarg, redis_client:command(Client, bad_request)).
@@ -101,26 +101,26 @@ server_buffer_full_t() ->
     {ok, ListenSock} = gen_tcp:listen(0, [binary, {active , false}]),
     {ok, Port} = inet:port(ListenSock),
     spawn_link(fun() ->
-		       {ok, Sock} = gen_tcp:accept(ListenSock),
-		       % expect 5 ping
-		       Ping = <<"*1\r\n$4\r\nping\r\n">>,
-		       Expected = iolist_to_binary(lists:duplicate(5, Ping)),
-		       {ok, Expected} = gen_tcp:recv(Sock, size(Expected)),
-		       % should be nothing more since only 5 pending
-		       {error, timeout} = gen_tcp:recv(Sock, 0, 0),
+                       {ok, Sock} = gen_tcp:accept(ListenSock),
+                       % expect 5 ping
+                       Ping = <<"*1\r\n$4\r\nping\r\n">>,
+                       Expected = iolist_to_binary(lists:duplicate(5, Ping)),
+                       {ok, Expected} = gen_tcp:recv(Sock, size(Expected)),
+                       % should be nothing more since only 5 pending
+                       {error, timeout} = gen_tcp:recv(Sock, 0, 0),
 
-		       timer:sleep(500),
+                       timer:sleep(500),
 
-		       gen_tcp:send(Sock, lists:duplicate(5, <<"+pong\r\n">>)),
+                       gen_tcp:send(Sock, lists:duplicate(5, <<"+pong\r\n">>)),
 
-		       % next the 5 waiting
-		       {ok, Expected} = gen_tcp:recv(Sock, size(Expected)),
-		       % should be nothing more since only 5 pending
-		       {error, timeout} = gen_tcp:recv(Sock, 0, 0),
-		       gen_tcp:send(Sock, lists:duplicate(5, <<"+pong\r\n">>)),
+                       % next the 5 waiting
+                       {ok, Expected} = gen_tcp:recv(Sock, size(Expected)),
+                       % should be nothing more since only 5 pending
+                       {error, timeout} = gen_tcp:recv(Sock, 0, 0),
+                       gen_tcp:send(Sock, lists:duplicate(5, <<"+pong\r\n">>)),
 
-		       receive ok -> ok end
-	       end),
+                       receive ok -> ok end
+               end),
     Client = start_client(Port, [{max_waiting, 5}, {max_pending, 5}, {queue_ok_level,1}]),
     expect_connection_up(Client),
 
@@ -138,25 +138,25 @@ server_buffer_full_reconnect_t() ->
     {ok, ListenSock} = gen_tcp:listen(0, [binary, {active , false}]),
     {ok, Port} = inet:port(ListenSock),
     spawn_link(fun() ->
-		       {ok, Sock} = gen_tcp:accept(ListenSock),
-		       % expect 5 ping
-		       Ping = <<"*1\r\n$4\r\nping\r\n">>,
-		       Expected = iolist_to_binary(lists:duplicate(5, Ping)),
-		       {ok, Expected} = gen_tcp:recv(Sock, size(Expected)),
-		       % should be nothing more since only 5 pending
-		       {error, timeout} = gen_tcp:recv(Sock, 0, 0),
+                       {ok, Sock} = gen_tcp:accept(ListenSock),
+                       % expect 5 ping
+                       Ping = <<"*1\r\n$4\r\nping\r\n">>,
+                       Expected = iolist_to_binary(lists:duplicate(5, Ping)),
+                       {ok, Expected} = gen_tcp:recv(Sock, size(Expected)),
+                       % should be nothing more since only 5 pending
+                       {error, timeout} = gen_tcp:recv(Sock, 0, 0),
 
-		       gen_tcp:close(Sock),
+                       gen_tcp:close(Sock),
 
-		       {ok, Sock2} = gen_tcp:accept(ListenSock),
-		       {ok, Expected} = gen_tcp:recv(Sock2, size(Expected)),
+                       {ok, Sock2} = gen_tcp:accept(ListenSock),
+                       {ok, Expected} = gen_tcp:recv(Sock2, size(Expected)),
 
-		       gen_tcp:send(Sock2, lists:duplicate(5, <<"+pong\r\n">>)),
-		       % should be nothing more since only 5 pending
-		       {error, timeout} = gen_tcp:recv(Sock2, 0, 0),
-		       receive ok -> ok end
+                       gen_tcp:send(Sock2, lists:duplicate(5, <<"+pong\r\n">>)),
+                       % should be nothing more since only 5 pending
+                       {error, timeout} = gen_tcp:recv(Sock2, 0, 0),
+                       receive ok -> ok end
 
-	       end),
+               end),
     Client = start_client(Port, [{max_waiting, 5}, {max_pending, 5}, {queue_ok_level,1}]),
     expect_connection_up(Client),
 
@@ -167,7 +167,7 @@ server_buffer_full_reconnect_t() ->
     %% 1 message over the limit, first one in queue gets kicked out
     {6, {error, queue_overflow}} = get_msg(),
     receive {connection_status, _ClientInfo, {socket_closed, {recv_exit, closed}}} -> ok end,
-    %% when connection goes down the pending messages will be put in the queue and the queue 
+    %% when connection goes down the pending messages will be put in the queue and the queue
     %% will overflow kicking out the oldest first
     [{N, {error, queue_overflow}} = get_msg() || N <- [1,2,3,4,5]],
     receive {connection_status, _ClientInfo, queue_ok} -> ok end,
@@ -180,15 +180,15 @@ server_buffer_full_node_goes_down_t() ->
     {ok, ListenSock} = gen_tcp:listen(0, [binary, {active , false}]),
     {ok, Port} = inet:port(ListenSock),
     spawn_link(fun() ->
-		       {ok, Sock} = gen_tcp:accept(ListenSock),
-		       % expect 5 ping
-		       Ping = <<"*1\r\n$4\r\nping\r\n">>,
-		       Expected = iolist_to_binary(lists:duplicate(5, Ping)),
-		       {ok, Expected} = gen_tcp:recv(Sock, size(Expected)),
-		       % should be nothing more since only 5 pending
-		       {error, timeout} = gen_tcp:recv(Sock, 0, 0),
+                       {ok, Sock} = gen_tcp:accept(ListenSock),
+                       % expect 5 ping
+                       Ping = <<"*1\r\n$4\r\nping\r\n">>,
+                       Expected = iolist_to_binary(lists:duplicate(5, Ping)),
+                       {ok, Expected} = gen_tcp:recv(Sock, size(Expected)),
+                       % should be nothing more since only 5 pending
+                       {error, timeout} = gen_tcp:recv(Sock, 0, 0),
                        gen_tcp:close(ListenSock)
-	       end),
+               end),
     Client = start_client(Port, [{max_waiting, 5}, {max_pending, 5}, {queue_ok_level,1}, {node_down_timeout, 100}]),
     expect_connection_up(Client),
 
@@ -210,22 +210,22 @@ bad_option_t() ->
 
 bad_connection_option_t() ->
     ?_assertError({badarg,bad_option}, redis_client:start_link("127.0.0.1", 0,
-							       [{info_pid, self()},
-								{connection_opts, [bad_option]}])).
+                                                               [{info_pid, self()},
+                                                                {connection_opts, [bad_option]}])).
 
 send_timeout_t() ->
     {ok, ListenSock} = gen_tcp:listen(0, [binary, {active , false}]),
     {ok, Port} = inet:port(ListenSock),
     spawn_link(fun() ->
-		       {ok, Sock} = gen_tcp:accept(ListenSock),
-		       {ok, <<"*1\r\n$4\r\nping\r\n">>} = gen_tcp:recv(Sock, 0),
+                       {ok, Sock} = gen_tcp:accept(ListenSock),
+                       {ok, <<"*1\r\n$4\r\nping\r\n">>} = gen_tcp:recv(Sock, 0),
 
-		       % do nothing more on first socket, wait for timeout and reconnect
-		       {ok, Sock2} = gen_tcp:accept(ListenSock),
-		       {ok, <<"*1\r\n$4\r\nping\r\n">>} = gen_tcp:recv(Sock2, 0),
-		       ok = gen_tcp:send(Sock2, <<"+pong\r\n">>),
-		       receive ok -> ok end
-	       end),
+                       % do nothing more on first socket, wait for timeout and reconnect
+                       {ok, Sock2} = gen_tcp:accept(ListenSock),
+                       {ok, <<"*1\r\n$4\r\nping\r\n">>} = gen_tcp:recv(Sock2, 0),
+                       ok = gen_tcp:send(Sock2, <<"+pong\r\n">>),
+                       receive ok -> ok end
+               end),
     Client = start_client(Port, [{connection_opts, [{response_timeout, 100}]}]),
     expect_connection_up(Client),
     Pid = self(),
@@ -241,16 +241,16 @@ fail_hello_t() ->
     {ok, Port} = inet:port(ListenSock),
     Pid = self(),
     spawn_link(fun() ->
-		       {ok, Sock} = gen_tcp:accept(ListenSock),
-		       {ok, <<"*2\r\n$5\r\nHELLO\r\n$1\r\n3\r\n">>} = gen_tcp:recv(Sock, 0),
+                       {ok, Sock} = gen_tcp:accept(ListenSock),
+                       {ok, <<"*2\r\n$5\r\nHELLO\r\n$1\r\n3\r\n">>} = gen_tcp:recv(Sock, 0),
                        ok = gen_tcp:send(Sock, <<"-NOPROTO unsupported protocol version\r\n">>),
 
                        %% test resend
-		       {ok, <<"*2\r\n$5\r\nHELLO\r\n$1\r\n3\r\n">>} = gen_tcp:recv(Sock, 0),
+                       {ok, <<"*2\r\n$5\r\nHELLO\r\n$1\r\n3\r\n">>} = gen_tcp:recv(Sock, 0),
                        ok = gen_tcp:send(Sock, <<"-NOPROTO unsupported protocol version\r\n">>),
 
                        Pid ! done
-	       end),
+               end),
     {ok,Client} = redis_client:start_link("127.0.0.1", Port, [{info_pid, self()}]),
     {init_error, [<<"NOPROTO unsupported protocol version">>]} = expect_connection_down(Client),
     receive done -> ok end,

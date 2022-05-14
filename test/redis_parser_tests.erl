@@ -34,23 +34,23 @@ test_data() ->
      {"big number",        <<"(3492890328409238509324850943850943825024385\r\n">>,     3492890328409238509324850943850943825024385},
      {"map",               <<"%2\r\n+first\r\n:1\r\n+second\r\n:2\r\n">>,              #{<<"first">> => 1, <<"second">> => 2}},
      {"set",               <<"~5\r\n+orange\r\n+apple\r\n#t\r\n:100\r\n:999\r\n">>,    #{<<"orange">> => true, <<"apple">> => true,
-										        true => true, 100 => true, 999 => true}},
+                                                                                        true => true, 100 => true, 999 => true}},
      {"attribute",         <<"|1\r\n+key-popularity\r\n%2\r\n$1\r\na\r\n,0.1923\r\n"
-			     "$1\r\nb\r\n,0.0012\r\n*2\r\n:2039123\r\n:9543892\r\n">>,  {attribute, [2039123, 9543892],
-											 #{<<"key-popularity">> =>
-											       #{<<"a">> => 0.1923,
-												 <<"b">> => 0.0012}}}},
+                             "$1\r\nb\r\n,0.0012\r\n*2\r\n:2039123\r\n:9543892\r\n">>,  {attribute, [2039123, 9543892],
+                                                                                         #{<<"key-popularity">> =>
+                                                                                               #{<<"a">> => 0.1923,
+                                                                                                 <<"b">> => 0.0012}}}},
      {"nested attribute",  <<"*3\r\n:1\r\n:2\r\n|1\r\n+ttl\r\n:3600\r\n:3\r\n">>,       [1, 2, {attribute, 3, #{<<"ttl">> =>3600}}]},
      {"push",              <<">4\r\n+pubsub\r\n+message\r\n+somechannel\r\n"
-			     "+this is the message\r\n">>,                              {push, [<<"pubsub">>, <<"message">>,
-												<<"somechannel">>,
-												<<"this is the message">>]}},
+                             "+this is the message\r\n">>,                              {push, [<<"pubsub">>, <<"message">>,
+                                                                                                <<"somechannel">>,
+                                                                                                <<"this is the message">>]}},
      {"streamed string",  <<"$?\r\n;4\r\nHell\r\n;5\r\no wor\r\n;1\r\nd\r\n;0\r\n">>,   <<"Hello word">>},
      {"streamed array",   <<"*?\r\n:1\r\n:2\r\n:3\r\n.\r\n">>,                          [1, 2, 3]},
      {"streamed map",     <<"%?\r\n+a\r\n:1\r\n+b\r\n:2\r\n.\r\n">>,                    #{<<"a">> => 1, <<"b">> => 2}},
       %% Additional tests
      {"streamed set",     <<"~?\r\n+a\r\n:1\r\n+b\r\n:2\r\n.\r\n">>,                    #{<<"a">> => true, 1 => true,
-											  <<"b">> => true, 2 => true}},
+                                                                                          <<"b">> => true, 2 => true}},
      {"float negative", <<",-1.23\r\n">>, -1.23}
     ].
 
@@ -75,13 +75,13 @@ parse_fail_test_() ->
 
 decode_err(In, Expected) ->
     fun() ->
-	    try
-		A = redis_parser:continue(In, redis_parser:init()),
-		exit({unexpected_success, A})
-	    catch
-		throw:{parse_error, Err} ->
-		    ?assertEqual(Expected, Err)
-	    end
+            try
+                A = redis_parser:continue(In, redis_parser:init()),
+                exit({unexpected_success, A})
+            catch
+                throw:{parse_error, Err} ->
+                    ?assertEqual(Expected, Err)
+            end
     end.
 
 
@@ -90,16 +90,16 @@ run_with(Fun) ->
 
 run(DataList, Expected) when is_list(DataList) ->
     fun() ->
-	    fun F([Data|Rest], State) ->
-		    case redis_parser:continue(Data, State) of
-			{done, Result, NewState} ->
-			    ?assertEqual(Expected, Result),
-			    % No lefteover data in state
-			    ?assertEqual(redis_parser:init(), NewState),
-			    % No unparsed data
-			    ?assertEqual([], Rest);
-			{need_more, _, NewState} ->
-			    F(Rest, NewState)
-		    end
-	    end(DataList, redis_parser:init())
+            fun F([Data|Rest], State) ->
+                    case redis_parser:continue(Data, State) of
+                        {done, Result, NewState} ->
+                            ?assertEqual(Expected, Result),
+                            % No lefteover data in state
+                            ?assertEqual(redis_parser:init(), NewState),
+                            % No unparsed data
+                            ?assertEqual([], Rest);
+                        {need_more, _, NewState} ->
+                            F(Rest, NewState)
+                    end
+            end(DataList, redis_parser:init())
     end.
