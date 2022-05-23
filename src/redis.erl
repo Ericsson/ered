@@ -14,7 +14,8 @@
          command_all/2, command_all/3,
          command_client/2, command_client/3,
          command_client_async/3,
-         get_clients/1]).
+         get_clients/1,
+         get_addr_to_client_map/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -144,6 +145,14 @@ command_client_async(ClientRef, Command, CallbackFun) ->
 get_clients(ServerRef) ->
     gen_server:call(ServerRef, get_clients).
 
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec get_addr_to_client_map(server_ref()) -> #{addr() => client_ref()}.
+%%
+%% Get the address to client mapping. This includes all clients.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+get_addr_to_client_map(ServerRef) ->
+    gen_server:call(ServerRef, get_addr_to_client_map).
+
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
@@ -169,7 +178,10 @@ handle_call({command, Command, Key}, From, State) ->
     {noreply, State};
 
 handle_call(get_clients, _From, State) ->
-    {reply, tuple_to_list(State#st.clients), State}.
+    {reply, tuple_to_list(State#st.clients), State};
+
+handle_call(get_addr_to_client_map, _From, State) ->
+    {reply, State#st.addr_map, State}.
 
 handle_cast({forward_command, Command, Slot, From, Addr, AttemptsLeft}, State) ->
     {Client, State1} = connect_addr(Addr, State),

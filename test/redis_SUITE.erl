@@ -19,7 +19,8 @@ all() ->
      t_queue_full,
      t_kill_client,
      t_new_cluster_master,
-     t_ask_redirect
+     t_ask_redirect,
+     t_client_map
     ].
 
 
@@ -474,7 +475,11 @@ t_ask_redirect(_) ->
     no_more_msgs(),
     ok.
 
-
+t_client_map(_) ->
+    R = start_cluster(),
+    Expected = [{"127.0.0.1", Port} || Port <- [30001, 30002, 30003, 30004, 30005, 30006]],
+    Map = redis:get_addr_to_client_map(R),
+    Expected = lists:sort(maps:keys(Map)).
 
 
 move_key(SourcePort, DestPort, Key) ->
