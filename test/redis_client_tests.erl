@@ -201,6 +201,9 @@ server_buffer_full_node_goes_down_t() ->
     receive {connection_status, _ClientInfo, queue_ok} -> ok end,
     receive {connection_status, _ClientInfo, {connection_down, {connect_error,econnrefused}}} -> ok end,
     [{N, {error, node_down}} = get_msg() || N <- [7,8,9,10,11]],
+
+    %% aditional commands should get a node down
+    {error, node_down} =  redis_client:command(Client, <<"ping">>),
     no_more_msgs().
 
 

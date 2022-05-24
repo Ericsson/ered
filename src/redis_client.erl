@@ -188,7 +188,8 @@ handle_call({command, Command}, From, State) ->
 handle_cast(Command, State) ->
     if
         State#st.node_down ->
-            {noreply, reply_command(Command, {error, node_down})};
+            reply_command(Command, {error, node_down}),
+            {noreply, State};
         true ->
             {noreply, process_commands(State#st{waiting = q_in(Command, State#st.waiting)})}
     end.
@@ -248,11 +249,10 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-reply_all(Reply, State = #st{waiting = Waiting, pending = Pending}) ->
-    [reply_command(Command, Reply) || Command <- q_to_list(Pending)],
-    [reply_command(Command, Reply) || Command <- q_to_list(Waiting)],
+reply_all(Reply, State) ->
+    [reply_command(Command, Reply) || Command <- q_to_list(State#st.pending)],
+    [reply_command(Command, Reply) || Command <- q_to_list(State#st.waiting)],
     State#st{waiting = q_new(), pending = q_new()}.
-
 
 start_node_down_timer(State) ->
     case State#st.node_down_timer of
