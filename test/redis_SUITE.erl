@@ -590,7 +590,7 @@ get_all_masters(R) ->
 
 get_master_from_key(R, Key) ->
     Slot = redis_lib:hash(Key),
-    hd([Port || [SlotStart, SlotEnd, [_Ip, Port| _] | _] <- get_slot_map(R), 
+    hd([Port || [SlotStart, SlotEnd, [_Ip, Port| _] | _] <- get_slot_map(R),
                 SlotStart =< Slot,
                 Slot =< SlotEnd]).
 

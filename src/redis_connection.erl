@@ -14,8 +14,9 @@
          command/2, command/3,
          command_async/3]).
 
--eport_type([opt/0,
-             result/0]).
+-export_type([opt/0,
+             result/0,
+             host/0]).
 
 
 %%%===================================================================
@@ -33,7 +34,7 @@
         %% amount of messages that will be received and sent in one call
         {batch_size, non_neg_integer()} |
         %% Options passed to gen_tcp:connect
-        {tcp_options, [inet:inet_backend()|gen_tcp:options()]} |
+        {tcp_options, [gen_tcp:connect_option()]} |
         %% Callback for push notifications
         {push_cb, push_cb()} |
         %% Timeout when waiting for a response from Redis. milliseconds

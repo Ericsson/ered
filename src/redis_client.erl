@@ -34,7 +34,7 @@
         {
          host :: host(),
          port :: inet:port_number(),
-         connection_opts = [] :: [redis_connection:opts()],
+         connection_opts = [] :: [redis_connection:opt()],
          resp_version = 3 :: 2..3,
          use_cluster_id = false :: boolean(),
          reconnect_wait = 1000 :: non_neg_integer(),
