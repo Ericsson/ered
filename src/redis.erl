@@ -257,17 +257,21 @@ create_reply_fun(_Command, _Slot, _Client, From, _State, 0) ->
 
 create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft) ->
     Pid = self(),
+    %% Avoid copying the #st record inside the fun
+    ClusterPid = State#st.cluster_pid,
+    SlotMapVersion = State#st.slot_map_version,
+    TryAgainDelay = State#st.try_again_delay,
     fun(Reply) ->
             case redis_command:check_result(Reply) of
                 normal ->
                     gen_server:reply(From, Reply);
                 {moved, Addr} ->
-                    redis_cluster2:update_slots(State#st.cluster_pid, State#st.slot_map_version, Client),
+                    redis_cluster2:update_slots(ClusterPid, SlotMapVersion, Client),
                     gen_server:cast(Pid, {forward_command, Command, Slot, From, Addr, AttemptsLeft-1});
                 {ask, Addr} ->
                     gen_server:cast(Pid, {forward_command_asking, Command, Slot, From, Addr, AttemptsLeft-1, Reply});
                 try_again ->
-                    erlang:send_after(State#st.try_again_delay, Pid, {command_try_again, Command, Slot, From, AttemptsLeft-1})
+                    erlang:send_after(TryAgainDelay, Pid, {command_try_again, Command, Slot, From, AttemptsLeft-1})
             end
     end.
 
