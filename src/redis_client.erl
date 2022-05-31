@@ -39,7 +39,7 @@
          use_cluster_id = false :: boolean(),
          reconnect_wait = 1000 :: non_neg_integer(),
 
-         node_down_timeout = 3000 :: non_neg_integer(),
+         node_down_timeout = 2000 :: non_neg_integer(),
          info_pid = none :: none | pid(),
          queue_ok_level = 2000 :: non_neg_integer(),
 
@@ -79,7 +79,7 @@
 -type client_info() :: {pid(), addr(), node_id()}.
 -type status()      :: connection_up | {connection_down, down_reason()} | queue_ok | queue_full.
 -type reason()      :: term(). % ssl reasons are of type any so no point being more specific
--type down_reason() :: {client_stopped | connect_error | init_error | socket_closed, reason()}.
+-type down_reason() :: node_down_timeout | {client_stopped | connect_error | init_error | socket_closed, reason()}.
 -type info_msg()    :: {connection_status, client_info(), status()}.
 -type server_ref()  :: pid().
 
@@ -209,10 +209,10 @@ handle_info({command_reply, _Pid, _Reply}, State) ->
     {noreply, State};
 
 handle_info(Reason = {connect_error, _ErrorReason}, State) ->
-    {noreply, connection_down({connection_down, Reason}, State)};
+    {noreply, connection_down(Reason, State)};
 
 handle_info(Reason = {init_error, _Errors}, State) ->
-    {noreply, connection_down({connection_down, Reason}, State)};
+    {noreply, connection_down(Reason, State)};
 
 handle_info(Reason = {socket_closed, _CloseReason}, State) ->
     {noreply, connection_down(Reason, State)};
@@ -224,8 +224,9 @@ handle_info({connected, Pid, ClusterId}, State) ->
     {noreply, process_commands(State2#st{node_down = false})};
 
 handle_info({timeout, TimerRef, node_down}, State) when TimerRef == State#st.node_down_timer ->
-    State1 = reply_all({error, node_down}, State),
-    {noreply, process_commands(State1#st{node_down = true})};
+    State1 = report_connection_status({connection_down, node_down_timeout}, State),
+    State2 = reply_all({error, node_down}, State1),
+    {noreply, process_commands(State2#st{node_down = true})};
 
 handle_info({timeout, _TimerRef, _Msg}, State) ->
     {noreply, State}.
@@ -267,7 +268,7 @@ connection_down(Reason, State) ->
                       pending = q_new(),
                       connection_pid = none},
     State2 = process_commands(State1),
-    State3 = report_connection_status(Reason, State2),
+    State3 = report_connection_status({connection_down, Reason}, State2),
     start_node_down_timer(State3).
 
 
@@ -343,7 +344,15 @@ report_connection_status(Status, State) ->
     ClusterId = State#st.cluster_id,
     Msg = {connection_status, {self(), {Host, Port}, ClusterId}, Status},
     send_info(Msg, State),
-    State#st{last_status = Status}.
+    case Status of
+        %% Skip saving the last_status in this to avoid an extra connect_error event.
+        %% The usual case is that there is a connect_error and then node_down and then
+        %% more connect_errors..
+        {connection_down, node_down_timeout} ->
+            State;
+        _ ->
+            State#st{last_status = Status}
+    end.
 
 
 -spec send_info(info_msg(), #st{}) -> ok.

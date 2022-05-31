@@ -63,7 +63,7 @@ fail_parse_t() ->
                end),
     expect_connection_up(Client),
     Reason = {recv_exit, {parse_error,{invalid_data,<<"&pong">>}}},
-    receive {connection_status, _ClientInfo, {socket_closed, Reason}} -> ok end,
+    receive {connection_status, _ClientInfo, {connection_down, {socket_closed, Reason}}} -> ok end,
     expect_connection_up(Client),
     {ok, <<"pong">>} = get_msg().
 
@@ -81,7 +81,7 @@ server_close_socket_t() ->
                end),
     Client = start_client(Port),
     expect_connection_up(Client),
-    receive {connection_status, _ClientInfo, {socket_closed, {recv_exit, closed}}} -> ok end,
+    receive {connection_status, _ClientInfo, {connection_down, {socket_closed, {recv_exit, closed}}}} -> ok end,
     expect_connection_up(Client).
 
 
@@ -166,7 +166,7 @@ server_buffer_full_reconnect_t() ->
     receive {connection_status, _ClientInfo, queue_full} -> ok end,
     %% 1 message over the limit, first one in queue gets kicked out
     {6, {error, queue_overflow}} = get_msg(),
-    receive {connection_status, _ClientInfo, {socket_closed, {recv_exit, closed}}} -> ok end,
+    receive {connection_status, _ClientInfo, {connection_down, {socket_closed, {recv_exit, closed}}}} -> ok end,
     %% when connection goes down the pending messages will be put in the queue and the queue
     %% will overflow kicking out the oldest first
     [{N, {error, queue_overflow}} = get_msg() || N <- [1,2,3,4,5]],
@@ -196,10 +196,11 @@ server_buffer_full_node_goes_down_t() ->
     [redis_client:command_async(Client, <<"ping">>, fun(Reply) -> Pid ! {N, Reply} end) || N <- lists:seq(1,11)],
     receive {connection_status, _ClientInfo, queue_full} -> ok end,
     {6, {error, queue_overflow}} = get_msg(),
-    receive {connection_status, _ClientInfo, {socket_closed, {recv_exit, closed}}} -> ok end,
+    receive {connection_status, _ClientInfo, {connection_down, {socket_closed, {recv_exit, closed}}}} -> ok end,
     [{N, {error, queue_overflow}} = get_msg() || N <- [1,2,3,4,5]],
     receive {connection_status, _ClientInfo, queue_ok} -> ok end,
     receive {connection_status, _ClientInfo, {connection_down, {connect_error,econnrefused}}} -> ok end,
+    receive {connection_status, _ClientInfo, {connection_down, node_down_timeout}} -> ok end,
     [{N, {error, node_down}} = get_msg() || N <- [7,8,9,10,11]],
 
     %% aditional commands should get a node down
@@ -234,7 +235,7 @@ send_timeout_t() ->
     Pid = self(),
     redis_client:command_async(Client, <<"ping">>, fun(Reply) -> Pid ! {reply, Reply} end),
     % this should come after max 1000ms
-    receive {connection_status, _ClientInfo, {socket_closed, {recv_exit, timeout}}} -> ok after 2000 -> error(timeout) end,
+    receive {connection_status, _ClientInfo, {connection_down, {socket_closed, {recv_exit, timeout}}}} -> ok after 2000 -> timeout_error() end,
     expect_connection_up(Client),
     {reply, {ok, <<"pong">>}} = get_msg(),
     no_more_msgs().
@@ -292,4 +293,6 @@ start_client(Port, Opt) ->
     {ok, Client} = redis_client:start_link("127.0.0.1", Port, [{info_pid, self()}, {resp_version,2}] ++ Opt),
     Client.
 
+timeout_error() ->
+    error({timeout, erlang:process_info(self(), messages)}).
 

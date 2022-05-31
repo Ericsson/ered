@@ -118,6 +118,8 @@ t_hard_failover(_) ->
     ?MSG(#{msg_type := connect_error, addr := {localhost, Port}, reason := econnrefused}),
     ?MSG(#{msg_type := connect_error, addr := {"127.0.0.1", Port}, reason := econnrefused}),
 
+    ?MSG(#{msg_type := node_down_timeout, addr := {localhost, Port}}, 2500),
+    ?MSG(#{msg_type := node_down_timeout, addr := {"127.0.0.1", Port}}, 2500),
 
     ?MSG(#{msg_type := slot_map_updated}, 5000),
 
@@ -190,6 +192,7 @@ t_init_timeout(_) ->
     {ok, P} = redis:start_link([{localhost, 30001}], [{info_pid, [self()]}] ++ Opts),
 
     ?MSG(#{msg_type := socket_closed, reason := {recv_exit, timeout}}, 3500),
+    ?MSG(#{msg_type := node_down_timeout, addr := {localhost, 30001}}, 2500),
     %% Does not work on  Redis before 6.2.0.
     ct:pal("~p\n", [os:cmd("redis-cli -p 30001 CLIENT UNPAUSE")]),
 
@@ -349,6 +352,8 @@ t_new_cluster_master(_) ->
     Moved = cmd_log("redis-cli -p 30007 GET " ++ binary_to_list(Key)),
     SourcePort = string:trim(lists:nth(2, string:split(Moved, ":"))),
     DestPort = "30007",
+
+    cmd_until("redis-cli -p 30007 CLUSTER MEET 127.0.0.1 " ++ SourcePort, "OK"),
     %% Move the data to new master
     move_key(SourcePort, DestPort, Key),
 

@@ -174,6 +174,10 @@ handle_info(Msg = {connection_status, {Pid, Addr, _Id} , Status}, State) ->
             IsMaster = sets:is_element(Addr, State#st.masters),
             redis_info_msg:connection_status(Msg, IsMaster, State#st.info_pid),
             State1 = case Status of
+                         {connection_down, {socket_closed, _}} ->
+                             %% Avoid triggering the alarm for a normal from peer side.
+                             %% The cluster will be marked down on connect or node down event.
+                             State;
                          {connection_down,_} ->
                              State#st{up = sets:del_element(Addr, State#st.up)};
                          connection_up ->
@@ -181,10 +185,7 @@ handle_info(Msg = {connection_status, {Pid, Addr, _Id} , Status}, State) ->
                          queue_full ->
                              State#st{queue_full = sets:add_element(Addr, State#st.queue_full)};
                          queue_ok ->
-                             State#st{queue_full = sets:del_element(Addr, State#st.queue_full)};
-                         {socket_closed, _} ->
-                             State
-
+                             State#st{queue_full = sets:del_element(Addr, State#st.queue_full)}
                      end,
             {noreply, update_cluster_status(State1)};
         % old client

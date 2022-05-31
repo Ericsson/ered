@@ -34,6 +34,8 @@
 
         node_info(init_error, any()) |
 
+        node_info(node_down_timeout, none) |
+
         node_info(queue_ok, none) |
 
         node_info(queue_full, none) |
@@ -69,11 +71,11 @@ connection_status(ClientInfo, IsMaster, Pids) ->
     {connection_status, {Pid, Addr, Id} , Status} =  ClientInfo,
     {MsgType, Reason} =
         case Status of
-            connection_up -> {connected, ok};
-            {connection_down, R} -> R;
-            queue_full -> {queue_full, ok};
-            queue_ok -> {queue_ok, ok};
-            {socket_closed, R} -> {socket_closed, R}
+            connection_up                        -> {connected, none};
+            {connection_down, R} when is_atom(R) -> {R, none};
+            {connection_down, R}                 -> R;
+            queue_full                           -> {queue_full, none};
+            queue_ok                             -> {queue_ok, none}
         end,
     send_info(#{msg_type => MsgType,
                 reason => Reason,

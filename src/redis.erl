@@ -257,7 +257,8 @@ create_reply_fun(_Command, _Slot, _Client, From, _State, 0) ->
 
 create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft) ->
     Pid = self(),
-    %% Avoid copying the #st record inside the fun
+    %% Avoid binding the #st record inside the fun since the fun will be
+    %% copied to another process
     ClusterPid = State#st.cluster_pid,
     SlotMapVersion = State#st.slot_map_version,
     TryAgainDelay = State#st.try_again_delay,
