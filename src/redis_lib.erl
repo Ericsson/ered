@@ -69,8 +69,14 @@ slotmap_all_nodes(ClusterSlotsReply) ->
     AllNodes = [lists:map(fun node_info/1, Nodes) || [_SlotStart, _SlotEnd | Nodes] <- ClusterSlotsReply],
     lists:sort(lists:append(AllNodes)).
 
-node_info([Ip, Port |_]) ->
-    {binary_to_list(Ip), Port}.
+node_info([Ip, Port |_])  ->
+    if
+        is_binary(Ip) ->
+            {binary_to_list(Ip), Port};
+        true ->
+            %% Ip can be undefined here. Not supported (yet)..
+            {Ip, Port}
+    end.
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec hash(binary()) -> non_neg_integer().
