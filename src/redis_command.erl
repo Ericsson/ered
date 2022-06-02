@@ -103,6 +103,8 @@ check_for_special_reply([Head|Tail]) ->
             {moved, parse_host_and_port(Bin)};
         {error, <<"ASK ", Bin/binary>>} ->
             {ask, parse_host_and_port(Bin)};
+        {error, <<"CLUSTERDOWN ", _/binary>>} ->
+            cluster_down;
         _ ->
             check_for_special_reply(Tail)
     end.

@@ -220,20 +220,16 @@ handle_info(#{msg_type := slot_map_updated}, State) ->
                        slot_map_version = MapVersion,
                        addr_map = AddrToPid}};
 
-
 handle_info(_Ignore, State) ->
     %% Could use a proxy process to receive the slot map udate to avoid this catch all handle_info
     {noreply, State}.
-
 
 terminate(_Reason, State) ->
     redis_cluster2:stop(State#st.cluster_pid),
     ok.
 
-
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
-
 
 format_status(_Opt, Status) ->
     Status.
@@ -272,7 +268,10 @@ create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft) ->
                 {ask, Addr} ->
                     gen_server:cast(Pid, {forward_command_asking, Command, Slot, From, Addr, AttemptsLeft-1, Reply});
                 try_again ->
-                    erlang:send_after(TryAgainDelay, Pid, {command_try_again, Command, Slot, From, AttemptsLeft-1})
+                    erlang:send_after(TryAgainDelay, Pid, {command_try_again, Command, Slot, From, AttemptsLeft-1});
+                cluster_down ->
+                    redis_cluster2:update_slots(ClusterPid, SlotMapVersion, Client),
+                    gen_server:reply(From, Reply)
             end
     end.
 
