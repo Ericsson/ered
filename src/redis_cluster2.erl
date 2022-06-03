@@ -29,11 +29,22 @@
 
 -record(st, {
              cluster_state = nok :: ok | nok,
+             %% The initial configured nodes will be prioritized when
+             %% fetching new slot maps and clients to these will not
+             %% be closed even if they are not part of the current
+             %% slot map
              initial_nodes = [] :: [addr()],
+             %% Mapping from address to client for all known clients
              nodes = #{} :: #{addr() => pid()},
-             up = new_set([]),
-             masters = new_set([]),
-             queue_full = new_set([]),
+             %% Clients in connected state
+             up = new_set([]) :: addr_set(),
+             %% Clients that are currently masters
+             masters = new_set([]) :: addr_set(),
+             %% Clients with a full queue
+             queue_full = new_set([]) :: addr_set(),
+             %% Clients started but not connected yet
+             pending = new_set([]) :: addr_set(),
+
              slot_map = [],
              slot_map_version = 1,
              slot_timer_ref = none,
@@ -49,6 +60,7 @@
 
 
 -type addr() :: redis_client:addr().
+-type addr_set() :: sets:set(addr()).
 -type server_ref() :: pid().
 -type client_ref() :: redis_client:server_ref().
 
@@ -138,10 +150,10 @@ init([Addrs, Opts]) ->
                   ({close_wait, Val}, S)       -> S#st{close_wait = Val};
                   (Other, _)                   -> error({badarg, Other})
               end,
-              #st{},
+              #st{initial_nodes = Addrs},
               Opts),
-    {ok, State#st{initial_nodes = Addrs,
-                  nodes = maps:from_list([{Addr, start_client(Addr, State)} || Addr <- Addrs])}}.
+    {ok, start_clients(Addrs, State)}.
+
 
 handle_call(get_slot_map_info, _From, State) ->
     Nodes = redis_lib:slotmap_all_nodes(State#st.slot_map),
@@ -150,13 +162,10 @@ handle_call(get_slot_map_info, _From, State) ->
     {reply,Reply,State};
 
 handle_call({connect_node, Addr}, _From, State) ->
-    case maps:get(Addr, State#st.nodes, not_found) of
-        not_found ->
-            ClientPid = start_client(Addr, State),
-            {reply, ClientPid, State#st{nodes = maps:put(Addr, ClientPid, State#st.nodes)}};
-        ClientPid ->
-            {reply, ClientPid, State}
-    end.
+    State1 = start_clients([Addr], State),
+    ClientPid = maps:get(Addr, State1#st.nodes),
+    {reply, ClientPid, State1}.
+
 
 handle_cast({trigger_map_update, SlotMapVersion, Node}, State) ->
     case SlotMapVersion == State#st.slot_map_version of
@@ -177,9 +186,11 @@ handle_info(Msg = {connection_status, {Pid, Addr, _Id} , Status}, State) ->
                              %% The cluster will be marked down on connect or node down event.
                              State;
                          {connection_down,_} ->
-                             State#st{up = sets:del_element(Addr, State#st.up)};
+                             State#st{up = sets:del_element(Addr, State#st.up),
+                                      pending = sets:del_element(Addr, State#st.pending)};
                          connection_up ->
-                             State#st{up = sets:add_element(Addr, State#st.up)};
+                             State#st{up = sets:add_element(Addr, State#st.up),
+                                      pending = sets:del_element(Addr, State#st.pending)};
                          queue_full ->
                              State#st{queue_full = sets:add_element(Addr, State#st.queue_full)};
                          queue_ok ->
@@ -232,28 +243,19 @@ handle_info({slot_info, Version, Response}, State) ->
                     Remove = lists:foldl(fun maps:without/2,
                                          State#st.nodes,
                                          [State#st.initial_nodes, Nodes, sets:to_list(State#st.up)]),
-
-                    %% these nodes already has clients
-                    KeepNodes = maps:without(maps:keys(Remove), State#st.nodes),
-                    %% open clients to new nodes not seen before
-                    NewOpenNodes = maps:from_list([{Addr, start_client(Addr, State)}
-                                                   || Addr <- Nodes,
-                                                      not maps:is_key(Addr, State#st.nodes)]),
-
-                    NewNodes = maps:merge(KeepNodes, NewOpenNodes),
-
-                    redis_info_msg:slot_map_updated(ClusterSlotsReply, Version + 1, State#st.info_pid),
-
                     %% The close is delayed to give time to update slot map and to handle any
                     %% messages in transit
                     erlang:send_after(State#st.close_wait, self(), {close_clients, Remove}),
 
-                    State1 = State#st{slot_map_version = Version + 1,
-                                      slot_map = NewMap,
-                                      masters = MasterNodes,
-                                      nodes = maps:merge(KeepNodes, NewNodes)},
+                    redis_info_msg:slot_map_updated(ClusterSlotsReply, Version + 1, State#st.info_pid),
 
-                    {noreply, update_cluster_state(State1)}
+                    %% open new clients
+                    State1 = start_clients(Nodes, State),
+                    State2 = State1#st{slot_map_version = Version + 1,
+                                       slot_map = NewMap,
+                                       masters = MasterNodes},
+
+                    {noreply, update_cluster_state(State2)}
             end
     end;
 
@@ -292,7 +294,8 @@ new_set(List) ->
 check_cluster_status(State) ->
     case is_slot_map_ok(State) of
         ok ->
-            case sets:is_subset(State#st.masters, State#st.up) of
+            NonPendingMasters = sets:subtract(State#st.masters, State#st.pending),
+            case sets:is_subset(NonPendingMasters, State#st.up) of
                 false ->
                     master_down;
                 true ->
@@ -300,7 +303,12 @@ check_cluster_status(State) ->
                         false ->
                             master_queue_full;
                         true ->
-                            ok
+                            case sets:is_disjoint(State#st.masters, State#st.pending) of
+                                false ->
+                                    pending;
+                                true ->
+                                    ok
+                            end
                     end
             end;
         Reason ->
@@ -317,6 +325,8 @@ update_cluster_state(ClusterStatus, State) ->
             State1 = stop_periodic_slot_info_request(State),
             State1#st{cluster_state = ok};
         {ok, ok} ->
+            State;
+        {pending, _} ->
             State;
         {_, ok} ->
             redis_info_msg:cluster_nok(ClusterStatus, State#st.info_pid),
@@ -423,3 +433,13 @@ start_client(Addr, State) ->
     Opts = [{info_pid, self()}, {use_cluster_id, true}] ++ State#st.client_opts,
     {ok, Pid} = redis_client:start_link(Host, Port, Opts),
     Pid.
+
+
+start_clients(Addrs, State) ->
+    %% open clients to new nodes not seen before
+    NewNodes = maps:from_list([{Addr, start_client(Addr, State)}
+                                   || Addr <- Addrs,
+                                      not maps:is_key(Addr, State#st.nodes)]),
+
+    State#st{nodes = maps:merge(State#st.nodes, NewNodes),
+             pending = sets:union(State#st.pending, new_set(maps:keys(NewNodes)))}.

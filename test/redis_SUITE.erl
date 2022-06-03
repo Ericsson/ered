@@ -359,16 +359,13 @@ t_new_cluster_master(_) ->
 
     %% Make sure it moved
     cmd_until("redis-cli -p 30007 GET " ++ binary_to_list(Key), binary_to_list(<<"dummydata">>)),
-
+    timer:sleep(2000),
     %% Fetch with client. New connection should be opened and new slot map update
     {ok, Data} = redis:command(R, [<<"GET">>, Key], Key),
     ?MSG(#{msg_type := slot_map_updated}, 10000),
-    %% The new node is still connecting so there is a cluster_not_ok here. Maybe the cluster logic should
-    %% be changed so that the cluster is not reported as nok until a connect fails. On the other hand it is
-    %% good to only be in cluster_ok when everything us up and running fully.
-    ?MSG(#{msg_type := cluster_not_ok,reason := master_down}),
     ?MSG(#{msg_type := connected, addr := {"127.0.0.1",30007}}),
-    ?MSG(#{msg_type := cluster_ok}),
+
+    no_more_msgs(),
     %% Move back the slot
     move_key(DestPort, SourcePort, Key),
 
