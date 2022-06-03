@@ -143,7 +143,6 @@ init([Addrs, Opts]) ->
     {ok, State#st{initial_nodes = Addrs,
                   nodes = maps:from_list([{Addr, start_client(Addr, State)} || Addr <- Addrs])}}.
 
-
 handle_call(get_slot_map_info, _From, State) ->
     Nodes = redis_lib:slotmap_all_nodes(State#st.slot_map),
     Clients = maps:with(Nodes, State#st.nodes),
@@ -167,7 +166,6 @@ handle_cast({trigger_map_update, SlotMapVersion, Node}, State) ->
             {noreply, State}
     end.
 
-
 handle_info(Msg = {connection_status, {Pid, Addr, _Id} , Status}, State) ->
     case maps:find(Addr, State#st.nodes) of
         {ok, Pid} ->
@@ -187,7 +185,16 @@ handle_info(Msg = {connection_status, {Pid, Addr, _Id} , Status}, State) ->
                          queue_ok ->
                              State#st{queue_full = sets:del_element(Addr, State#st.queue_full)}
                      end,
-            {noreply, update_cluster_status(State1)};
+            case check_cluster_status(State1) of
+                ok ->
+                    %% Do not set the cluster state to OK yet. Wait for a slot info message.
+                    %% The slot info message will set the cluster state to OK if the map and
+                    %% connections are OK. This is to avoid to send the cluster OK info message
+                    %% too early if there are slot map updates in addition to connection errors.
+                    {noreply, State1};
+                ClusterStatus ->
+                    {noreply, update_cluster_state(ClusterStatus, State1)}
+            end;
         % old client
         _Other ->
             %% only interested in client_stopped messages. this client is defunct and if it
@@ -214,7 +221,7 @@ handle_info({slot_info, Version, Response}, State) ->
             NewMap = lists:sort(ClusterSlotsReply),
             case NewMap == State#st.slot_map of
                 true ->
-                    {noreply, State};
+                    {noreply, update_cluster_state(State)};
                 false ->
                     Nodes = redis_lib:slotmap_all_nodes(NewMap),
                     MasterNodes = new_set(redis_lib:slotmap_master_nodes(NewMap)),
@@ -245,7 +252,8 @@ handle_info({slot_info, Version, Response}, State) ->
                                       slot_map = NewMap,
                                       masters = MasterNodes,
                                       nodes = maps:merge(KeepNodes, NewNodes)},
-                    {noreply, update_cluster_status(State1)}
+
+                    {noreply, update_cluster_state(State1)}
             end
     end;
 
@@ -281,44 +289,42 @@ new_set(List) ->
     sets:from_list(List).
     % sets:from_list(List, [{version, 2}]). TODO: OTP 24
 
-update_cluster_status(State) ->
+check_cluster_status(State) ->
     case is_slot_map_ok(State) of
         ok ->
             case sets:is_subset(State#st.masters, State#st.up) of
                 false ->
-                    set_cluster_state(nok, master_down, State);
+                    master_down;
                 true ->
                     case sets:is_disjoint(State#st.masters, State#st.queue_full) of
                         false ->
-                            set_cluster_state(nok, master_queue_full, State);
+                            master_queue_full;
                         true ->
-                            set_cluster_state(ok, ok, State)
+                            ok
                     end
             end;
         Reason ->
-            set_cluster_state(nok, Reason, State)
+            Reason
     end.
 
-set_cluster_state(nok, Reason, State) ->
-    State1 = case State#st.cluster_state of
-                 nok ->
-                     State;
-                 ok ->
-                     redis_info_msg:cluster_nok(Reason, State#st.info_pid),
-                     State#st{cluster_state = nok}
-             end,
-    start_periodic_slot_info_request(State1);
+update_cluster_state(State) ->
+    update_cluster_state(check_cluster_status(State), State).
 
-set_cluster_state(ok, _, State) ->
-    State1 = case State#st.cluster_state of
-                 nok ->
-                     redis_info_msg:cluster_ok(State#st.info_pid),
-                     State#st{cluster_state = ok};
-                 ok ->
-                     State
-             end,
-    stop_periodic_slot_info_request(State1).
-
+update_cluster_state(ClusterStatus, State) ->
+    case {ClusterStatus, State#st.cluster_state} of
+        {ok, nok} ->
+            redis_info_msg:cluster_ok(State#st.info_pid),
+            State1 = stop_periodic_slot_info_request(State),
+            State1#st{cluster_state = ok};
+        {ok, ok} ->
+            State;
+        {_, ok} ->
+            redis_info_msg:cluster_nok(ClusterStatus, State#st.info_pid),
+            State1 = start_periodic_slot_info_request(State),
+            State1#st{cluster_state = nok};
+        {_, nok} ->
+            start_periodic_slot_info_request(State)
+    end.
 
 start_periodic_slot_info_request(State) ->
     case pick_node(State) of
@@ -348,13 +354,10 @@ stop_periodic_slot_info_request(State) ->
             State#st{slot_timer_ref = none}
     end.
 
-
 send_slot_info_request(Node, State) ->
     Pid = self(),
     Cb = fun(Answer) -> Pid ! {slot_info, State#st.slot_map_version, Answer} end,
     redis_client:command_async(Node, [<<"CLUSTER">>, <<"SLOTS">>], Cb).
-
-
 
 pick_node(State) ->
     case sets:is_empty(State#st.up) of
@@ -372,9 +375,6 @@ pick_node(State) ->
             end,
             maps:get(Addr, State#st.nodes)
     end.
-
-
-
 
 is_slot_map_ok(State) ->
     %% Need at least two nodes in the cluster. During some startup scenarios it
@@ -418,12 +418,8 @@ check_replica_count(State) ->
               end,
               State#st.slot_map).
 
-
 start_client(Addr, State) ->
     {Host, Port} = Addr,
     Opts = [{info_pid, self()}, {use_cluster_id, true}] ++ State#st.client_opts,
     {ok, Pid} = redis_client:start_link(Host, Port, Opts),
     Pid.
-
-
-
