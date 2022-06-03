@@ -82,6 +82,7 @@ get_count_and_data({redis_command, Count, Data}) ->
 -spec check_result(ok_result() | any()) ->
           normal |
           try_again |
+          cluster_down |
           {moved | ask, redis_lib:addr()}.
 %%
 %% Check for results that need special handling.
