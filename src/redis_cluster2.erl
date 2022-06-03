@@ -44,6 +44,9 @@
              queue_full = new_set([]) :: addr_set(),
              %% Clients started but not connected yet
              pending = new_set([]) :: addr_set(),
+             %% Clients pending to be closed. Mapped to the closing timer
+             %% reference
+             closing = #{} :: #{addr() => reference()},
 
              slot_map = [],
              slot_map_version = 1,
@@ -166,7 +169,6 @@ handle_call({connect_node, Addr}, _From, State) ->
     ClientPid = maps:get(Addr, State1#st.nodes),
     {reply, ClientPid, State1}.
 
-
 handle_cast({trigger_map_update, SlotMapVersion, Node}, State) ->
     case SlotMapVersion == State#st.slot_map_version of
         true ->
@@ -206,7 +208,7 @@ handle_info(Msg = {connection_status, {Pid, Addr, _Id} , Status}, State) ->
                 ClusterStatus ->
                     {noreply, update_cluster_state(ClusterStatus, State1)}
             end;
-        % old client
+        % Stopped client
         _Other ->
             %% only interested in client_stopped messages. this client is defunct and if it
             %% comes back and gives a client up message it will just be confusing since it
@@ -237,15 +239,16 @@ handle_info({slot_info, Version, Response}, State) ->
                     Nodes = redis_lib:slotmap_all_nodes(NewMap),
                     MasterNodes = new_set(redis_lib:slotmap_master_nodes(NewMap)),
 
-                    %% remove nodes if they are not in the new map or initial. Only remove nodes that
-                    %% are already down to avoid closing a lot of clients if we get a transient slot map
-                    %% missing nodes (might happen during Redis node startup I guess)
-                    Remove = lists:foldl(fun maps:without/2,
-                                         State#st.nodes,
-                                         [State#st.initial_nodes, Nodes, sets:to_list(State#st.up)]),
+                    %% remove nodes if they are not in the new map or initial.
+                    Remove = maps:keys(lists:foldl(fun maps:without/2,
+                                                   State#st.nodes,
+                                                   [State#st.initial_nodes, Nodes])),
                     %% The close is delayed to give time to update slot map and to handle any
-                    %% messages in transit
-                    erlang:send_after(State#st.close_wait, self(), {close_clients, Remove}),
+                    %% messages in transit.
+                    TimerRef = erlang:start_timer(State#st.close_wait, self(), {close_clients, Remove}),
+                    NewClosing = maps:merge(maps:from_list([{Addr, TimerRef} || Addr <- Remove]),
+                                            State#st.closing),
+
 
                     redis_info_msg:slot_map_updated(ClusterSlotsReply, Version + 1, State#st.info_pid),
 
@@ -253,8 +256,8 @@ handle_info({slot_info, Version, Response}, State) ->
                     State1 = start_clients(Nodes, State),
                     State2 = State1#st{slot_map_version = Version + 1,
                                        slot_map = NewMap,
-                                       masters = MasterNodes},
-
+                                       masters = MasterNodes,
+                                       closing = NewClosing},
                     {noreply, update_cluster_state(State2)}
             end
     end;
@@ -269,9 +272,16 @@ handle_info({timeout, TimerRef, time_to_update_slots}, State) ->
             {noreply, State}
     end;
 
-handle_info({close_clients, Remove}, State) ->
-    [redis_client:stop(ClientPid) || ClientPid <- maps:values(Remove)],
-    {noreply, State}.
+handle_info({timeout, TimerRef, {close_clients, Remove}}, State) ->
+    %% make sure they are still closing and mapped to this Timer
+    ToCloseNow = [Addr ||
+                     {Addr, Tref} <- maps:to_list(maps:with(Remove, State#st.closing)),
+                     Tref == TimerRef],
+    Clients = maps:with(ToCloseNow, State#st.nodes),
+    [redis_client:stop(Client) || Client <- maps:values(Clients)],
+    %% remove from nodes and closing map
+    {noreply, State#st{nodes = maps:without(ToCloseNow, State#st.nodes),
+                       closing = maps:without(ToCloseNow, State#st.closing)}}.
 
 terminate(_Reason, State) ->
     [redis_client:stop(Pid) || Pid <- maps:values(State#st.nodes)],
@@ -434,7 +444,6 @@ start_client(Addr, State) ->
     {ok, Pid} = redis_client:start_link(Host, Port, Opts),
     Pid.
 
-
 start_clients(Addrs, State) ->
     %% open clients to new nodes not seen before
     NewNodes = maps:from_list([{Addr, start_client(Addr, State)}
@@ -442,4 +451,6 @@ start_clients(Addrs, State) ->
                                       not maps:is_key(Addr, State#st.nodes)]),
 
     State#st{nodes = maps:merge(State#st.nodes, NewNodes),
-             pending = sets:union(State#st.pending, new_set(maps:keys(NewNodes)))}.
+             pending = sets:union(State#st.pending, new_set(maps:keys(NewNodes))),
+             %% cancel closing for requested clients
+             closing = maps:without(Addrs, State#st.closing)}.

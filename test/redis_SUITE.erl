@@ -358,7 +358,7 @@ t_new_cluster_master(_) ->
     move_key(SourcePort, DestPort, Key),
 
     %% Make sure it moved
-    cmd_until("redis-cli -p 30007 GET " ++ binary_to_list(Key), binary_to_list(<<"dummydata">>)),
+    cmd_until("redis-cli -p 30007 GET " ++ binary_to_list(Key), binary_to_list(Data)),
     timer:sleep(2000),
     %% Fetch with client. New connection should be opened and new slot map update
     {ok, Data} = redis:command(R, [<<"GET">>, Key], Key),
@@ -366,18 +366,23 @@ t_new_cluster_master(_) ->
     ?MSG(#{msg_type := connected, addr := {"127.0.0.1",30007}}),
 
     no_more_msgs(),
+    cmd_log("redis-cli -p "++ SourcePort ++" CLUSTER SLOTS"),
     %% Move back the slot
     move_key(DestPort, SourcePort, Key),
+
+    cmd_until("redis-cli -p "++ SourcePort ++" GET " ++ binary_to_list(Key), binary_to_list(Data)),
+    cmd_log("redis-cli -p "++ SourcePort ++" CLUSTER SLOTS"),
+
+    %% Sleep here otherwise the cluster slots timer will still be active and the move will not trigger
+    %% a slot map update
+    timer:sleep(1000),
+    {ok, Data} = redis:command(R, [<<"GET">>, Key], Key),
+    ?MSG(#{msg_type := slot_map_updated}, 5000),
+    ?MSG(#{msg_type := client_stopped}),
 
     Pod = get_pod_name_from_port(30007),
     cmd_log("docker stop " ++ Pod),
 
-    ?MSG(#{msg_type := socket_closed}),
-    ?MSG(#{msg_type := connect_error}),
-    ?MSG(#{msg_type := cluster_not_ok,reason := master_down}),
-    ?MSG(#{msg_type := slot_map_updated}, 5000),
-    ?MSG(#{msg_type := cluster_ok}),
-    ?MSG(#{msg_type := client_stopped}),
     no_more_msgs().
 
 t_ask_redirect(_) ->
