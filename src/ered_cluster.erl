@@ -1,4 +1,4 @@
--module(redis_cluster2).
+-module(ered_cluster).
 
 %% Cluster handling module. Keeps track of clients and keeps the slot map
 %% up to date. Cluster status can be monitored by subscribing to info
@@ -62,19 +62,19 @@
             }).
 
 
--type addr() :: redis_client:addr().
+-type addr() :: ered_client:addr().
 -type addr_set() :: sets:set(addr()).
 -type server_ref() :: pid().
--type client_ref() :: redis_client:server_ref().
+-type client_ref() :: ered_client:server_ref().
 
 -type opt() ::
-        %% List of pids to receive cluster info messages. See redis_info_msg module.
+        %% List of pids to receive cluster info messages. See ered_info_msg module.
         {info_pid, [pid()]} |
         %% CLUSTER SLOTS command is used to fetch slots from the Redis cluster.
         %% This value sets how long to wait before trying to send the command again.
         {update_slot_wait, non_neg_integer()} |
         %% Options passed to the client
-        {client_opts, [redis_client:opt()]} |
+        {client_opts, [ered_client:opt()]} |
         %% For each Redis master node, the min number of replicas for the cluster
         %% to be considered OK.
         {min_replicas, non_neg_integer()} |
@@ -120,7 +120,7 @@ update_slots(ServerRef, SlotMapVersion, Node) ->
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec get_slot_map_info(server_ref()) ->
           {SlotMapVersion :: non_neg_integer(),
-           SlotMap :: redis_lib:slot_map(),
+           SlotMap :: ered_lib:slot_map(),
            Clients :: #{addr() => pid()}}.
 %%
 %% Fetch the cluster information. This provides the current slot map
@@ -159,7 +159,7 @@ init([Addrs, Opts]) ->
 
 
 handle_call(get_slot_map_info, _From, State) ->
-    Nodes = redis_lib:slotmap_all_nodes(State#st.slot_map),
+    Nodes = ered_lib:slotmap_all_nodes(State#st.slot_map),
     Clients = maps:with(Nodes, State#st.nodes),
     Reply = {State#st.slot_map_version, State#st.slot_map, Clients},
     {reply,Reply,State};
@@ -181,7 +181,7 @@ handle_info(Msg = {connection_status, {Pid, Addr, _Id} , Status}, State) ->
     case maps:find(Addr, State#st.nodes) of
         {ok, Pid} ->
             IsMaster = sets:is_element(Addr, State#st.masters),
-            redis_info_msg:connection_status(Msg, IsMaster, State#st.info_pid),
+            ered_info_msg:connection_status(Msg, IsMaster, State#st.info_pid),
             State1 = case Status of
                          {connection_down, {socket_closed, _}} ->
                              %% Avoid triggering the alarm for a normal from peer side.
@@ -213,7 +213,7 @@ handle_info(Msg = {connection_status, {Pid, Addr, _Id} , Status}, State) ->
             %% only interested in client_stopped messages. this client is defunct and if it
             %% comes back and gives a client up message it will just be confusing since it
             %% will be closed anyway
-            [redis_info_msg:connection_status(Msg, _IsMaster = false, State#st.info_pid)
+            [ered_info_msg:connection_status(Msg, _IsMaster = false, State#st.info_pid)
              || {connection_down, {client_stopped, _}} <- [Status]],
             {noreply, State}
     end;
@@ -228,7 +228,7 @@ handle_info({slot_info, Version, Response}, State) ->
             {noreply, State};
         {ok, {error, Error}} ->
             %% error sent from redis
-            redis_info_msg:cluster_slots_error_response(Error, State#st.info_pid),
+            ered_info_msg:cluster_slots_error_response(Error, State#st.info_pid),
             {noreply, State};
         {ok, ClusterSlotsReply} ->
             NewMap = lists:sort(ClusterSlotsReply),
@@ -236,8 +236,8 @@ handle_info({slot_info, Version, Response}, State) ->
                 true ->
                     {noreply, update_cluster_state(State)};
                 false ->
-                    Nodes = redis_lib:slotmap_all_nodes(NewMap),
-                    MasterNodes = new_set(redis_lib:slotmap_master_nodes(NewMap)),
+                    Nodes = ered_lib:slotmap_all_nodes(NewMap),
+                    MasterNodes = new_set(ered_lib:slotmap_master_nodes(NewMap)),
 
                     %% remove nodes if they are not in the new map or initial.
                     Remove = maps:keys(lists:foldl(fun maps:without/2,
@@ -250,7 +250,7 @@ handle_info({slot_info, Version, Response}, State) ->
                                             State#st.closing),
 
 
-                    redis_info_msg:slot_map_updated(ClusterSlotsReply, Version + 1, State#st.info_pid),
+                    ered_info_msg:slot_map_updated(ClusterSlotsReply, Version + 1, State#st.info_pid),
 
                     %% open new clients
                     State1 = start_clients(Nodes, State),
@@ -278,13 +278,13 @@ handle_info({timeout, TimerRef, {close_clients, Remove}}, State) ->
                      {Addr, Tref} <- maps:to_list(maps:with(Remove, State#st.closing)),
                      Tref == TimerRef],
     Clients = maps:with(ToCloseNow, State#st.nodes),
-    [redis_client:stop(Client) || Client <- maps:values(Clients)],
+    [ered_client:stop(Client) || Client <- maps:values(Clients)],
     %% remove from nodes and closing map
     {noreply, State#st{nodes = maps:without(ToCloseNow, State#st.nodes),
                        closing = maps:without(ToCloseNow, State#st.closing)}}.
 
 terminate(_Reason, State) ->
-    [redis_client:stop(Pid) || Pid <- maps:values(State#st.nodes)],
+    [ered_client:stop(Pid) || Pid <- maps:values(State#st.nodes)],
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -331,7 +331,7 @@ update_cluster_state(State) ->
 update_cluster_state(ClusterStatus, State) ->
     case {ClusterStatus, State#st.cluster_state} of
         {ok, nok} ->
-            redis_info_msg:cluster_ok(State#st.info_pid),
+            ered_info_msg:cluster_ok(State#st.info_pid),
             State1 = stop_periodic_slot_info_request(State),
             State1#st{cluster_state = ok};
         {ok, ok} ->
@@ -339,7 +339,7 @@ update_cluster_state(ClusterStatus, State) ->
         {pending, _} ->
             State;
         {_, ok} ->
-            redis_info_msg:cluster_nok(ClusterStatus, State#st.info_pid),
+            ered_info_msg:cluster_nok(ClusterStatus, State#st.info_pid),
             State1 = start_periodic_slot_info_request(State),
             State1#st{cluster_state = nok};
         {_, nok} ->
@@ -377,7 +377,7 @@ stop_periodic_slot_info_request(State) ->
 send_slot_info_request(Node, State) ->
     Pid = self(),
     Cb = fun(Answer) -> Pid ! {slot_info, State#st.slot_map_version, Answer} end,
-    redis_client:command_async(Node, [<<"CLUSTER">>, <<"SLOTS">>], Cb).
+    ered_client:command_async(Node, [<<"CLUSTER">>, <<"SLOTS">>], Cb).
 
 pick_node(State) ->
     case sets:is_empty(State#st.up) of
@@ -441,7 +441,7 @@ check_replica_count(State) ->
 start_client(Addr, State) ->
     {Host, Port} = Addr,
     Opts = [{info_pid, self()}, {use_cluster_id, true}] ++ State#st.client_opts,
-    {ok, Pid} = redis_client:start_link(Host, Port, Opts),
+    {ok, Pid} = ered_client:start_link(Host, Port, Opts),
     Pid.
 
 start_clients(Addrs, State) ->

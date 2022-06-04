@@ -1,4 +1,4 @@
--module(redis_lib).
+-module(ered_lib).
 
 -export([
          slotmap_master_slots/1,

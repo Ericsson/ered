@@ -1,4 +1,4 @@
--module(redis_SUITE).
+-module(ered_SUITE).
 
 
 %export([init_per_suite/1, end_per_suite/1]).
@@ -44,8 +44,8 @@ init_per_suite(Config) ->
     ct:pal(R),
     timer:sleep(1000),
     lists:foreach(fun(Port) ->
-                          {ok,Pid} = redis_client:start_link("127.0.0.1", Port, []),
-                          {ok, <<"PONG">>} = redis_client:command(Pid, <<"ping">>)
+                          {ok,Pid} = ered_client:start_link("127.0.0.1", Port, []),
+                          {ok, <<"PONG">>} = ered_client:command(Pid, <<"ping">>)
                   end,
                   [30001, 30002, 30003, 30004, 30005, 30006]),
     os:cmd(" echo 'yes' | docker run --name redis-cluster --net=host -i redis redis-cli --cluster create 127.0.0.1:30001 127.0.0.1:30002 127.0.0.1:30003 127.0.0.1:30004 127.0.0.1:30005 127.0.0.1:30006 --cluster-replicas 1"),
@@ -69,7 +69,7 @@ end_per_suite(Config) ->
 t_command(_) ->
     R = start_cluster(),
     lists:foreach(fun(N) ->
-                          {ok, <<"OK">>} = redis:command(R, [<<"SET">>, N, N], N)
+                          {ok, <<"OK">>} = ered:command(R, [<<"SET">>, N, N], N)
                   end,
                   [integer_to_binary(N) || N <- lists:seq(1,100)]),
     no_more_msgs().
@@ -77,21 +77,21 @@ t_command(_) ->
 
 t_command_all(_) ->
     R = start_cluster(),
-    [{ok, <<"PONG">>}, {ok, <<"PONG">>}, {ok, <<"PONG">>}] = redis:command_all(R, [<<"PING">>]),
+    [{ok, <<"PONG">>}, {ok, <<"PONG">>}, {ok, <<"PONG">>}] = ered:command_all(R, [<<"PING">>]),
     no_more_msgs().
 
 
 t_command_client(_) ->
     R = start_cluster(),
     lists:foreach(fun(N) ->
-                          {ok, <<"OK">>} = redis:command(R, [<<"SET">>, N, N], N)
+                          {ok, <<"OK">>} = ered:command(R, [<<"SET">>, N, N], N)
                   end,
                   [integer_to_binary(N) || N <- lists:seq(1,100)]),
     Keys = lists:foldl(fun(Client, Acc) ->
                                scan_helper(Client, <<"0">>, Acc)
                        end,
                        [],
-                       redis:get_clients(R)),
+                       ered:get_clients(R)),
     Match = lists:seq(1,100),
     Match = lists:sort([binary_to_integer(N) || N <- lists:flatten(Keys)]),
     no_more_msgs().
@@ -100,7 +100,7 @@ t_command_client(_) ->
 t_command_pipeline(_) ->
     R = start_cluster(),
     Cmds = [[<<"SET">>, <<"{k}1">>, <<"1">>], [<<"SET">>, <<"{k}2">>, <<"2">>]],
-    {ok, [<<"OK">>, <<"OK">>]} = redis:command(R, Cmds, <<"k">>),
+    {ok, [<<"OK">>, <<"OK">>]} = ered:command(R, Cmds, <<"k">>),
     no_more_msgs().
 
 
@@ -108,7 +108,7 @@ t_hard_failover(_) ->
     R = start_cluster([{close_wait, 2000}]),
     Port = get_master_port(R),
     Pod = get_pod_name_from_port(Port),
-    ct:pal("~p\n", [redis:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>])]),
+    ct:pal("~p\n", [ered:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>])]),
     ct:pal(os:cmd("docker stop " ++ Pod)),
 
     ?MSG(#{msg_type := socket_closed, addr := {localhost, Port}, reason := {recv_exit, closed}}),
@@ -123,7 +123,7 @@ t_hard_failover(_) ->
 
     ?MSG(#{msg_type := slot_map_updated}, 5000),
 
-    ct:pal("~p\n", [redis:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>])]),
+    ct:pal("~p\n", [ered:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>])]),
 
     ct:pal(os:cmd("docker start " ++ Pod)),
 
@@ -144,10 +144,10 @@ t_hard_failover(_) ->
 
 t_manual_failover(_) ->
     R = start_cluster(),
-    SlotMaps = redis:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>]),
+    SlotMaps = ered:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>]),
     ct:pal("~p\n", [SlotMaps]),
-    [Client|_] = redis:get_clients(R),
-    {ok, SlotMap} = redis:command_client(Client, [<<"CLUSTER">>, <<"SLOTS">>]),
+    [Client|_] = ered:get_clients(R),
+    {ok, SlotMap} = ered:command_client(Client, [<<"CLUSTER">>, <<"SLOTS">>]),
 
     ct:pal("~p\n", [SlotMap]),
     %% Get the port of a replica node
@@ -173,7 +173,7 @@ t_manual_failover(_) ->
 
     %% Wait for failover to start, otherwise the commands might be sent to early to detect
     lists:foreach(fun(N) ->
-                          {ok, _} = redis:command(R, [<<"SET">>, N, N], N)
+                          {ok, _} = ered:command(R, [<<"SET">>, N, N], N)
                   end,
                   [integer_to_binary(N) || N <- lists:seq(1,1000)]),
     ct:pal("~p\n", [os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " ROLE")]),
@@ -189,7 +189,7 @@ t_init_timeout(_) ->
             }
            ],
     ct:pal("~p\n", [os:cmd("redis-cli -p 30001 CLIENT PAUSE 10000")]),
-    {ok, P} = redis:start_link([{localhost, 30001}], [{info_pid, [self()]}] ++ Opts),
+    {ok, P} = ered:start_link([{localhost, 30001}], [{info_pid, [self()]}] ++ Opts),
 
     ?MSG(#{msg_type := socket_closed, reason := {recv_exit, timeout}}, 3500),
     ?MSG(#{msg_type := node_down_timeout, addr := {localhost, 30001}}, 2500),
@@ -213,14 +213,14 @@ t_init_timeout(_) ->
 
 t_scan_delete_keys(_) ->
     R = start_cluster(),
-    Clients = redis:get_clients(R),
-    [{ok, _} = redis:command_client(Client, [<<"FLUSHDB">>]) || Client <- Clients],
+    Clients = ered:get_clients(R),
+    [{ok, _} = ered:command_client(Client, [<<"FLUSHDB">>]) || Client <- Clients],
 
     Keys = [iolist_to_binary([<<"key">>, integer_to_binary(N)]) || N <- lists:seq(1,10000)],
-    [{ok, _} = redis:command(R, [<<"SET">>, K, <<"dummydata">>], K) || K <- Keys],
+    [{ok, _} = ered:command(R, [<<"SET">>, K, <<"dummydata">>], K) || K <- Keys],
 
     Keys2 = [iolist_to_binary([<<"otherkey">>, integer_to_binary(N)]) || N <- lists:seq(1,100)],
-    [{ok, _} = redis:command(R, [<<"SET">>, K, <<"dummydata">>], K) || K <- Keys2],
+    [{ok, _} = ered:command(R, [<<"SET">>, K, <<"dummydata">>], K) || K <- Keys2],
 
     %% selectivly delete the otherkey ones
     %% (this will lead to some SCAN responses being empty, good case to test)
@@ -228,7 +228,7 @@ t_scan_delete_keys(_) ->
     [spawn_link(fun() -> Pid ! scan_delete(Client) end) || Client <- Clients],
     [receive ok -> ok end || _ <- Clients],
 
-    Size = [redis:command_client(Client,[<<"DBSIZE">>]) || Client <- Clients],
+    Size = [ered:command_client(Client,[<<"DBSIZE">>]) || Client <- Clients],
     10000 = lists:sum([N || {ok, N} <- Size]).
 
 
@@ -259,20 +259,20 @@ scan_delete(Client) ->
 scan_cmd(Client, Cursor) ->
     Pid = self(),
     Callback = fun(Response) -> Pid ! {scan, Response} end,
-    redis:command_client_async(Client, [<<"SCAN">>, Cursor, <<"COUNT">>, integer_to_binary(100), <<"MATCH">>, <<"otherkey*">>], Callback).
+    ered:command_client_async(Client, [<<"SCAN">>, Cursor, <<"COUNT">>, integer_to_binary(100), <<"MATCH">>, <<"otherkey*">>], Callback).
 
 unlink_cmd(Client, []) ->
     0;
 unlink_cmd(Client, Keys) ->
     Pid = self(),
     Callback = fun(Response) -> Pid ! {unlink, Response} end,
-    redis:command_client_async(Client, [[<<"UNLINK">>, Key] || Key <- Keys], Callback),
+    ered:command_client_async(Client, [[<<"UNLINK">>, Key] || Key <- Keys], Callback),
     1.
 
 group_by_hash(Keys) ->
     lists:foldl(fun(Key, Acc) ->
                         Fun = fun(KeysForSlot) -> [Key|KeysForSlot] end,
-                        maps:update_with(redis_lib:hash(Key), Fun, _Init = [], Acc)
+                        maps:update_with(ered_lib:hash(Key), Fun, _Init = [], Acc)
                 end,
                 #{},
                 Keys).
@@ -282,8 +282,8 @@ group_by_hash(Keys) ->
 t_split_data(_) ->
     Data = iolist_to_binary([<<"A">> || _ <- lists:seq(0,3000)]),
     R = start_cluster(),
-    {ok, <<"OK">>} = redis:command(R, [<<"SET">>, <<"key1">>, Data], <<"key1">>),
-    {ok, Data} = redis:command(R, [<<"GET">>, <<"key1">>], <<"key1">>),
+    {ok, <<"OK">>} = ered:command(R, [<<"SET">>, <<"key1">>, Data], <<"key1">>),
+    {ok, Data} = ered:command(R, [<<"GET">>, <<"key1">>], <<"key1">>),
     ok.
 
 
@@ -295,11 +295,11 @@ t_queue_full(_) ->
     Client = start_cluster([{client_opts, Opts}]),
     Ports = [30001, 30002, 30003, 30004, 30005, 30006],
     [os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " CLIENT PAUSE 2000") || Port <- Ports],
-    [C|_] = redis:get_clients(Client),
+    [C|_] = ered:get_clients(Client),
     Pid = self(),
 
     fun Loop(0) -> ok;
-        Loop(N) -> redis:command_client_async(C, [<<"PING">>], fun(Reply) -> Pid ! {reply, Reply} end),
+        Loop(N) -> ered:command_client_async(C, [<<"PING">>], fun(Reply) -> Pid ! {reply, Reply} end),
                    Loop(N-1)
     end(21),
 
@@ -339,13 +339,13 @@ t_new_cluster_master(_) ->
     cmd_until("redis-cli -p 30007 CLUSTER INFO", "cluster_state:ok"),
 
     %% Clear all old data
-    Clients = redis:get_clients(R),
-    [{ok, _} = redis:command_client(Client, [<<"FLUSHDB">>]) || Client <- Clients],
+    Clients = ered:get_clients(R),
+    [{ok, _} = ered:command_client(Client, [<<"FLUSHDB">>]) || Client <- Clients],
 
     %% Set some dummy data
     Key = <<"test_key">>,
     Data = <<"dummydata">>,
-    {ok, _} = redis:command(R, [<<"SET">>, Key, Data], Key),
+    {ok, _} = ered:command(R, [<<"SET">>, Key, Data], Key),
 
 
     %% Find what node owns the data now. Get a move redirecton and extract port. Ex: MOVED 5798 172.100.0.1:6392
@@ -361,7 +361,7 @@ t_new_cluster_master(_) ->
     cmd_until("redis-cli -p 30007 GET " ++ binary_to_list(Key), binary_to_list(Data)),
     timer:sleep(2000),
     %% Fetch with client. New connection should be opened and new slot map update
-    {ok, Data} = redis:command(R, [<<"GET">>, Key], Key),
+    {ok, Data} = ered:command(R, [<<"GET">>, Key], Key),
     ?MSG(#{msg_type := slot_map_updated}, 10000),
     ?MSG(#{msg_type := connected, addr := {"127.0.0.1",30007}}),
 
@@ -376,7 +376,7 @@ t_new_cluster_master(_) ->
     %% Sleep here otherwise the cluster slots timer will still be active and the move will not trigger
     %% a slot map update
     timer:sleep(1000),
-    {ok, Data} = redis:command(R, [<<"GET">>, Key], Key),
+    {ok, Data} = ered:command(R, [<<"GET">>, Key], Key),
     ?MSG(#{msg_type := slot_map_updated}, 5000),
     ?MSG(#{msg_type := client_stopped}),
 
@@ -389,8 +389,8 @@ t_ask_redirect(_) ->
     R = start_cluster(),
 
     %% Clear all old data
-    Clients = redis:get_clients(R),
-    [{ok, _} = redis:command_client(Client, [<<"FLUSHDB">>]) || Client <- Clients],
+    Clients = ered:get_clients(R),
+    [{ok, _} = ered:command_client(Client, [<<"FLUSHDB">>]) || Client <- Clients],
 
     Key = <<"test_key">>,
 
@@ -399,22 +399,22 @@ t_ask_redirect(_) ->
     SourcePort = integer_to_list(get_master_from_key(R, Key)),
     DestPort = integer_to_list(hd([Port || Port <- get_all_masters(R), integer_to_list(Port) /= SourcePort])),
 
-    Slot = integer_to_list(redis_lib:hash(Key)),
+    Slot = integer_to_list(ered_lib:hash(Key)),
     SourceNodeId = string:trim(cmd_log("redis-cli -p " ++ SourcePort ++ " CLUSTER MYID")),
     DestNodeId = string:trim(cmd_log("redis-cli -p " ++ DestPort ++ " CLUSTER MYID")),
 
     %% Set "{test_key}1" in MIGRATING node
-    {ok,<<"OK">>} = redis:command(R, [<<"SET">>, <<"{test_key}1">>, <<"DATA1">>], Key),
+    {ok,<<"OK">>} = ered:command(R, [<<"SET">>, <<"{test_key}1">>, <<"DATA1">>], Key),
 
     cmd_log("redis-cli -p " ++ DestPort ++ " CLUSTER SETSLOT " ++ Slot ++ " IMPORTING " ++ SourceNodeId),
     cmd_log("redis-cli -p " ++ SourcePort ++ " CLUSTER SETSLOT " ++ Slot ++ " MIGRATING " ++ DestNodeId),
 
     %% Test single command. unknown key leads to ASK redirection
-    {ok,undefined} = redis:command(R, [<<"GET">>, Key], Key),
+    {ok,undefined} = ered:command(R, [<<"GET">>, Key], Key),
 
     %% Test multiple commands. unknown key leads to ASK redirection. The {test_key}2 will be set
     %% in IMPORTING node after command
-    {ok,[undefined,<<"PONG">>,<<"OK">>]} = redis:command(R,
+    {ok,[undefined,<<"PONG">>,<<"OK">>]} = ered:command(R,
                                                          [[<<"GET">>, <<"{test_key}2">>],
                                                           [<<"PING">>] ,
                                                           [<<"SET">>, <<"{test_key}2">>, <<"DATA2">>]],
@@ -424,7 +424,7 @@ t_ask_redirect(_) ->
     %% {test_key}1 is in the MIGRATING node
     %% {test_key}2 is in the IMPORTING node
     %% {test_key}3 is not set
-    {ok,[<<"DATA1">>, <<"DATA2">>, undefined]} = redis:command(R,
+    {ok,[<<"DATA1">>, <<"DATA2">>, undefined]} = ered:command(R,
                                                                [[<<"GET">>, <<"{test_key}1">>],
                                                                 [<<"GET">>, <<"{test_key}2">>],
                                                                 [<<"GET">>, <<"{test_key}3">>]],
@@ -441,7 +441,7 @@ t_ask_redirect(_) ->
     %% If attemts are set to an uneven number the final reply will be TRYAGAIN from the IMPORTING node.
     %% Since the ASK redirect does not trigger the TRYAGAIN delay this means the time the client waits before
     %% giving up in a TRYAGAIN scenario is effectively cut in half.
-    {ok,{error,<<"ASK", _/binary>>}} = redis:command(R,
+    {ok,{error,<<"ASK", _/binary>>}} = ered:command(R,
                                                      [<<"MGET">>,
                                                       <<"{test_key}1">>,
                                                       <<"{test_key}2">>],
@@ -453,7 +453,7 @@ t_ask_redirect(_) ->
 
     %% run the command async
     spawn_link(fun() ->
-                       Reply = redis:command(R,
+                       Reply = ered:command(R,
                                              [<<"MGET">>,
                                               <<"{test_key}1">>,
                                               <<"{test_key}2">>],
@@ -477,7 +477,7 @@ t_ask_redirect(_) ->
     cmd_log("redis-cli -p " ++ SourcePort ++ " CLUSTER SETSLOT " ++ Slot ++ " NODE "++ DestNodeId),
 
     %% Now this should lead to a moved redirection and a slotmap update
-    {ok,undefined} = redis:command(R, [<<"GET">>, Key], Key),
+    {ok,undefined} = ered:command(R, [<<"GET">>, Key], Key),
     #{slot_map := SlotMap} = msg(msg_type, slot_map_updated, 1000),
     no_more_msgs(),
     ok.
@@ -485,12 +485,12 @@ t_ask_redirect(_) ->
 t_client_map(_) ->
     R = start_cluster(),
     Expected = [{"127.0.0.1", Port} || Port <- [30001, 30002, 30003, 30004, 30005, 30006]],
-    Map = redis:get_addr_to_client_map(R),
+    Map = ered:get_addr_to_client_map(R),
     Expected = lists:sort(maps:keys(Map)).
 
 
 move_key(SourcePort, DestPort, Key) ->
-    Slot = integer_to_list(redis_lib:hash(Key)),
+    Slot = integer_to_list(ered_lib:hash(Key)),
     SourceNodeId = string:trim(cmd_log("redis-cli -p " ++ SourcePort ++ " CLUSTER MYID")),
     DestNodeId = string:trim(cmd_log("redis-cli -p " ++ DestPort ++ " CLUSTER MYID")),
 
@@ -509,7 +509,7 @@ start_cluster(Opts) ->
     Ports = [30001, 30002, 30003, 30004, 30005, 30006],
     InitialNodes = [{localhost, Port} || Port <- Ports],
 
-    {ok, P} = redis:start_link(InitialNodes, [{info_pid, [self()]}] ++ Opts),
+    {ok, P} = ered:start_link(InitialNodes, [{info_pid, [self()]}] ++ Opts),
 
     ?MSG(#{msg_type := connected, addr := {localhost, 30001}}),
     ?MSG(#{msg_type := connected, addr := {localhost, 30002}}),
@@ -564,7 +564,7 @@ no_more_msgs() ->
 
 
 scan_helper(Client, Curs0, Acc0) ->
-    {ok, [Curs1, Keys]} = redis:command_client(Client, [<<"SCAN">>, Curs0]),
+    {ok, [Curs1, Keys]} = ered:command_client(Client, [<<"SCAN">>, Curs0]),
     Acc1 = [Keys|Acc0],
     case Curs1 of
         <<"0">> ->
@@ -596,15 +596,15 @@ get_all_masters(R) ->
     [Port || [SlotStart, SlotEnd, [_Ip, Port| _] | _] <- get_slot_map(R)].
 
 get_master_from_key(R, Key) ->
-    Slot = redis_lib:hash(Key),
+    Slot = ered_lib:hash(Key),
     hd([Port || [SlotStart, SlotEnd, [_Ip, Port| _] | _] <- get_slot_map(R),
                 SlotStart =< Slot,
                 Slot =< SlotEnd]).
 
 
 get_slot_map(R) ->
-    [Client|_] = redis:get_clients(R),
-    {ok, SlotMap} = redis:command_client(Client, [<<"CLUSTER">>, <<"SLOTS">>]),
+    [Client|_] = ered:get_clients(R),
+    {ok, SlotMap} = ered:command_client(Client, [<<"CLUSTER">>, <<"SLOTS">>]),
     SlotMap.
 
 get_master_port(R) ->

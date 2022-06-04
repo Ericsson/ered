@@ -1,4 +1,4 @@
--module(redis_client).
+-module(ered_client).
 
 %% Queues messages for a specific node. Manages reconnects and resends
 %% in case of error. Reports connection status with status messages.
@@ -34,7 +34,7 @@
         {
          host :: host(),
          port :: inet:port_number(),
-         connection_opts = [] :: [redis_connection:opt()],
+         connection_opts = [] :: [ered_connection:opt()],
          resp_version = 3 :: 2..3,
          use_cluster_id = false :: boolean(),
          reconnect_wait = 1000 :: non_neg_integer(),
@@ -67,13 +67,13 @@
 
 
 -type command_error()          :: queue_overflow | node_down | {client_stopped, reason()}.
--type command_item()           :: {command, redis_command:redis_command(), reply_fun()}.
+-type command_item()           :: {command, ered_command:redis_command(), reply_fun()}.
 -type command_queue()          :: {Size :: non_neg_integer(), queue:queue(command_item())}.
 
--type reply()       :: {ok, redis_connection:result()} | {error, command_error()}.
+-type reply()       :: {ok, ered_connection:result()} | {error, command_error()}.
 -type reply_fun()   :: fun((reply()) -> any()).
 
--type host()        :: redis_connection:host().
+-type host()        :: ered_connection:host().
 -type addr()        :: {host(), inet:port_number()}.
 -type node_id()     :: binary() | undefined.
 -type client_info() :: {pid(), addr(), node_id()}.
@@ -85,7 +85,7 @@
 
 -type opt() ::
         %% Options passed to the connection module
-        {connection_opts, [redis_connection:opt()]} |
+        {connection_opts, [ered_connection:opt()]} |
         %% Max number of commands allowed to wait in queue.
         {max_waiting, non_neg_integer()} |
         %% Max number of commands to be pending, i.e. sent to client
@@ -133,8 +133,8 @@ stop(ServerRef) ->
     gen_server:stop(ServerRef).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec command(server_ref(), redis_command:command()) -> reply().
--spec command(server_ref(), redis_command:command(), timeout()) -> reply().
+-spec command(server_ref(), ered_command:command()) -> reply().
+-spec command(server_ref(), ered_command:command(), timeout()) -> reply().
 %%
 %% Send a command to the connected Redis node. The argument can be a
 %% single command as a list of binaries, a pipeline of command as a
@@ -144,10 +144,10 @@ command(ServerRef, Command) ->
     command(ServerRef, Command, infinity).
 
 command(ServerRef, Command, Timeout) ->
-    gen_server:call(ServerRef, {command, redis_command:convert_to(Command)}, Timeout).
+    gen_server:call(ServerRef, {command, ered_command:convert_to(Command)}, Timeout).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec command_async(server_ref(), redis_command:command(), reply_fun()) -> ok.
+-spec command_async(server_ref(), ered_command:command(), reply_fun()) -> ok.
 %%
 %% Send a command to the connected Redis node in asynchronous
 %% fashion. The provided callback function will be called with the
@@ -155,7 +155,7 @@ command(ServerRef, Command, Timeout) ->
 %% client process and should not hang or perform any lengthy task.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 command_async(ServerRef, Command, CallbackFun) ->
-    gen_server:cast(ServerRef, {command, redis_command:convert_to(Command), CallbackFun}).
+    gen_server:cast(ServerRef, {command, ered_command:convert_to(Command), CallbackFun}).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -280,7 +280,7 @@ process_commands(State) ->
         (NumWaiting > 0) and (NumPending < State#st.opts#opts.max_pending) and (State#st.connection_pid /= none) ->
             {Command, NewWaiting} = q_out(State#st.waiting),
             Data = get_command_payload(Command),
-            redis_connection:command_async(State#st.connection_pid, Data, {command_reply, State#st.connection_pid}),
+            ered_connection:command_async(State#st.connection_pid, Data, {command_reply, State#st.connection_pid}),
             process_commands(State#st{pending = q_in(Command, State#st.pending),
                                       waiting = NewWaiting});
 
@@ -368,7 +368,7 @@ send_info(Msg, State) ->
 
 
 connect(Pid, Opts) ->
-    Result = redis_connection:connect(Opts#opts.host, Opts#opts.port, Opts#opts.connection_opts),
+    Result = ered_connection:connect(Opts#opts.host, Opts#opts.port, Opts#opts.connection_opts),
     case Result of
         {error, Reason} ->
             Pid ! {connect_error, Reason},
@@ -397,7 +397,7 @@ init(MainPid, ConnectionPid, Opts) ->
         [] ->
             {ok, undefined};
         Commands ->
-            redis_connection:command_async(ConnectionPid, Commands, init_command_reply),
+            ered_connection:command_async(ConnectionPid, Commands, init_command_reply),
             receive
                 {init_command_reply, Reply} ->
                     case [Reason || {error, Reason} <- Reply] of

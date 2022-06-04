@@ -1,4 +1,4 @@
--module(redis_info_msg).
+-module(ered_info_msg).
 
 %% Functions used to format and send info messages
 
@@ -55,14 +55,14 @@
           reason := master_down | master_node_queue_full | bad_slot_map}.
 
 
--type addr() :: redis_client:addr().
+-type addr() :: ered_client:addr().
 
 %%%===================================================================
 %%% API
 %%%===================================================================
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec connection_status(redis_client:info_msg(), boolean(), [pid()]) -> ok.
+-spec connection_status(ered_client:info_msg(), boolean(), [pid()]) -> ok.
 %%
 %% Client connection goes up or down.
 %% Client queue full or queue recovered to OK level.
@@ -86,7 +86,7 @@ connection_status(ClientInfo, IsMaster, Pids) ->
               Pids).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec slot_map_updated(redis_lib:slot_map(), non_neg_integer(), [pid()]) -> ok.
+-spec slot_map_updated(ered_lib:slot_map(), non_neg_integer(), [pid()]) -> ok.
 %%
 %% A new slot map received from Redis, different from the current one.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -

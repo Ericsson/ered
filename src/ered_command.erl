@@ -1,4 +1,4 @@
--module(redis_command).
+-module(ered_command).
 
 %% Command formatting and related functions.
 
@@ -31,7 +31,7 @@
 -type raw_command() :: [binary()].
 -type raw_command_pipeline() :: [raw_command()].
 -type command() :: redis_command() | raw_command() | raw_command_pipeline().
--type ok_result() :: {ok, redis_parser:parse_result()}.
+-type ok_result() :: {ok, ered_parser:parse_result()}.
 
 %%%===================================================================
 %%% API
@@ -83,7 +83,7 @@ get_count_and_data({redis_command, Count, Data}) ->
           normal |
           try_again |
           cluster_down |
-          {moved | ask, redis_lib:addr()}.
+          {moved | ask, ered_lib:addr()}.
 %%
 %% Check for results that need special handling.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -

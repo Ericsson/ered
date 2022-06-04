@@ -1,4 +1,4 @@
--module(redis).
+-module(ered).
 
 %% External API for using connecting and sending commands to Redis cluster.
 %%
@@ -42,15 +42,15 @@
         %% up and returning the result. This affects ASK, MOVED
         %% and TRYAGAIN responses
         {redirect_attempts, non_neg_integer()} |
-        redis_cluster2:opt().
+        ered_cluster:opt().
 
--type addr()       :: redis_cluster2:addr().
+-type addr()       :: ered_cluster:addr().
 -type server_ref() :: pid().
--type command()    :: redis_command:command().
--type reply()      :: redis_client:reply().
--type reply_fun()  :: redis_client:reply_fun().
+-type command()    :: ered_command:command().
+-type reply()      :: ered_client:reply().
+-type reply_fun()  :: ered_client:reply_fun().
 -type key()        :: binary().
--type client_ref() :: redis_client:server_ref().
+-type client_ref() :: ered_client:server_ref().
 
 %%%===================================================================
 %%% API
@@ -95,7 +95,7 @@ command(ServerRef, Command, Key) ->
     command(ServerRef, Command, Key, infinity).
 
 command(ServerRef, Command, Key, Timeout) ->
-    C = redis_command:convert_to(Command),
+    C = ered_command:convert_to(Command),
     gen_server:call(ServerRef, {command, C, Key}, Timeout).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -111,8 +111,8 @@ command_all(ServerRef, Command, Timeout) ->
     %% Send command in sequence to all instances.
     %% This could be done in parallel but but keeping it easy and
     %% aligned with eredis_cluster for now
-    Cmd = redis_command:convert_to(Command),
-    [redis_client:command(ClientRef, Cmd, Timeout) || ClientRef <- get_clients(ServerRef)].
+    Cmd = ered_command:convert_to(Command),
+    [ered_client:command(ClientRef, Cmd, Timeout) || ClientRef <- get_clients(ServerRef)].
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec command_client(client_ref(), command()) -> reply().
@@ -124,7 +124,7 @@ command_client(ClientRef, Command) ->
     command_client(ClientRef, Command, infinity).
 
 command_client(ClientRef, Command, Timeout) ->
-    redis_client:command(ClientRef, Command, Timeout).
+    ered_client:command(ClientRef, Command, Timeout).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec command_client_async(client_ref(), command(), reply_fun()) -> ok.
@@ -135,7 +135,7 @@ command_client(ClientRef, Command, Timeout) ->
 %% should not hang or perform any lengthy task.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 command_client_async(ClientRef, Command, CallbackFun) ->
-    redis_client:command_async(ClientRef, Command, CallbackFun).
+    ered_client:command_async(ClientRef, Command, CallbackFun).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec get_clients(server_ref()) -> [client_ref()].
@@ -165,7 +165,7 @@ init([Addrs, Opts1]) ->
     {TryAgainDelay, Opts3} = take_prop(try_again_delay, Opts2, 200),
     {RedirectAttempts, Opts4} = take_prop(redirect_attempts, Opts3, 10),
 
-    {ok, ClusterPid} = redis_cluster2:start_link(Addrs, Opts4),
+    {ok, ClusterPid} = ered_cluster:start_link(Addrs, Opts4),
     EmptySlots = create_lookup_table(0, [], <<>>),
     {ok, #st{cluster_pid = ClusterPid,
              slots = EmptySlots,
@@ -173,7 +173,7 @@ init([Addrs, Opts1]) ->
              redirect_attempts = RedirectAttempts}}.
 
 handle_call({command, Command, Key}, From, State) ->
-    Slot = redis_lib:hash(Key),
+    Slot = ered_lib:hash(Key),
     send_command_to_slot(Command, Slot, From, State, State#st.redirect_attempts),
     {noreply, State};
 
@@ -186,15 +186,15 @@ handle_call(get_addr_to_client_map, _From, State) ->
 handle_cast({forward_command, Command, Slot, From, Addr, AttemptsLeft}, State) ->
     {Client, State1} = connect_addr(Addr, State),
     Fun = create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft),
-    redis_client:command_async(Client, Command, Fun),
+    ered_client:command_async(Client, Command, Fun),
     {noreply, State1};
 
 handle_cast({forward_command_asking, Command, Slot, From, Addr, AttemptsLeft, OldReply}, State) ->
     {Client, State1} = connect_addr(Addr, State),
-    Command1 = redis_command:add_asking(OldReply, Command),
+    Command1 = ered_command:add_asking(OldReply, Command),
     HandleReplyFun = create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft),
-    Fun = fun(Reply) -> HandleReplyFun(redis_command:fix_ask_reply(OldReply, Reply)) end,
-    redis_client:command_async(Client, Command1, Fun),
+    Fun = fun(Reply) -> HandleReplyFun(ered_command:fix_ask_reply(OldReply, Reply)) end,
+    ered_client:command_async(Client, Command1, Fun),
     {noreply, State1}.
 
 handle_info({command_try_again, Command, Slot, From, AttemptsLeft}, State) ->
@@ -202,12 +202,12 @@ handle_info({command_try_again, Command, Slot, From, AttemptsLeft}, State) ->
     {noreply, State};
 
 handle_info(#{msg_type := slot_map_updated}, State) ->
-    {MapVersion, ClusterMap, AddrToPid} = redis_cluster2:get_slot_map_info(State#st.cluster_pid),
+    {MapVersion, ClusterMap, AddrToPid} = ered_cluster:get_slot_map_info(State#st.cluster_pid),
     %% The idea is to store the client pids in a tuple and then
     %% have a binary where each byte corresponds to a slot and the
     %% value maps to a index in the tuple.
 
-    MasterAddrToPid = maps:with(redis_lib:slotmap_master_nodes(ClusterMap), AddrToPid),
+    MasterAddrToPid = maps:with(ered_lib:slotmap_master_nodes(ClusterMap), AddrToPid),
     %% Create a list of indices, one for each client pid
     Ixs = lists:seq(1, maps:size(MasterAddrToPid)),
     %% Combine the indices with the Addresses to create a lookup from Addr -> Ix
@@ -225,7 +225,7 @@ handle_info(_Ignore, State) ->
     {noreply, State}.
 
 terminate(_Reason, State) ->
-    redis_cluster2:stop(State#st.cluster_pid),
+    ered_cluster:stop(State#st.cluster_pid),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -244,7 +244,7 @@ send_command_to_slot(Command, Slot, From, State, AttemptsLeft) ->
         Ix ->
             Client = element(Ix, State#st.clients),
             Fun = create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft),
-            redis_client:command_async(Client, Command, Fun)
+            ered_client:command_async(Client, Command, Fun)
     end,
     ok.
 
@@ -259,18 +259,18 @@ create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft) ->
     SlotMapVersion = State#st.slot_map_version,
     TryAgainDelay = State#st.try_again_delay,
     fun(Reply) ->
-            case redis_command:check_result(Reply) of
+            case ered_command:check_result(Reply) of
                 normal ->
                     gen_server:reply(From, Reply);
                 {moved, Addr} ->
-                    redis_cluster2:update_slots(ClusterPid, SlotMapVersion, Client),
+                    ered_cluster:update_slots(ClusterPid, SlotMapVersion, Client),
                     gen_server:cast(Pid, {forward_command, Command, Slot, From, Addr, AttemptsLeft-1});
                 {ask, Addr} ->
                     gen_server:cast(Pid, {forward_command_asking, Command, Slot, From, Addr, AttemptsLeft-1, Reply});
                 try_again ->
                     erlang:send_after(TryAgainDelay, Pid, {command_try_again, Command, Slot, From, AttemptsLeft-1});
                 cluster_down ->
-                    redis_cluster2:update_slots(ClusterPid, SlotMapVersion, Client),
+                    ered_cluster:update_slots(ClusterPid, SlotMapVersion, Client),
                     gen_server:reply(From, Reply)
             end
     end.
@@ -285,7 +285,7 @@ create_client_pid_tuple(AddrToPid, AddrToIx) ->
 create_lookup_table(ClusterMap, AddrToIx) ->
     %% Replace the Addr in the slot map with the index using the lookup
     Slots = [{Start, End, maps:get(Addr,AddrToIx)}
-             || {Start, End, Addr} <- redis_lib:slotmap_master_slots(ClusterMap)],
+             || {Start, End, Addr} <- ered_lib:slotmap_master_slots(ClusterMap)],
     create_lookup_table(0, Slots, <<>>).
 
 create_lookup_table(16384, _, Acc) ->
@@ -306,7 +306,7 @@ create_lookup_table(N, L = [{Start, End, Val} | Rest], Acc) ->
 connect_addr(Addr, State) ->
     case maps:get(Addr, State#st.addr_map, not_found) of
         not_found ->
-            Client = redis_cluster2:connect_node(State#st.cluster_pid, Addr),
+            Client = ered_cluster:connect_node(State#st.cluster_pid, Addr),
             {Client, State#st{addr_map = maps:put(Addr, Client, State#st.addr_map)}};
         Client ->
             {Client, State}

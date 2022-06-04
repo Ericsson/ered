@@ -1,4 +1,4 @@
--module(redis_parser_tests).
+-module(ered_parser_tests).
 
 -include_lib("eunit/include/eunit.hrl").
 
@@ -76,7 +76,7 @@ parse_fail_test_() ->
 decode_err(In, Expected) ->
     fun() ->
             try
-                A = redis_parser:continue(In, redis_parser:init()),
+                A = ered_parser:continue(In, ered_parser:init()),
                 exit({unexpected_success, A})
             catch
                 throw:{parse_error, Err} ->
@@ -91,15 +91,15 @@ run_with(Fun) ->
 run(DataList, Expected) when is_list(DataList) ->
     fun() ->
             fun F([Data|Rest], State) ->
-                    case redis_parser:continue(Data, State) of
+                    case ered_parser:continue(Data, State) of
                         {done, Result, NewState} ->
                             ?assertEqual(Expected, Result),
                             % No lefteover data in state
-                            ?assertEqual(redis_parser:init(), NewState),
+                            ?assertEqual(ered_parser:init(), NewState),
                             % No unparsed data
                             ?assertEqual([], Rest);
                         {need_more, _, NewState} ->
                             F(Rest, NewState)
                     end
-            end(DataList, redis_parser:init())
+            end(DataList, ered_parser:init())
     end.

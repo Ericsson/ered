@@ -1,4 +1,4 @@
--module(redis_parser).
+-module(ered_parser).
 
 %% RESP3 (REdis Serialization Protocol) parser.
 

@@ -1,4 +1,4 @@
--module(redis_connection).
+-module(ered_connection).
 
 %% Managing the socket, sending commands and receiving replies.
 %% Batches messages from the process queue. One process handles
@@ -40,7 +40,7 @@
         %% Timeout when waiting for a response from Redis. milliseconds
         {response_timeout, non_neg_integer()}.
 
--type result() :: redis_parser:parse_result().
+-type result() :: ered_parser:parse_result().
 -type push_cb() :: fun((result()) -> any()).
 -type wait_info() ::
         {N :: non_neg_integer() | single,
@@ -109,8 +109,8 @@ connect_async(Addr, Port, Opts) ->
       end).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec command(connection_ref(), redis_command:command()) -> result().
--spec command(connection_ref(), redis_command:command(), timeout()) -> result().
+-spec command(connection_ref(), ered_command:command()) -> result().
+-spec command(connection_ref(), ered_command:command(), timeout()) -> result().
 %%
 %% Send a command to the connected Redis node. The argument can be a
 %% single command as a list of binaries, a pipeline of command as a
@@ -122,7 +122,7 @@ command(Connection, Command) ->
 command(Connection, Command, Timeout) ->
     link(Connection),
     Ref = make_ref(),
-    Connection ! {send, self(), Ref, redis_command:convert_to(Command)},
+    Connection ! {send, self(), Ref, ered_command:convert_to(Command)},
     receive {Ref, Value} ->
             unlink(Connection),
             Value
@@ -131,7 +131,7 @@ command(Connection, Command, Timeout) ->
             {error, timeout}
     end.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec command_async(connection_ref(), redis_command:command(), any()) -> ok.
+-spec command_async(connection_ref(), ered_command:command(), any()) -> ok.
 %%
 %% Send a command to the connected Redis node in asynchronous
 %% fashion. The provided callback function will be called with the
@@ -139,7 +139,7 @@ command(Connection, Command, Timeout) ->
 %% client process and should not hang or perform any lengthy task.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 command_async(Connection, Data, Ref) ->
-    Connection ! {send, self(), Ref, redis_command:convert_to(Data)},
+    Connection ! {send, self(), Ref, ered_command:convert_to(Data)},
     ok.
 
 %%%===================================================================
@@ -151,7 +151,7 @@ command_async(Connection, Data, Ref) ->
 %%
 
 recv_loop(Socket, PushCB, Timeout) ->
-    ParseInit = redis_parser:next(redis_parser:init()),
+    ParseInit = ered_parser:next(ered_parser:init()),
     State = #recv_st{socket = Socket, push_cb = PushCB, timeout = Timeout},
     try
         recv_loop({ParseInit, State})
@@ -175,7 +175,7 @@ read_socket(BytesNeeded, ParserState, State) ->
     WaitTime = get_timeout(State1),
     case gen_tcp:recv(State1#recv_st.socket, BytesNeeded, WaitTime) of
         {ok, Data} ->
-            {redis_parser:continue(Data, ParserState), State1};
+            {ered_parser:continue(Data, ParserState), State1};
         {error, timeout} when State1#recv_st.waiting == [] ->
             %% no command pending, try again
             read_socket(BytesNeeded, ParserState, State1);
@@ -192,22 +192,22 @@ handle_result({push, Value = [Type|_]}, ParserState, State)
 handle_result({push, Value}, ParserState, State) ->
     PushCB = State#recv_st.push_cb,
     PushCB(Value),
-    {redis_parser:next(ParserState), State};
+    {ered_parser:next(ParserState), State};
 handle_result(Value, ParserState, State) ->
     {{N, Pid, Ref, Acc}, State1} = pop_waiting(State),
     %% Check how many replies expected
     case N of
         single ->
             Pid ! {Ref, Value},
-            {redis_parser:next(ParserState), State1};
+            {ered_parser:next(ParserState), State1};
         1 ->
             %% Last one, send the reply
             Pid ! {Ref, lists:reverse([Value | Acc])},
-            {redis_parser:next(ParserState), State1};
+            {ered_parser:next(ParserState), State1};
         _ ->
             %% More left, save the reply and keep going
             State2 = push_waiting({N-1, Pid, Ref, [Value | Acc]}, State1),
-            {redis_parser:next(ParserState), State2}
+            {ered_parser:next(ParserState), State2}
     end.
 
 get_timeout(State) ->
@@ -281,7 +281,7 @@ receive_data(N, Time, Acc) ->
                 {recv_exit, Reason} ->
                     {recv_exit, Reason};
                 {send, Pid, Ref, Commands} ->
-                    {Count, Data} = redis_command:get_count_and_data(Commands),
+                    {Count, Data} = ered_command:get_count_and_data(Commands),
                     RefInfo = {Count, Pid, Ref, []},
                     Acc1 = [{RefInfo, Data} | Acc],
                     receive_data(N, 0, Acc1)
