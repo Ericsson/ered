@@ -338,10 +338,6 @@ t_new_cluster_master(_) ->
     cmd_until("redis-cli -p 30007 CLUSTER MEET 127.0.0.1 30001", "OK"),
     cmd_until("redis-cli -p 30007 CLUSTER INFO", "cluster_state:ok"),
 
-    %% Clear all old data
-    Clients = ered:get_clients(R),
-    [{ok, _} = ered:command_client(Client, [<<"FLUSHDB">>]) || Client <- Clients],
-
     %% Set some dummy data
     Key = <<"test_key">>,
     Data = <<"dummydata">>,
@@ -448,7 +444,7 @@ t_ask_redirect(_) ->
                                                      Key),
 
     %% Try the running the same command again but trigger a MIGRATE to move {test_key}1 to the IMPORTING node.
-    %% This should lead to the command returning the data for both keys once it asks the correct node. 
+    %% This should lead to the command returning the data for both keys once it asks the correct node.
     Pid = self(),
 
     %% run the command async
@@ -470,16 +466,23 @@ t_ask_redirect(_) ->
     no_more_msgs(),
 
     %% Finalize the migration
-    cmd_log("redis-cli -p " ++ DestPort ++ " CLUSTER SETSLOT " ++ Slot ++ " STABLE"),
-    cmd_log("redis-cli -p " ++ SourcePort ++ " CLUSTER SETSLOT " ++ Slot ++ " STABLE"),
-
     cmd_log("redis-cli -p " ++ DestPort ++ " CLUSTER SETSLOT " ++ Slot ++ " NODE " ++ DestNodeId),
     cmd_log("redis-cli -p " ++ SourcePort ++ " CLUSTER SETSLOT " ++ Slot ++ " NODE "++ DestNodeId),
 
     %% Now this should lead to a moved redirection and a slotmap update
     {ok,undefined} = ered:command(R, [<<"GET">>, Key], Key),
-    #{slot_map := SlotMap} = msg(msg_type, slot_map_updated, 1000),
+    ?MSG(#{msg_type := slot_map_updated}, 1000),
     no_more_msgs(),
+
+    %% now restore the slot
+    %% remove these, cant be bothered to move them back
+    ered:command(R, [<<"DEL">>,  <<"{test_key}1">>, <<"{test_key}2">>], Key),
+    move_key(DestPort, SourcePort, Key),
+    {ok,undefined} = ered:command(R, [<<"GET">>, Key], Key),
+    ?MSG(#{msg_type := slot_map_updated}, 1000),
+
+    %% wait a bit to let the config spread to all nodes
+    timer:sleep(5000),
     ok.
 
 t_client_map(_) ->
@@ -532,6 +535,9 @@ start_cluster(Opts) ->
     ClusterIds = [maps:get(Port, IdMap) || Port <- Ports],
 
     ?MSG(#{msg_type := cluster_ok}),
+
+    %% Clear all old data
+    [{ok, _} = ered:command_client(Client, [<<"FLUSHDB">>]) || Client <- ered:get_clients(P)],
 
     no_more_msgs(),
     P.

@@ -49,7 +49,7 @@
              closing = #{} :: #{addr() => reference()},
 
              slot_map = [],
-             slot_map_version = 1,
+             slot_map_version = 0,
              slot_timer_ref = none,
 
              info_pid = [] :: [pid()],
@@ -335,7 +335,7 @@ update_cluster_state(ClusterStatus, State) ->
             State1 = stop_periodic_slot_info_request(State),
             State1#st{cluster_state = ok};
         {ok, ok} ->
-            State;
+            stop_periodic_slot_info_request(State);
         {pending, _} ->
             State;
         {_, ok} ->
