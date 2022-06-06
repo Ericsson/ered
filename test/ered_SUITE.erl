@@ -33,26 +33,38 @@ all() ->
 
 -define(MSG(Pattern), ?MSG(Pattern, 1000)).
 
+-define(PORTS, [30001, 30002, 30003, 30004, 30005, 30006]).
+
+
 init_per_suite(Config) ->
-    %% TODO use port_command so we can get the exit code here?
-    R =  os:cmd("docker run --name redis-1 -d --net=host --restart=on-failure redis redis-server --cluster-enabled yes --port 30001 --cluster-node-timeout 2000;"
-                "docker run --name redis-2 -d --net=host --restart=on-failure redis redis-server --cluster-enabled yes --port 30002 --cluster-node-timeout 2000;"
-                "docker run --name redis-3 -d --net=host --restart=on-failure redis redis-server --cluster-enabled yes --port 30003 --cluster-node-timeout 2000;"
-                "docker run --name redis-4 -d --net=host --restart=on-failure redis redis-server --cluster-enabled yes --port 30004 --cluster-node-timeout 2000;"
-                "docker run --name redis-5 -d --net=host --restart=on-failure redis redis-server --cluster-enabled yes --port 30005 --cluster-node-timeout 2000;"
-                "docker run --name redis-6 -d --net=host --restart=on-failure redis redis-server --cluster-enabled yes --port 30006 --cluster-node-timeout 2000;"),
-    ct:pal(R),
+    InitialNodes = [{localhost, Port} || Port <- ?PORTS],
+    {ok, R} = ered:start_link(InitialNodes, [{info_pid, [self()]}]),
+
+    cmd_log("docker run --name redis-1 -d --net=host --restart=on-failure redis redis-server --cluster-enabled yes --port 30001 --cluster-node-timeout 2000;"
+            "docker run --name redis-2 -d --net=host --restart=on-failure redis redis-server --cluster-enabled yes --port 30002 --cluster-node-timeout 2000;"
+            "docker run --name redis-3 -d --net=host --restart=on-failure redis redis-server --cluster-enabled yes --port 30003 --cluster-node-timeout 2000;"
+            "docker run --name redis-4 -d --net=host --restart=on-failure redis redis-server --cluster-enabled yes --port 30004 --cluster-node-timeout 2000;"
+            "docker run --name redis-5 -d --net=host --restart=on-failure redis redis-server --cluster-enabled yes --port 30005 --cluster-node-timeout 2000;"
+            "docker run --name redis-6 -d --net=host --restart=on-failure redis redis-server --cluster-enabled yes --port 30006 --cluster-node-timeout 2000;"),
+
     timer:sleep(1000),
     lists:foreach(fun(Port) ->
                           {ok,Pid} = ered_client:start_link("127.0.0.1", Port, []),
                           {ok, <<"PONG">>} = ered_client:command(Pid, <<"ping">>)
-                  end,
-                  [30001, 30002, 30003, 30004, 30005, 30006]),
-    os:cmd(" echo 'yes' | docker run --name redis-cluster --net=host -i redis redis-cli --cluster create 127.0.0.1:30001 127.0.0.1:30002 127.0.0.1:30003 127.0.0.1:30004 127.0.0.1:30005 127.0.0.1:30006 --cluster-replicas 1"),
+                  end, ?PORTS),
 
-    %% Wait for cluster to be fully up. If not then we get a "CLUSTERDOWN The cluster is down" error when sending commands.
-    %% TODO set cluster-require-full-coverage to no and see if it helps
-    timer:sleep(5000),
+    cmd_log(" echo 'yes' | docker run --name redis-cluster --net=host -i redis redis-cli --cluster create 127.0.0.1:30001 127.0.0.1:30002 127.0.0.1:30003 127.0.0.1:30004 127.0.0.1:30005 127.0.0.1:30006 --cluster-replicas 1"),
+
+    {ok, Tref} = timer:exit_after(20000, cluster_start_timeout),
+    fun Loop() ->
+            receive
+                #{msg_type := cluster_ok} ->
+                    ok;
+                Other ->
+                    ct:pal("~p\n", [Other]),
+                    Loop()
+            end
+    end(),
     [].
 
 end_per_suite(Config) ->
