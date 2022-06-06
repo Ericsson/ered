@@ -93,7 +93,7 @@ connect_async(Addr, Port, Opts) ->
     spawn_link(
       fun() ->
               SendPid = self(),
-              case gen_tcp:connect(Addr, Port, TcpOptions) of
+              case catch gen_tcp:connect(Addr, Port, TcpOptions) of
                   {ok, Socket} ->
                       Master ! {connected, SendPid},
                       Pid = spawn_link(fun() ->
@@ -104,7 +104,9 @@ connect_async(Addr, Port, Opts) ->
                       ExitReason = send_loop(Socket, Pid, BatchSize),
                       Master ! {socket_closed, SendPid, ExitReason};
                   {error, Reason} ->
-                      Master ! {connect_error, SendPid, Reason}
+                      Master ! {connect_error, SendPid, Reason};
+                  Exit = {'EXIT',_} ->
+                      Master ! {connect_error, SendPid, Exit}
               end
       end).
 

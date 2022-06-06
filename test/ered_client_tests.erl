@@ -18,7 +18,9 @@ run_test_() ->
      {spawn, fun server_buffer_full_reconnect_t/0},
      {spawn, fun server_buffer_full_node_goes_down_t/0},
      {spawn, fun send_timeout_t/0},
-     {spawn, fun fail_hello_t/0}
+     {spawn, fun fail_hello_t/0},
+     {spawn, fun empty_string_host_t/0},
+     {spawn, fun bad_host_t/0}
     ].
 
 request_t() ->
@@ -260,6 +262,15 @@ fail_hello_t() ->
     receive done -> ok end,
     no_more_msgs().
 
+empty_string_host_t() ->
+    {ok,Client} = ered_client:start_link("", 30000, [{info_pid, self()}]),
+    {connect_error, {'EXIT',badarg}} = expect_connection_down(Client),
+    no_more_msgs().
+
+bad_host_t() ->
+    {ok,Client} = ered_client:start_link(undefined, 30000, [{info_pid, self()}]),
+    {connect_error, nxdomain} = expect_connection_down(Client),
+    no_more_msgs().
 
 expect_connection_up(Client) ->
     expect_connection_up(Client, infinity).
@@ -273,8 +284,6 @@ expect_connection_down(Client) ->
 expect_connection_down(Client, Timeout) ->
     {connection_status, {Client,Addr,_undefined}, {connection_down, Reason}} = get_msg(Timeout),
     Reason.
-
-
 
 get_msg() ->
     get_msg(infinity).
