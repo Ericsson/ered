@@ -49,6 +49,7 @@
 
 -record(st,
         {
+         connect_loop_pid = none,
          connection_pid = none,
          last_status = none,
 
@@ -61,7 +62,7 @@
          node_down = false :: boolean(),
 
          node_down_timer = none :: none | reference(),
-         opts = #opts{}%:: undefined | #opts{}
+         opts = #opts{}
 
         }).
 
@@ -177,8 +178,9 @@ init([Host, Port, OptsList]) ->
              OptsList),
 
     Pid = self(),
-    spawn_link(fun() -> connect(Pid, Opts) end),
-    {ok, start_node_down_timer(#st{opts = Opts})}.
+    ConnectPid = spawn_link(fun() -> connect(Pid, Opts) end),
+    {ok, start_node_down_timer(#st{opts = Opts,
+                                  connect_loop_pid = ConnectPid})}.
 
 handle_call({command, Command}, From, State) ->
     Fun = fun(Reply) -> gen_server:reply(From, Reply) end,
@@ -231,12 +233,8 @@ handle_info({timeout, TimerRef, node_down}, State) when TimerRef == State#st.nod
 handle_info({timeout, _TimerRef, _Msg}, State) ->
     {noreply, State}.
 
-
 terminate(Reason, State) ->
-    %% This could be done more gracefully by killing the connection process if up
-    %% and waiting for trailing command replies and incoming commands. This would
-    %% mean introducing a separate stop function and a stopped state.
-    %% For now just cancel all commands and die
+    exit(State#st.connect_loop_pid, kill),
     reply_all({error, {client_stopped, Reason}}, State),
     report_connection_status({connection_down, {client_stopped, Reason}}, State),
     ok.
@@ -377,7 +375,8 @@ connect(Pid, Opts) ->
         {ok, ConnectionPid} ->
             case init(Pid, ConnectionPid, Opts) of
                 {socket_closed, ConnectionPid, Reason} ->
-                    Pid ! {socket_closed, Reason};
+                    Pid ! {socket_closed, Reason},
+                    timer:sleep(Opts#opts.reconnect_wait);
                 {ok, ClusterId}  ->
                     Pid ! {connected, ConnectionPid, ClusterId},
                     receive
