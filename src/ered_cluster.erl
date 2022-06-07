@@ -170,9 +170,18 @@ handle_call({connect_node, Addr}, _From, State) ->
     {reply, ClientPid, State1}.
 
 handle_cast({trigger_map_update, SlotMapVersion, Node}, State) ->
-    case SlotMapVersion == State#st.slot_map_version of
+    case (SlotMapVersion == State#st.slot_map_version) and (State#st.slot_timer_ref == none) of
         true ->
-            {noreply, start_periodic_slot_info_request(Node, State)};
+            %% Get the address of the client. The address is needd to look up the node status
+            %% before sending an update. This could need to go through all the nodes
+            %% but it should not be done often enough to be a problem
+            NodeAddr = case lists:keyfind(Node, 2, maps:to_list(State#st.nodes)) of
+                           false ->
+                               [];
+                           {Addr, _Client} ->
+                               [Addr]
+                       end,
+            {noreply, start_periodic_slot_info_request(NodeAddr ++ State#st.initial_nodes, State)};
         false  ->
             {noreply, State}
     end.
@@ -262,10 +271,11 @@ handle_info({slot_info, Version, Response}, State) ->
             end
     end;
 
-handle_info({timeout, TimerRef, time_to_update_slots}, State) ->
+handle_info({timeout, TimerRef, {time_to_update_slots,PreferredNodes}}, State) ->
     case State#st.slot_timer_ref of
         TimerRef when State#st.cluster_state == nok ->
-            {noreply, start_periodic_slot_info_request(State#st{slot_timer_ref = none})};
+            {noreply, start_periodic_slot_info_request(PreferredNodes,
+                                                       State#st{slot_timer_ref = none})};
         TimerRef ->
             {noreply, State#st{slot_timer_ref = none}};
         _ ->
@@ -347,20 +357,23 @@ update_cluster_state(ClusterStatus, State) ->
     end.
 
 start_periodic_slot_info_request(State) ->
-    case pick_node(State) of
-        none ->
-            % try again when a node comes up
-            State;
-        Node ->
-            start_periodic_slot_info_request(Node, State)
-    end.
+    start_periodic_slot_info_request(State#st.initial_nodes, State).
 
-start_periodic_slot_info_request(Node, State) ->
+start_periodic_slot_info_request(PreferredNodes, State) ->
     case State#st.slot_timer_ref of
         none ->
-            send_slot_info_request(Node, State),
-            Tref = erlang:start_timer(State#st.update_slot_wait, self(), time_to_update_slots),
-            State#st{slot_timer_ref = Tref};
+            case pick_node(PreferredNodes, State) of
+                none ->
+                    %% try again when a node comes up
+                    State;
+                Node ->
+                    send_slot_info_request(Node, State),
+                    Tref = erlang:start_timer(
+                             State#st.update_slot_wait,
+                             self(),
+                             {time_to_update_slots,PreferredNodes}),
+                    State#st{slot_timer_ref = Tref}
+            end;
         _Else ->
             State
     end.
@@ -379,14 +392,14 @@ send_slot_info_request(Node, State) ->
     Cb = fun(Answer) -> Pid ! {slot_info, State#st.slot_map_version, Answer} end,
     ered_client:command_async(Node, [<<"CLUSTER">>, <<"SLOTS">>], Cb).
 
-pick_node(State) ->
+pick_node(PreferredNodes, State) ->
     case sets:is_empty(State#st.up) of
         true ->
             none;
         false ->
             %% prioritize initial configured nodes
             case lists:dropwhile(fun(Addr) -> not sets:is_element(Addr, State#st.up) end,
-                                 State#st.initial_nodes) of
+                                 PreferredNodes) of
                 [] ->
                     %% no initial node up, pick one from the up set
                     Addr = hd(sets:to_list(State#st.up));
