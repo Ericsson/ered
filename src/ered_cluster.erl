@@ -186,45 +186,34 @@ handle_cast({trigger_map_update, SlotMapVersion, Node}, State) ->
             {noreply, State}
     end.
 
-handle_info(Msg = {connection_status, {Pid, Addr, _Id} , Status}, State) ->
-    case maps:find(Addr, State#st.nodes) of
-        {ok, Pid} ->
-            IsMaster = sets:is_element(Addr, State#st.masters),
-            ered_info_msg:connection_status(Msg, IsMaster, State#st.info_pid),
-            State1 = case Status of
-                         {connection_down, {socket_closed, _}} ->
-                             %% Avoid triggering the alarm for a normal from peer side.
-                             %% The cluster will be marked down on connect or node down event.
-                             State;
-                         {connection_down,_} ->
-                             State#st{up = sets:del_element(Addr, State#st.up),
-                                      pending = sets:del_element(Addr, State#st.pending)};
-                         connection_up ->
-                             State#st{up = sets:add_element(Addr, State#st.up),
-                                      pending = sets:del_element(Addr, State#st.pending)};
-                         queue_full ->
-                             State#st{queue_full = sets:add_element(Addr, State#st.queue_full)};
-                         queue_ok ->
-                             State#st{queue_full = sets:del_element(Addr, State#st.queue_full)}
-                     end,
-            case check_cluster_status(State1) of
-                ok ->
-                    %% Do not set the cluster state to OK yet. Wait for a slot info message.
-                    %% The slot info message will set the cluster state to OK if the map and
-                    %% connections are OK. This is to avoid to send the cluster OK info message
-                    %% too early if there are slot map updates in addition to connection errors.
-                    {noreply, State1};
-                ClusterStatus ->
-                    {noreply, update_cluster_state(ClusterStatus, State1)}
-            end;
-        % Stopped client
-        _Other ->
-            %% only interested in client_stopped messages. this client is defunct and if it
-            %% comes back and gives a client up message it will just be confusing since it
-            %% will be closed anyway
-            [ered_info_msg:connection_status(Msg, _IsMaster = false, State#st.info_pid)
-             || {connection_down, {client_stopped, _}} <- [Status]],
-            {noreply, State}
+handle_info(Msg = {connection_status, {_Pid, Addr, _Id} , Status}, State) ->
+    IsMaster = sets:is_element(Addr, State#st.masters),
+    ered_info_msg:connection_status(Msg, IsMaster, State#st.info_pid),
+    State1 = case Status of
+                 {connection_down, {socket_closed, _}} ->
+                     %% Avoid triggering the alarm for a normal from peer side.
+                     %% The cluster will be marked down on connect or node down event.
+                     State;
+                 {connection_down,_} ->
+                     State#st{up = sets:del_element(Addr, State#st.up),
+                              pending = sets:del_element(Addr, State#st.pending)};
+                 connection_up ->
+                     State#st{up = sets:add_element(Addr, State#st.up),
+                              pending = sets:del_element(Addr, State#st.pending)};
+                 queue_full ->
+                     State#st{queue_full = sets:add_element(Addr, State#st.queue_full)};
+                 queue_ok ->
+                     State#st{queue_full = sets:del_element(Addr, State#st.queue_full)}
+             end,
+    case check_cluster_status(State1) of
+        ok ->
+            %% Do not set the cluster state to OK yet. Wait for a slot info message.
+            %% The slot info message will set the cluster state to OK if the map and
+            %% connections are OK. This is to avoid to send the cluster OK info message
+            %% too early if there are slot map updates in addition to connection errors.
+            {noreply, State1};
+        ClusterStatus ->
+            {noreply, update_cluster_state(ClusterStatus, State1)}
     end;
 
 handle_info({slot_info, Version, Response}, State) ->
@@ -291,6 +280,7 @@ handle_info({timeout, TimerRef, {close_clients, Remove}}, State) ->
     [ered_client:stop(Client) || Client <- maps:values(Clients)],
     %% remove from nodes and closing map
     {noreply, State#st{nodes = maps:without(ToCloseNow, State#st.nodes),
+                       up = sets:subtract(State#st.up, sets:from_list(ToCloseNow)),
                        closing = maps:without(ToCloseNow, State#st.closing)}}.
 
 terminate(_Reason, State) ->
