@@ -89,23 +89,37 @@ connect(Host, Port, Opts) ->
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 connect_async(Addr, Port, Opts) ->
     [error({badarg, BadOpt})
-     || BadOpt <- proplists:get_keys(Opts) -- [batch_size, tcp_options, tls_options, push_cb, response_timeout]],
+     || BadOpt <- proplists:get_keys(Opts) -- [batch_size, tcp_options, tls_options, push_cb, response_timeout,
+                                               tcp_connect_timeout, tls_connect_timeout]],
     BatchSize = proplists:get_value(batch_size, Opts, 16),
     Timeout = proplists:get_value(response_timeout, Opts, 10000),
     PushCb = proplists:get_value(push_cb, Opts, fun(_) -> ok end),
     TcpOptions = proplists:get_value(tcp_options, Opts, []),
     TlsOptions = proplists:get_value(tls_options, Opts, []),
-    {Transport, ConnectOptions} = case TlsOptions of
-                                      [] ->
-                                          {gen_tcp, TcpOptions};
-                                      _ ->
-                                          {ssl, TlsOptions}
-                                  end,
+    TcpTimeout = proplists:get_value(tcp_connect_timeout, Opts, infinity),
+    TlsTimeout = proplists:get_value(tls_connect_timeout, Opts, infinity),
+    Transport  = case TlsOptions of
+                     [] ->
+                         gen_tcp;
+                     _ ->
+                         ssl
+                 end,
     Master = self(),
     spawn_link(
       fun() ->
               SendPid = self(),
-              case catch Transport:connect(Addr, Port, [{active, false}, binary] ++ ConnectOptions) of
+              Result = case catch gen_tcp:connect(Addr, Port, [{active, false}, binary] ++ TcpOptions, TcpTimeout) of
+                           {ok, TcpSocket} when Transport == ssl ->
+                               case ssl:connect(TcpSocket, TlsOptions, TlsTimeout) of
+                                   {ok, TlsSocket} ->
+                                       {ok, TlsSocket};
+                                   {error, TlsReason} ->
+                                       {error, {tls_init, TlsReason}}
+                               end;
+                           Else ->
+                               Else
+                       end,
+              case Result of
                   {ok, Socket} ->
                       Master ! {connected, SendPid},
                       Pid = spawn_link(fun() ->
@@ -117,7 +131,7 @@ connect_async(Addr, Port, Opts) ->
                       Master ! {socket_closed, SendPid, ExitReason};
                   {error, Reason} ->
                       Master ! {connect_error, SendPid, Reason};
-                   Other -> % {'EXIT',_} or {option_not_a_key_value_tuple, any()}
+                   Other -> % {'EXIT',_}
                       Master ! {connect_error, SendPid, Other}
               end
       end).
