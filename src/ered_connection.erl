@@ -15,14 +15,15 @@
          command_async/3]).
 
 -export_type([opt/0,
-             result/0,
-             host/0]).
+              result/0,
+              host/0]).
 
 
 %%%===================================================================
 %%% Definitions
 %%%===================================================================
--record(recv_st, {socket :: gen_tcp:socket(),
+-record(recv_st, {transport :: gen_tcp | ssl,
+                  socket :: gen_tcp:socket() | ssl:sslsocket(),
                   push_cb :: push_cb(),
                   timeout :: non_neg_integer(), % miliseconds
                   waiting = [] :: [wait_info()],
@@ -35,6 +36,9 @@
         {batch_size, non_neg_integer()} |
         %% Options passed to gen_tcp:connect
         {tcp_options, [gen_tcp:connect_option()]} |
+        %% Options passed to ssl:connect. If this config parameter is present
+        %% tls will be used instead of tcp
+        {tls_options, [ssl:tls_client_option()]} |
         %% Callback for push notifications
         {push_cb, push_cb()} |
         %% Timeout when waiting for a response from Redis. milliseconds
@@ -84,29 +88,37 @@ connect(Host, Port, Opts) ->
 %% to the calling process.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 connect_async(Addr, Port, Opts) ->
-    [error({badarg, BadOpt}) || BadOpt <- proplists:get_keys(Opts) -- [batch_size, tcp_options, push_cb, response_timeout]],
+    [error({badarg, BadOpt})
+     || BadOpt <- proplists:get_keys(Opts) -- [batch_size, tcp_options, tls_options, push_cb, response_timeout]],
     BatchSize = proplists:get_value(batch_size, Opts, 16),
-    TcpOptions = [{active, false}, binary] ++ proplists:get_value(tcp_options, Opts, []),
     Timeout = proplists:get_value(response_timeout, Opts, 10000),
     PushCb = proplists:get_value(push_cb, Opts, fun(_) -> ok end),
+    TcpOptions = proplists:get_value(tcp_options, Opts, []),
+    TlsOptions = proplists:get_value(tls_options, Opts, []),
+    {Transport, ConnectOptions} = case TlsOptions of
+                                      [] ->
+                                          {gen_tcp, TcpOptions};
+                                      _ ->
+                                          {ssl, TlsOptions}
+                                  end,
     Master = self(),
     spawn_link(
       fun() ->
               SendPid = self(),
-              case catch gen_tcp:connect(Addr, Port, TcpOptions) of
+              case catch Transport:connect(Addr, Port, [{active, false}, binary] ++ ConnectOptions) of
                   {ok, Socket} ->
                       Master ! {connected, SendPid},
                       Pid = spawn_link(fun() ->
-                                               ExitReason = recv_loop(Socket, PushCb, Timeout),
+                                               ExitReason = recv_loop(Transport, Socket, PushCb, Timeout),
                                                %% Inform sending process about exit
                                                SendPid ! ExitReason
                                        end),
-                      ExitReason = send_loop(Socket, Pid, BatchSize),
+                      ExitReason = send_loop(Transport, Socket, Pid, BatchSize),
                       Master ! {socket_closed, SendPid, ExitReason};
                   {error, Reason} ->
                       Master ! {connect_error, SendPid, Reason};
-                  Exit = {'EXIT',_} ->
-                      Master ! {connect_error, SendPid, Exit}
+                   Other -> % {'EXIT',_} or {option_not_a_key_value_tuple, any()}
+                      Master ! {connect_error, SendPid, Other}
               end
       end).
 
@@ -152,9 +164,9 @@ command_async(Connection, Data, Ref) ->
 %% Receive logic
 %%
 
-recv_loop(Socket, PushCB, Timeout) ->
+recv_loop(Transport, Socket, PushCB, Timeout) ->
     ParseInit = ered_parser:next(ered_parser:init()),
-    State = #recv_st{socket = Socket, push_cb = PushCB, timeout = Timeout},
+    State = #recv_st{transport = Transport, socket = Socket, push_cb = PushCB, timeout = Timeout},
     try
         recv_loop({ParseInit, State})
     catch
@@ -175,7 +187,8 @@ recv_loop({ParseResult, State}) ->
 read_socket(BytesNeeded, ParserState, State) ->
     State1 = update_waiting(0, State),
     WaitTime = get_timeout(State1),
-    case gen_tcp:recv(State1#recv_st.socket, BytesNeeded, WaitTime) of
+    Transport = State1#recv_st.transport,
+    case Transport:recv(State1#recv_st.socket, BytesNeeded, WaitTime) of
         {ok, Data} ->
             {ered_parser:continue(Data, ParserState), State1};
         {error, timeout} when State1#recv_st.waiting == [] ->
@@ -248,21 +261,21 @@ update_waiting(_Timeout, State) ->
 %% Send logic
 %%
 
-send_loop(Socket, RecvPid, BatchSize) ->
+send_loop(Transport, Socket, RecvPid, BatchSize) ->
     case receive_data(BatchSize) of
         {recv_exit, Reason} ->
             {recv_exit, Reason};
         {data, {Refs, Data}} ->
             Time = erlang:monotonic_time(millisecond),
-            case gen_tcp:send(Socket, Data) of
+            case Transport:send(Socket, Data) of
                 ok ->
                     %% send to recv proc to fetch the response
                     RecvPid ! {requests, Refs, Time},
-                    send_loop(Socket, RecvPid, BatchSize);
+                    send_loop(Transport, Socket, RecvPid, BatchSize);
                 {error, Reason} ->
                     %% Give recv_loop time to finish processing
                     %% This will shut down recv_loop if it is waiting on socket
-                    gen_tcp:shutdown(Socket, read_write),
+                    Transport:shutdown(Socket, read_write),
                     %% This will shut down recv_loop if it is waiting for a reference
                     RecvPid ! close_down,
                     %% Ok, recv done, time to die
