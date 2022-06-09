@@ -298,8 +298,8 @@ format_status(_Opt, Status) ->
 %%%===================================================================
 
 new_set(List) ->
+    %% sets:from_list(List, [{version, 2}]). TODO: OTP 24
     sets:from_list(List).
-    % sets:from_list(List, [{version, 2}]). TODO: OTP 24
 
 check_cluster_status(State) ->
     case is_slot_map_ok(State) of
@@ -450,8 +450,8 @@ start_client(Addr, State) ->
 start_clients(Addrs, State) ->
     %% open clients to new nodes not seen before
     NewNodes = maps:from_list([{Addr, start_client(Addr, State)}
-                                   || Addr <- Addrs,
-                                      not maps:is_key(Addr, State#st.nodes)]),
+                               || Addr <- Addrs,
+                                  not maps:is_key(Addr, State#st.nodes)]),
 
     State#st{nodes = maps:merge(State#st.nodes, NewNodes),
              pending = sets:union(State#st.pending, new_set(maps:keys(NewNodes))),

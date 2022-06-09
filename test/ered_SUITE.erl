@@ -1,8 +1,5 @@
 -module(ered_SUITE).
 
-
-%export([init_per_suite/1, end_per_suite/1]).
-
 -compile([export_all]).
 
 all() ->
@@ -402,8 +399,6 @@ t_ask_redirect(_) ->
 
     Key = <<"test_key">>,
 
-    %Moved = cmd_log("redis-cli -p 30001 GET " ++ binary_to_list(Key)),
-
     SourcePort = integer_to_list(get_master_from_key(R, Key)),
     DestPort = integer_to_list(hd([Port || Port <- get_all_masters(R), integer_to_list(Port) /= SourcePort])),
 
@@ -423,20 +418,20 @@ t_ask_redirect(_) ->
     %% Test multiple commands. unknown key leads to ASK redirection. The {test_key}2 will be set
     %% in IMPORTING node after command
     {ok,[undefined,<<"PONG">>,<<"OK">>]} = ered:command(R,
-                                                         [[<<"GET">>, <<"{test_key}2">>],
-                                                          [<<"PING">>] ,
-                                                          [<<"SET">>, <<"{test_key}2">>, <<"DATA2">>]],
-                                                         Key),
+                                                        [[<<"GET">>, <<"{test_key}2">>],
+                                                         [<<"PING">>] ,
+                                                         [<<"SET">>, <<"{test_key}2">>, <<"DATA2">>]],
+                                                        Key),
 
     %% The keys are set in different nodes. {test_key}2 needs an ASK redirect to retrive the value
     %% {test_key}1 is in the MIGRATING node
     %% {test_key}2 is in the IMPORTING node
     %% {test_key}3 is not set
     {ok,[<<"DATA1">>, <<"DATA2">>, undefined]} = ered:command(R,
-                                                               [[<<"GET">>, <<"{test_key}1">>],
-                                                                [<<"GET">>, <<"{test_key}2">>],
-                                                                [<<"GET">>, <<"{test_key}3">>]],
-                                                               Key),
+                                                              [[<<"GET">>, <<"{test_key}1">>],
+                                                               [<<"GET">>, <<"{test_key}2">>],
+                                                               [<<"GET">>, <<"{test_key}3">>]],
+                                                              Key),
 
     %% A command with several keys with partial keys in the MIGRATING node will trigger a TRYAGAIN error
     %% {test_key}1 is in the MIGRATING node
@@ -450,10 +445,10 @@ t_ask_redirect(_) ->
     %% Since the ASK redirect does not trigger the TRYAGAIN delay this means the time the client waits before
     %% giving up in a TRYAGAIN scenario is effectively cut in half.
     {ok,{error,<<"ASK", _/binary>>}} = ered:command(R,
-                                                     [<<"MGET">>,
-                                                      <<"{test_key}1">>,
-                                                      <<"{test_key}2">>],
-                                                     Key),
+                                                    [<<"MGET">>,
+                                                     <<"{test_key}1">>,
+                                                     <<"{test_key}2">>],
+                                                    Key),
 
     %% Try the running the same command again but trigger a MIGRATE to move {test_key}1 to the IMPORTING node.
     %% This should lead to the command returning the data for both keys once it asks the correct node.
@@ -462,10 +457,10 @@ t_ask_redirect(_) ->
     %% run the command async
     spawn_link(fun() ->
                        Reply = ered:command(R,
-                                             [<<"MGET">>,
-                                              <<"{test_key}1">>,
-                                              <<"{test_key}2">>],
-                                             Key),
+                                            [<<"MGET">>,
+                                             <<"{test_key}1">>,
+                                             <<"{test_key}2">>],
+                                            Key),
                        Pid ! {the_reply, Reply}
                end),
     %% wait a bit to trigger the migration to let the client attempt to fetch and get redirected

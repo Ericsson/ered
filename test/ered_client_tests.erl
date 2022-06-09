@@ -2,9 +2,6 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
-% -compile([export_all]).
-
-
 run_test_() ->
     [
      {spawn, fun request_t/0},
@@ -39,7 +36,7 @@ request_t() ->
 fail_connect_t() ->
     {ok,Pid} = ered_client:start_link("127.0.0.1", 0, [{info_pid, self()}]),
     {connect_error,econnrefused} = expect_connection_down(Pid),
-    % make sure there are no more connection down messages
+    %% make sure there are no more connection down messages
     timeout = receive M -> M after 500 -> timeout end.
 
 
@@ -104,20 +101,20 @@ server_buffer_full_t() ->
     {ok, Port} = inet:port(ListenSock),
     spawn_link(fun() ->
                        {ok, Sock} = gen_tcp:accept(ListenSock),
-                       % expect 5 ping
+                       %% expect 5 ping
                        Ping = <<"*1\r\n$4\r\nping\r\n">>,
                        Expected = iolist_to_binary(lists:duplicate(5, Ping)),
                        {ok, Expected} = gen_tcp:recv(Sock, size(Expected)),
-                       % should be nothing more since only 5 pending
+                       %% should be nothing more since only 5 pending
                        {error, timeout} = gen_tcp:recv(Sock, 0, 0),
 
                        timer:sleep(500),
 
                        gen_tcp:send(Sock, lists:duplicate(5, <<"+pong\r\n">>)),
 
-                       % next the 5 waiting
+                       %% next the 5 waiting
                        {ok, Expected} = gen_tcp:recv(Sock, size(Expected)),
-                       % should be nothing more since only 5 pending
+                       %% should be nothing more since only 5 pending
                        {error, timeout} = gen_tcp:recv(Sock, 0, 0),
                        gen_tcp:send(Sock, lists:duplicate(5, <<"+pong\r\n">>)),
 
@@ -141,11 +138,11 @@ server_buffer_full_reconnect_t() ->
     {ok, Port} = inet:port(ListenSock),
     spawn_link(fun() ->
                        {ok, Sock} = gen_tcp:accept(ListenSock),
-                       % expect 5 ping
+                                                % expect 5 ping
                        Ping = <<"*1\r\n$4\r\nping\r\n">>,
                        Expected = iolist_to_binary(lists:duplicate(5, Ping)),
                        {ok, Expected} = gen_tcp:recv(Sock, size(Expected)),
-                       % should be nothing more since only 5 pending
+                                                % should be nothing more since only 5 pending
                        {error, timeout} = gen_tcp:recv(Sock, 0, 0),
 
                        gen_tcp:close(Sock),
@@ -154,7 +151,7 @@ server_buffer_full_reconnect_t() ->
                        {ok, Expected} = gen_tcp:recv(Sock2, size(Expected)),
 
                        gen_tcp:send(Sock2, lists:duplicate(5, <<"+pong\r\n">>)),
-                       % should be nothing more since only 5 pending
+                                                % should be nothing more since only 5 pending
                        {error, timeout} = gen_tcp:recv(Sock2, 0, 0),
                        receive ok -> ok end
 
@@ -183,11 +180,11 @@ server_buffer_full_node_goes_down_t() ->
     {ok, Port} = inet:port(ListenSock),
     spawn_link(fun() ->
                        {ok, Sock} = gen_tcp:accept(ListenSock),
-                       % expect 5 ping
+                                                % expect 5 ping
                        Ping = <<"*1\r\n$4\r\nping\r\n">>,
                        Expected = iolist_to_binary(lists:duplicate(5, Ping)),
                        {ok, Expected} = gen_tcp:recv(Sock, size(Expected)),
-                       % should be nothing more since only 5 pending
+                                                % should be nothing more since only 5 pending
                        {error, timeout} = gen_tcp:recv(Sock, 0, 0),
                        gen_tcp:close(ListenSock)
                end),
@@ -216,8 +213,8 @@ bad_option_t() ->
 
 bad_connection_option_t() ->
     ?_assertError({badarg,bad_option}, ered_client:start_link("127.0.0.1", 0,
-                                                               [{info_pid, self()},
-                                                                {connection_opts, [bad_option]}])).
+                                                              [{info_pid, self()},
+                                                               {connection_opts, [bad_option]}])).
 
 send_timeout_t() ->
     {ok, ListenSock} = gen_tcp:listen(0, [binary, {active , false}]),
@@ -226,7 +223,7 @@ send_timeout_t() ->
                        {ok, Sock} = gen_tcp:accept(ListenSock),
                        {ok, <<"*1\r\n$4\r\nping\r\n">>} = gen_tcp:recv(Sock, 0),
 
-                       % do nothing more on first socket, wait for timeout and reconnect
+                       %% do nothing more on first socket, wait for timeout and reconnect
                        {ok, Sock2} = gen_tcp:accept(ListenSock),
                        {ok, <<"*1\r\n$4\r\nping\r\n">>} = gen_tcp:recv(Sock2, 0),
                        ok = gen_tcp:send(Sock2, <<"+pong\r\n">>),
@@ -236,7 +233,7 @@ send_timeout_t() ->
     expect_connection_up(Client),
     Pid = self(),
     ered_client:command_async(Client, <<"ping">>, fun(Reply) -> Pid ! {reply, Reply} end),
-    % this should come after max 1000ms
+    %% this should come after max 1000ms
     receive {connection_status, _ClientInfo, {connection_down, {socket_closed, {recv_exit, timeout}}}} -> ok after 2000 -> timeout_error() end,
     expect_connection_up(Client),
     {reply, {ok, <<"pong">>}} = get_msg(),

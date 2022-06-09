@@ -97,26 +97,26 @@ parse_initial(Token) ->
         <<"$?">>             -> parse_stream_string(); % bulk/blob string
         <<"$", Rest/binary>> -> parse_blob_string(parse_size(Rest)); % bulk/blob string
         <<"*-1">>            -> {done, undefined}; % null parse_array
-        <<"*?">>             -> aggregate_stream(parse_array([]));
-        <<"*", Rest/binary>> -> aggregate_N(parse_size(Rest), parse_array([]));
+          <<"*?">>             -> aggregate_stream(parse_array([]));
+          <<"*", Rest/binary>> -> aggregate_N(parse_size(Rest), parse_array([]));
         %% RESP3
-        <<"_" >>             -> {done, undefined}; % Null
-        <<",inf">>           -> {done, inf}; % float inifinity
-        <<",-inf">>          -> {done, neg_inf}; % negative infinity
-        <<",", Rest/binary>> -> {done, parse_float(Rest)};
-        <<"#t">>             -> {done, true};
-        <<"#f">>             -> {done, false};
-        <<"!", Rest/binary>> -> parse_blob_error(parse_size(Rest));
-        <<"=", Rest/binary>> -> parse_blob_string(parse_size(Rest)); % Verbatim string
-        <<"(", Rest/binary>> -> {done, parse_integer(Rest)}; % big int
-        <<"%?">>             -> aggregate_stream(parse_map(#{}, none));
-        <<"%", Rest/binary>> -> aggregate_N(parse_size(Rest)*2, parse_map(#{}, none)); % *2: one for key on for val
-        <<"~?">>             -> aggregate_stream(parse_set(#{}));
-        <<"~", Rest/binary>> -> aggregate_N(parse_size(Rest), parse_set(#{}));
-        <<"|", Rest/binary>> -> parse_attribute(parse_size(Rest));
-        <<">", Rest/binary>> -> parse_push(parse_size(Rest));
-        _  -> throw({parse_error, {invalid_data, Token}})
-    end.
+          <<"_" >>             -> {done, undefined}; % Null
+          <<",inf">>           -> {done, inf}; % float inifinity
+          <<",-inf">>          -> {done, neg_inf}; % negative infinity
+          <<",", Rest/binary>> -> {done, parse_float(Rest)};
+          <<"#t">>             -> {done, true};
+          <<"#f">>             -> {done, false};
+          <<"!", Rest/binary>> -> parse_blob_error(parse_size(Rest));
+          <<"=", Rest/binary>> -> parse_blob_string(parse_size(Rest)); % Verbatim string
+          <<"(", Rest/binary>> -> {done, parse_integer(Rest)}; % big int
+          <<"%?">>             -> aggregate_stream(parse_map(#{}, none));
+          <<"%", Rest/binary>> -> aggregate_N(parse_size(Rest)*2, parse_map(#{}, none)); % *2: one for key on for val
+          <<"~?">>             -> aggregate_stream(parse_set(#{}));
+          <<"~", Rest/binary>> -> aggregate_N(parse_size(Rest), parse_set(#{}));
+          <<"|", Rest/binary>> -> parse_attribute(parse_size(Rest));
+          <<">", Rest/binary>> -> parse_push(parse_size(Rest));
+          _  -> throw({parse_error, {invalid_data, Token}})
+        end.
 
 parse_blob_error(Bytes) ->
     {cont, fun(Data) -> {done, {error, Data}} end, Bytes + 2}. % blob error
@@ -140,7 +140,7 @@ parse_float(Data) ->
     try binary_to_float(Data)
     catch
         error:badarg ->
-            % maybe its a float without decimal
+            %% maybe its a float without decimal
             try float(binary_to_integer(Data))
             catch
                 error:badarg -> throw({parse_error, {not_float, Data}})

@@ -11,7 +11,7 @@ split_data_test() ->
 
 trailing_reply_test() ->
     Pid = self(),
-    % 277124 byte nested array, it takes a non-trivial time to parse
+    %% 277124 byte nested array, it takes a non-trivial time to parse
     BigNastyData = iolist_to_binary(nested_list(8)),
     ?debugFmt("~w", [size(BigNastyData)]),
 
@@ -29,7 +29,7 @@ trailing_reply_test() ->
     {port, Port} = receive_msg(),
     %% increase receive buffer to fit the whole nasty data package
     {ok, Conn1} = ered_connection:connect("127.0.0.1", Port, [{batch_size, 1},
-                                                               {tcp_options, [{recbuf, 524288}]}]),
+                                                              {tcp_options, [{recbuf, 524288}]}]),
     ?debugFmt("~w", [Conn1]),
     ered_connection:command_async(Conn1, [<<"ping">>], ping1),
     receive sent_big_nasty -> ok end,
@@ -56,4 +56,4 @@ ensure_empty() ->
 nested_list(1) ->
     <<"+A\r\n">>;
 nested_list(N) ->
-   ["*", integer_to_list(N), "\r\n", [nested_list(N-1) || _ <- lists:seq(1, N)]].
+    ["*", integer_to_list(N), "\r\n", [nested_list(N-1) || _ <- lists:seq(1, N)]].

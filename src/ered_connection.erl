@@ -131,7 +131,7 @@ connect_async(Addr, Port, Opts) ->
                       Master ! {socket_closed, SendPid, ExitReason};
                   {error, Reason} ->
                       Master ! {connect_error, SendPid, Reason};
-                   Other -> % {'EXIT',_}
+                  Other -> % {'EXIT',_}
                       Master ! {connect_error, SendPid, Other}
               end
       end).
@@ -184,7 +184,7 @@ recv_loop(Transport, Socket, PushCB, Timeout) ->
     try
         recv_loop({ParseInit, State})
     catch
-        % handle done, parse error, recv error
+        %% handle done, parse error, recv error
         throw:Reason ->
             {recv_exit, Reason}
     end.
