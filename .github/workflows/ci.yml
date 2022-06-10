@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+jobs:
+  build:
+    runs-on: ubuntu-20.04
+    steps:
+      - uses: actions/checkout@v3
+      - name: Prepare
+        run: |
+          sudo apt update
+          # ct requires redis-cli
+          sudo apt install redis-server
+      - name: Compile
+        run: rebar3 compile
+      - name: Run eunit tests
+        run: |
+          docker run -d --net=host redis
+          rebar3 eunit
+      - name: Run common tests
+        run: rebar3 ct
