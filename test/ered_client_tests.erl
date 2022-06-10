@@ -138,11 +138,11 @@ server_buffer_full_reconnect_t() ->
     {ok, Port} = inet:port(ListenSock),
     spawn_link(fun() ->
                        {ok, Sock} = gen_tcp:accept(ListenSock),
-                                                % expect 5 ping
+                       %% expect 5 ping
                        Ping = <<"*1\r\n$4\r\nping\r\n">>,
                        Expected = iolist_to_binary(lists:duplicate(5, Ping)),
                        {ok, Expected} = gen_tcp:recv(Sock, size(Expected)),
-                                                % should be nothing more since only 5 pending
+                       %% should be nothing more since only 5 pending
                        {error, timeout} = gen_tcp:recv(Sock, 0, 0),
 
                        gen_tcp:close(Sock),
@@ -151,7 +151,7 @@ server_buffer_full_reconnect_t() ->
                        {ok, Expected} = gen_tcp:recv(Sock2, size(Expected)),
 
                        gen_tcp:send(Sock2, lists:duplicate(5, <<"+pong\r\n">>)),
-                                                % should be nothing more since only 5 pending
+                       %% should be nothing more since only 5 pending
                        {error, timeout} = gen_tcp:recv(Sock2, 0, 0),
                        receive ok -> ok end
 
@@ -180,11 +180,11 @@ server_buffer_full_node_goes_down_t() ->
     {ok, Port} = inet:port(ListenSock),
     spawn_link(fun() ->
                        {ok, Sock} = gen_tcp:accept(ListenSock),
-                                                % expect 5 ping
+                       %% expect 5 ping
                        Ping = <<"*1\r\n$4\r\nping\r\n">>,
                        Expected = iolist_to_binary(lists:duplicate(5, Ping)),
                        {ok, Expected} = gen_tcp:recv(Sock, size(Expected)),
-                                                % should be nothing more since only 5 pending
+                       %% should be nothing more since only 5 pending
                        {error, timeout} = gen_tcp:recv(Sock, 0, 0),
                        gen_tcp:close(ListenSock)
                end),
