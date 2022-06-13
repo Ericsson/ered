@@ -95,7 +95,7 @@ parse_initial(Token) ->
         <<":", Rest/binary>> -> {done, parse_integer(Rest)};
         <<"$-1">>            -> {done, undefined}; % null bulk string
         <<"$?">>             -> parse_stream_string(); % bulk/blob string
-        <<$$, Rest/binary>> -> parse_blob_string(parse_size(Rest)); % bulk/blob string
+        <<$$, Rest/binary>>  -> parse_blob_string(parse_size(Rest)); % bulk/blob string
         <<"*-1">>            -> {done, undefined}; % null parse_array
         <<"*?">>             -> aggregate_stream(parse_array([]));
         <<"*", Rest/binary>> -> aggregate_N(parse_size(Rest), parse_array([]));
