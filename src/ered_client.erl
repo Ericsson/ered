@@ -180,7 +180,7 @@ init([Host, Port, OptsList]) ->
     Pid = self(),
     ConnectPid = spawn_link(fun() -> connect(Pid, Opts) end),
     {ok, start_node_down_timer(#st{opts = Opts,
-                                  connect_loop_pid = ConnectPid})}.
+                                   connect_loop_pid = ConnectPid})}.
 
 handle_call({command, Command}, From, State) ->
     Fun = fun(Reply) -> gen_server:reply(From, Reply) end,

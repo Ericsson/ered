@@ -34,7 +34,7 @@ test_data() ->
      {"big number",        <<"(3492890328409238509324850943850943825024385\r\n">>,     3492890328409238509324850943850943825024385},
      {"map",               <<"%2\r\n+first\r\n:1\r\n+second\r\n:2\r\n">>,              #{<<"first">> => 1, <<"second">> => 2}},
      {"set",               <<"~5\r\n+orange\r\n+apple\r\n#t\r\n:100\r\n:999\r\n">>,    #{<<"orange">> => true, <<"apple">> => true,
-                                                                                        true => true, 100 => true, 999 => true}},
+                                                                                         true => true, 100 => true, 999 => true}},
      {"attribute",         <<"|1\r\n+key-popularity\r\n%2\r\n$1\r\na\r\n,0.1923\r\n"
                              "$1\r\nb\r\n,0.0012\r\n*2\r\n:2039123\r\n:9543892\r\n">>,  {attribute, [2039123, 9543892],
                                                                                          #{<<"key-popularity">> =>
@@ -48,7 +48,7 @@ test_data() ->
      {"streamed string",  <<"$?\r\n;4\r\nHell\r\n;5\r\no wor\r\n;1\r\nd\r\n;0\r\n">>,   <<"Hello word">>},
      {"streamed array",   <<"*?\r\n:1\r\n:2\r\n:3\r\n.\r\n">>,                          [1, 2, 3]},
      {"streamed map",     <<"%?\r\n+a\r\n:1\r\n+b\r\n:2\r\n.\r\n">>,                    #{<<"a">> => 1, <<"b">> => 2}},
-      %% Additional tests
+     %% Additional tests
      {"streamed set",     <<"~?\r\n+a\r\n:1\r\n+b\r\n:2\r\n.\r\n">>,                    #{<<"a">> => true, 1 => true,
                                                                                           <<"b">> => true, 2 => true}},
      {"float negative", <<",-1.23\r\n">>, -1.23}
@@ -58,7 +58,7 @@ normal_test_() ->
     run_with(fun(In, Out) -> run([In], Out) end).
 
 split_input_test_() ->
-    % split the input into a list of binaries, the result should be the same
+    %% split the input into a list of binaries, the result should be the same
     run_with(fun(In, Out) -> run([<<C>> || C <- binary:bin_to_list(In)], Out) end).
 
 parse_fail_test_() ->
@@ -94,9 +94,9 @@ run(DataList, Expected) when is_list(DataList) ->
                     case ered_parser:continue(Data, State) of
                         {done, Result, NewState} ->
                             ?assertEqual(Expected, Result),
-                            % No lefteover data in state
+                            %% No lefteover data in state
                             ?assertEqual(ered_parser:init(), NewState),
-                            % No unparsed data
+                            %% No unparsed data
                             ?assertEqual([], Rest);
                         {need_more, _, NewState} ->
                             F(Rest, NewState)

@@ -95,7 +95,7 @@ parse_initial(Token) ->
         <<":", Rest/binary>> -> {done, parse_integer(Rest)};
         <<"$-1">>            -> {done, undefined}; % null bulk string
         <<"$?">>             -> parse_stream_string(); % bulk/blob string
-        <<"$", Rest/binary>> -> parse_blob_string(parse_size(Rest)); % bulk/blob string
+        <<$$, Rest/binary>>  -> parse_blob_string(parse_size(Rest)); % bulk/blob string
         <<"*-1">>            -> {done, undefined}; % null parse_array
         <<"*?">>             -> aggregate_stream(parse_array([]));
         <<"*", Rest/binary>> -> aggregate_N(parse_size(Rest), parse_array([]));
@@ -140,7 +140,7 @@ parse_float(Data) ->
     try binary_to_float(Data)
     catch
         error:badarg ->
-            % maybe its a float without decimal
+            %% maybe its a float without decimal
             try float(binary_to_integer(Data))
             catch
                 error:badarg -> throw({parse_error, {not_float, Data}})
