@@ -37,20 +37,21 @@ init_per_suite(Config) ->
     InitialNodes = [{localhost, Port} || Port <- ?PORTS],
     {ok, R} = ered:start_link(InitialNodes, [{info_pid, [self()]}]),
 
-    cmd_log("docker run --name redis-1 -d --net=host --restart=on-failure redis redis-server --cluster-enabled yes --port 30001 --cluster-node-timeout 2000;"
-            "docker run --name redis-2 -d --net=host --restart=on-failure redis redis-server --cluster-enabled yes --port 30002 --cluster-node-timeout 2000;"
-            "docker run --name redis-3 -d --net=host --restart=on-failure redis redis-server --cluster-enabled yes --port 30003 --cluster-node-timeout 2000;"
-            "docker run --name redis-4 -d --net=host --restart=on-failure redis redis-server --cluster-enabled yes --port 30004 --cluster-node-timeout 2000;"
-            "docker run --name redis-5 -d --net=host --restart=on-failure redis redis-server --cluster-enabled yes --port 30005 --cluster-node-timeout 2000;"
-            "docker run --name redis-6 -d --net=host --restart=on-failure redis redis-server --cluster-enabled yes --port 30006 --cluster-node-timeout 2000;"),
+    cmd_log("docker run --name redis-1 -d --net=host --restart=on-failure redis:6.0.8 redis-server --cluster-enabled yes --port 30001 --cluster-node-timeout 2000;"
+            "docker run --name redis-2 -d --net=host --restart=on-failure redis:6.0.8 redis-server --cluster-enabled yes --port 30002 --cluster-node-timeout 2000;"
+            "docker run --name redis-3 -d --net=host --restart=on-failure redis:6.0.8 redis-server --cluster-enabled yes --port 30003 --cluster-node-timeout 2000;"
+            "docker run --name redis-4 -d --net=host --restart=on-failure redis:6.0.8 redis-server --cluster-enabled yes --port 30004 --cluster-node-timeout 2000;"
+            "docker run --name redis-5 -d --net=host --restart=on-failure redis:6.0.8 redis-server --cluster-enabled yes --port 30005 --cluster-node-timeout 2000;"
+            "docker run --name redis-6 -d --net=host --restart=on-failure redis:6.0.8 redis-server --cluster-enabled yes --port 30006 --cluster-node-timeout 2000;"),
 
-    timer:sleep(1000),
+    timer:sleep(2000),
     lists:foreach(fun(Port) ->
                           {ok,Pid} = ered_client:start_link("127.0.0.1", Port, []),
-                          {ok, <<"PONG">>} = ered_client:command(Pid, <<"ping">>)
+                          {ok, <<"PONG">>} = ered_client:command(Pid, <<"ping">>),
+                          ered_client:stop(Pid)
                   end, ?PORTS),
 
-    cmd_log(" echo 'yes' | docker run --name redis-cluster --net=host -i redis redis-cli --cluster create 127.0.0.1:30001 127.0.0.1:30002 127.0.0.1:30003 127.0.0.1:30004 127.0.0.1:30005 127.0.0.1:30006 --cluster-replicas 1"),
+    cmd_log(" echo 'yes' | docker run --name redis-cluster --net=host -i redis:6.0.8 redis-cli --cluster create 127.0.0.1:30001 127.0.0.1:30002 127.0.0.1:30003 127.0.0.1:30004 127.0.0.1:30005 127.0.0.1:30006 --cluster-replicas 1"),
 
     {ok, Tref} = timer:exit_after(20000, cluster_start_timeout),
     fun Loop() ->
@@ -62,6 +63,8 @@ init_per_suite(Config) ->
                     Loop()
             end
     end(),
+    ered:stop(R),
+    no_more_msgs(),
     [].
 
 end_per_suite(Config) ->
@@ -343,7 +346,7 @@ t_new_cluster_master(_) ->
                        {close_wait, 100}]),
 
     %% Create new master
-    cmd_log("docker run --name redis-7 -d --net=host --restart=on-failure redis redis-server --cluster-enabled yes --port 30007 --cluster-node-timeout 2000"),
+    cmd_log("docker run --name redis-7 -d --net=host --restart=on-failure redis:6.0.8 redis-server --cluster-enabled yes --port 30007 --cluster-node-timeout 2000"),
     cmd_until("redis-cli -p 30007 CLUSTER MEET 127.0.0.1 30001", "OK"),
     cmd_until("redis-cli -p 30007 CLUSTER INFO", "cluster_state:ok"),
 
@@ -487,6 +490,7 @@ t_ask_redirect(_) ->
     move_key(DestPort, SourcePort, Key),
     {ok,undefined} = ered:command(R, [<<"GET">>, Key], Key),
     ?MSG(#{msg_type := slot_map_updated}, 1000),
+    ered:stop(R),
 
     %% wait a bit to let the config spread to all nodes
     timer:sleep(5000),
