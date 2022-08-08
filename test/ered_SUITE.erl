@@ -144,7 +144,7 @@ t_hard_failover(_) ->
 
     ct:pal(os:cmd("docker start " ++ Pod)),
 
-    %% node back: first the inital add reconnects
+    %% node back: first the initial add reconnects
     ?MSG(#{msg_type := connected, addr := {localhost, Port}}, 10000),
 
     %% new slotmap when old master comes up as replica
@@ -239,7 +239,7 @@ t_scan_delete_keys(_) ->
     Keys2 = [iolist_to_binary([<<"otherkey">>, integer_to_binary(N)]) || N <- lists:seq(1,100)],
     [{ok, _} = ered:command(R, [<<"SET">>, K, <<"dummydata">>], K) || K <- Keys2],
 
-    %% selectivly delete the otherkey ones
+    %% selectively delete the otherkey ones
     %% (this will lead to some SCAN responses being empty, good case to test)
     Pid = self(),
     [spawn_link(fun() -> Pid ! scan_delete(Client) end) || Client <- Clients],
@@ -442,7 +442,7 @@ t_ask_redirect(_) ->
                                                          [<<"SET">>, <<"{test_key}2">>, <<"DATA2">>]],
                                                         Key),
 
-    %% The keys are set in different nodes. {test_key}2 needs an ASK redirect to retrive the value
+    %% The keys are set in different nodes. {test_key}2 needs an ASK redirect to retrieve the value
     %% {test_key}1 is in the MIGRATING node
     %% {test_key}2 is in the IMPORTING node
     %% {test_key}3 is not set
@@ -460,7 +460,7 @@ t_ask_redirect(_) ->
     %% the MIGRATING node should trigger a TRYAGAIN. But when this is tested with redis_version:6.0.8 it leads
     %% to an ASK answer. ASKING the IMPORTING node will lead to a TRYAGAIN that will send the command back
     %% to the MIGRATING node. When the attempt retrys run out the final reply will be from the MIGRATING node.
-    %% If attemts are set to an uneven number the final reply will be TRYAGAIN from the IMPORTING node.
+    %% If attempts are set to an uneven number the final reply will be TRYAGAIN from the IMPORTING node.
     %% Since the ASK redirect does not trigger the TRYAGAIN delay this means the time the client waits before
     %% giving up in a TRYAGAIN scenario is effectively cut in half.
     {ok,{error,<<"ASK", _/binary>>}} = ered:command(R,

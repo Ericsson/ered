@@ -202,7 +202,7 @@ server_buffer_full_node_goes_down_t() ->
     receive {connection_status, _ClientInfo, {connection_down, node_down_timeout}} -> ok end,
     [{N, {error, node_down}} = get_msg() || N <- [7,8,9,10,11]],
 
-    %% aditional commands should get a node down
+    %% additional commands should get a node down
     {error, node_down} =  ered_client:command(Client, <<"ping">>),
     no_more_msgs().
 

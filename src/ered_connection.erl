@@ -25,7 +25,7 @@
 -record(recv_st, {transport :: gen_tcp | ssl,
                   socket :: gen_tcp:socket() | ssl:sslsocket(),
                   push_cb :: push_cb(),
-                  timeout :: non_neg_integer(), % miliseconds
+                  timeout :: non_neg_integer(), % milliseconds
                   waiting = [] :: [wait_info()],
                   waiting_since :: undefined | integer() % erlang:monotonic_time(millisecond)
                  }).
