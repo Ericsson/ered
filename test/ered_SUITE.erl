@@ -34,9 +34,6 @@ all() ->
 
 
 init_per_suite(Config) ->
-    InitialNodes = [{localhost, Port} || Port <- ?PORTS],
-    {ok, R} = ered:start_link(InitialNodes, [{info_pid, [self()]}]),
-
     cmd_log("docker run --name redis-1 -d --net=host --restart=on-failure redis:6.2.7 redis-server --cluster-enabled yes --port 30001 --cluster-node-timeout 2000;"
             "docker run --name redis-2 -d --net=host --restart=on-failure redis:6.2.7 redis-server --cluster-enabled yes --port 30002 --cluster-node-timeout 2000;"
             "docker run --name redis-3 -d --net=host --restart=on-failure redis:6.2.7 redis-server --cluster-enabled yes --port 30003 --cluster-node-timeout 2000;"
@@ -44,24 +41,35 @@ init_per_suite(Config) ->
             "docker run --name redis-5 -d --net=host --restart=on-failure redis:6.2.7 redis-server --cluster-enabled yes --port 30005 --cluster-node-timeout 2000;"
             "docker run --name redis-6 -d --net=host --restart=on-failure redis:6.2.7 redis-server --cluster-enabled yes --port 30006 --cluster-node-timeout 2000;"),
 
-    timer:sleep(1000),
+    timer:sleep(2000),
     lists:foreach(fun(Port) ->
                           {ok,Pid} = ered_client:start_link("127.0.0.1", Port, []),
-                          {ok, <<"PONG">>} = ered_client:command(Pid, <<"ping">>)
+                          {ok, <<"PONG">>} = ered_client:command(Pid, <<"ping">>),
+                          ered_client:stop(Pid)
                   end, ?PORTS),
 
     cmd_log(" echo 'yes' | docker run --name redis-cluster --net=host -i redis:6.2.7 redis-cli --cluster create 127.0.0.1:30001 127.0.0.1:30002 127.0.0.1:30003 127.0.0.1:30004 127.0.0.1:30005 127.0.0.1:30006 --cluster-replicas 1"),
 
-    {ok, Tref} = timer:exit_after(20000, cluster_start_timeout),
-    fun Loop() ->
-            receive
-                #{msg_type := cluster_ok} ->
-                    ok;
-                Other ->
-                    ct:pal("~p\n", [Other]),
-                    Loop()
+    %% Wait until cluster is consistent, i.e all nodes have the same single view
+    %% of the slot map. From Redis 6.2 the output of CLUSTER SLOTS is no longer
+    %% unordered, but in slot order.
+    fun Loop(N) ->
+            AllNodes = [fun(Port) ->
+                                {ok,Pid} = ered_client:start_link("127.0.0.1", Port, []),
+                                SlotMap = cmd_log("redis-cli -p " ++ integer_to_list(Port) ++ " CLUSTER SLOTS"),
+                                ered_client:stop(Pid),
+                                SlotMap
+                        end(Port) || Port <- ?PORTS],
+            case length(lists:uniq(AllNodes)) of
+                1 ->
+                    true;
+                _ when N > 0 ->
+                    timer:sleep(500),
+                    Loop(N-1);
+                _ ->
+                    error({timeout_consistent_cluster, AllNodes})
             end
-    end(),
+    end(20),
     [].
 
 end_per_suite(Config) ->
