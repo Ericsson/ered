@@ -60,7 +60,7 @@ init_per_suite(Config) ->
                                 ered_client:stop(Pid),
                                 SlotMap
                         end(Port) || Port <- ?PORTS],
-            case length(lists:uniq(AllNodes)) of
+            case length(lists:usort(AllNodes)) of
                 1 ->
                     true;
                 _ when N > 0 ->
