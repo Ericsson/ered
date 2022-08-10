@@ -1,2 +1,8 @@
 # rebar3
-/_build/
+_build/
+
+# edoc and edown
+doc/README.md
+doc/edoc-info
+doc/erlang.png
+doc/stylesheet.css
