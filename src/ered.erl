@@ -11,6 +11,7 @@
 -export([start_link/2,
          stop/1,
          command/3, command/4,
+         command_async/4,
          command_all/2, command_all/3,
          command_client/2, command_client/3,
          command_client_async/3,
@@ -106,6 +107,17 @@ command(ServerRef, Command, Key, Timeout) ->
     gen_server:call(ServerRef, {command, C, Key}, Timeout).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec command_async(server_ref(), command(), key(), fun((reply()) -> any())) -> ok.
+%%
+%% Like command/3,4 but asynchronous. Instead of returning the reply, the reply
+%% function is applied to the reply when it is available. The reply function
+%% runs in an unspecified process.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+command_async(ServerRef, Command, Key, ReplyFun) when is_function(ReplyFun, 1) ->
+    C = ered_command:convert_to(Command),
+    gen_server:cast(ServerRef, {command_async, C, Key, ReplyFun}).
+
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec command_all(server_ref(), command()) -> [reply()].
 -spec command_all(server_ref(), command(), timeout()) -> [reply()].
 %%
@@ -190,6 +202,11 @@ handle_call(get_clients, _From, State) ->
 handle_call(get_addr_to_client_map, _From, State) ->
     {reply, State#st.addr_map, State}.
 
+handle_cast({command_async, Command, Key, ReplyFun}, State) ->
+    Slot = ered_lib:hash(Key),
+    send_command_to_slot(Command, Slot, ReplyFun, State, State#st.redirect_attempts),
+    {noreply, State};
+
 handle_cast({forward_command, Command, Slot, From, Addr, AttemptsLeft}, State) ->
     {Client, State1} = connect_addr(Addr, State),
     Fun = create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft),
@@ -247,7 +264,7 @@ format_status(_Opt, Status) ->
 send_command_to_slot(Command, Slot, From, State, AttemptsLeft) ->
     case binary:at(State#st.slots, Slot) of
         0 ->
-            gen_server:reply(From, {error, unmapped_slot});
+            reply(From, {error, unmapped_slot});
         Ix ->
             Client = element(Ix, State#st.clients),
             Fun = create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft),
@@ -256,7 +273,7 @@ send_command_to_slot(Command, Slot, From, State, AttemptsLeft) ->
     ok.
 
 create_reply_fun(_Command, _Slot, _Client, From, _State, 0) ->
-    fun(Reply) -> gen_server:reply(From, Reply) end;
+    fun(Reply) -> reply(From, Reply) end;
 
 create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft) ->
     Pid = self(),
@@ -268,7 +285,7 @@ create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft) ->
     fun(Reply) ->
             case ered_command:check_result(Reply) of
                 normal ->
-                    gen_server:reply(From, Reply);
+                    reply(From, Reply);
                 {moved, Addr} ->
                     ered_cluster:update_slots(ClusterPid, SlotMapVersion, Client),
                     gen_server:cast(Pid, {forward_command, Command, Slot, From, Addr, AttemptsLeft-1});
@@ -278,9 +295,16 @@ create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft) ->
                     erlang:send_after(TryAgainDelay, Pid, {command_try_again, Command, Slot, From, AttemptsLeft-1});
                 cluster_down ->
                     ered_cluster:update_slots(ClusterPid, SlotMapVersion, Client),
-                    gen_server:reply(From, Reply)
+                    reply(From, Reply)
             end
     end.
+
+%% Handle a reply, either by sending it back to a gen server caller or by
+%% applying a reply function.
+reply(To = {_, _}, Reply) ->
+    gen_server:reply(To, Reply);
+reply(ReplyFun, Reply) when is_function(ReplyFun, 1) ->
+    ReplyFun(Reply).
 
 create_client_pid_tuple(AddrToPid, AddrToIx) ->
     %% Create a list with tuples where the first element is the index and the second is the pid
