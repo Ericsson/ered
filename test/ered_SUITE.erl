@@ -5,6 +5,7 @@
 all() ->
     [
      t_command,
+     t_command_async,
      t_command_all,
      t_command_client,
      t_command_pipeline,
@@ -89,6 +90,19 @@ t_command(_) ->
                           {ok, <<"OK">>} = ered:command(R, [<<"SET">>, N, N], N)
                   end,
                   [integer_to_binary(N) || N <- lists:seq(1,100)]),
+    no_more_msgs().
+
+
+t_command_async(_) ->
+    R = start_cluster(),
+    Pid = self(),
+    ReplyFun = fun(Reply) -> Pid ! Reply end,
+    ered:command_async(R, [<<"SET">>, <<"hello">>, <<"joe">>], <<"hello">>, ReplyFun),
+    ered:command_async(R, [<<"GET">>, <<"hello">>], <<"hello">>, ReplyFun),
+    ered:command_async(R, [<<"DEL">>, <<"hello">>], <<"hello">>, ReplyFun),
+    receive {ok, <<"OK">>}  -> ok after 1000 -> error(timeout) end,
+    receive {ok, <<"joe">>} -> ok after 1000 -> error(timeout) end,
+    receive {ok, 1}         -> ok after 1000 -> error(timeout) end,
     no_more_msgs().
 
 
