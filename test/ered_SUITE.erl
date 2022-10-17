@@ -352,6 +352,7 @@ t_new_cluster_master(_) ->
 
     %% Create new master
     Pod = cmd_log("docker run --name redis-7 -d --net=host --restart=on-failure redis:6.2.7 redis-server --cluster-enabled yes --port 30007 --cluster-node-timeout 2000"),
+    cmd_until("docker container inspect -f '{{.State.Status}}' " ++ Pod, "running"),
     cmd_until("redis-cli -p 30007 CLUSTER MEET 127.0.0.1 30001", "OK"),
     cmd_until("redis-cli -p 30007 CLUSTER INFO", "cluster_state:ok"),
 
