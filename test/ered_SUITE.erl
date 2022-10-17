@@ -612,14 +612,17 @@ cmd_log(Cmd) ->
     R.
 
 cmd_until(Cmd, Regex) ->
+    io:format(user, "cmd_until: Cmd: ~p Regex: ~p~n", [Cmd, Regex]),
     fun Loop(N) ->
             case re:run(cmd_log(Cmd), Regex) of
                 nomatch when N > 0 ->
+                    io:format(user, "cmd_until: no match~n", []),
                     timer:sleep(500),
                     Loop(N -1);
                 nomatch when N =< 0 ->
                     error({timeout_cmd_until, Cmd, Regex});
                 Match ->
+                    io:format(user, "cmd_until: match!~n", []),
                     Match
             end
     end(20).
