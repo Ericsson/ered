@@ -635,7 +635,7 @@ cmd_until(Cmd, Regex) ->
                 Match ->
                     Match
             end
-    end(20).
+    end(100).
 
 
 get_all_masters(R) ->
