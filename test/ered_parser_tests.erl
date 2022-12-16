@@ -33,6 +33,8 @@ test_data() ->
      {"float no decimal",  <<",10\r\n">>,                                              10.0},
      {"float inf",         <<",inf\r\n">>,                                             inf},
      {"float neg inf",     <<",-inf\r\n">>,                                            neg_inf},
+     {"float nan",         <<",nan\r\n">>,                                             nan},
+     {"float neg nan",     <<",-nan\r\n">>,                                            nan},
      {"boolean true",      <<"#t\r\n">>,                                               true},
      {"boolean false",     <<"#f\r\n">>,                                               false},
      {"blob error",        <<"!21\r\nSYNTAX invalid syntax\r\n">>,                     {error, <<"SYNTAX invalid syntax">>}},

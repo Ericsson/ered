@@ -23,7 +23,7 @@
 
 -type parse_function() :: fun((binary()) -> {done, parse_result()} | {cont, parse_function(), bytes_needed()}).
 
--type parse_result() :: binary() | {error, binary()} | integer() | undefined | [parse_result()] | inf | neg_inf |
+-type parse_result() :: binary() | {error, binary()} | integer() | undefined | [parse_result()] | inf | neg_inf | nan |
                         float() | true | false | #{parse_result() => parse_result()} | sets:set(parse_result()) |
                         {attribute, parse_result(), parse_result()} | {push | parse_result()}.
 
@@ -109,6 +109,8 @@ parse_initial(Token) ->
         <<"_" >>             -> {done, undefined}; % Null
         <<",inf">>           -> {done, inf}; % float inifinity
         <<",-inf">>          -> {done, neg_inf}; % negative infinity
+        <<",nan">>           -> {done, nan}; % NaN
+        <<",-nan">>          -> {done, nan}; % returned by some versions of redis
         <<",", Rest/binary>> -> {done, parse_float(Rest)};
         <<"#t">>             -> {done, true};
         <<"#f">>             -> {done, false};
