@@ -24,11 +24,17 @@
 -type parse_function() :: fun((binary()) -> {done, parse_result()} | {cont, parse_function(), bytes_needed()}).
 
 -type parse_result() :: binary() | {error, binary()} | integer() | undefined | [parse_result()] | inf | neg_inf |
-                        float() | true | false | #{parse_result() => parse_result()} |
+                        float() | true | false | #{parse_result() => parse_result()} | sets:set(parse_result()) |
                         {attribute, parse_result(), parse_result()} | {push | parse_result()}.
 
 
 -type parse_return() :: {done, parse_result(), #parser_state{}} | {need_more, bytes_needed(), #parser_state{}}.
+
+-if(?OTP_RELEASE >= 24).
+-define(sets_new, sets:new([{version, 2}])).
+-else.
+-define(sets_new, sets:new()).
+-endif.
 
 %%%===================================================================
 %%% API
@@ -111,8 +117,8 @@ parse_initial(Token) ->
         <<"(", Rest/binary>> -> {done, parse_integer(Rest)}; % big int
         <<"%?">>             -> aggregate_stream(parse_map(#{}, none));
         <<"%", Rest/binary>> -> aggregate_N(parse_size(Rest)*2, parse_map(#{}, none)); % *2: one for key on for val
-        <<"~?">>             -> aggregate_stream(parse_set(#{}));
-        <<"~", Rest/binary>> -> aggregate_N(parse_size(Rest), parse_set(#{}));
+        <<"~?">>             -> aggregate_stream(parse_set(?sets_new));
+        <<"~", Rest/binary>> -> aggregate_N(parse_size(Rest), parse_set(?sets_new));
         <<"|", Rest/binary>> -> parse_attribute(parse_size(Rest));
         <<">", Rest/binary>> -> parse_push(parse_size(Rest));
         _  -> throw({parse_error, {invalid_data, Token}})
@@ -168,7 +174,7 @@ aggregate(Fun, Next) ->
 
 parse_set(Acc) ->
     fun(done) -> Acc;
-       (Val) -> parse_set(Acc#{Val => true})
+       (Val) -> parse_set(sets:add_element(Val, Acc))
     end.
 
 parse_map(Acc, Key) ->
