@@ -42,7 +42,7 @@ Start the main process. This will also start the cluster handling
 process which will set up clients to the provided addresses and
 fetch the cluster slot map. Once there is a complete slot map and
 all Redis node clients are connected this process is ready to
-server requests.
+serve requests.
 
 One or more addresses, `addr() :: {inet:socket_address() | inet:hostname(),
 inet:port_number()}`, is used to discover the rest of the cluster.
@@ -121,7 +121,7 @@ should not hang or perform any lengthy task.
 get_clients(server_ref()) -> [client_ref()].
 ```
 
-Get all Redis master node clients
+Get all Redis master node clients.
 
 ### `get_addr_to_client_map/1`
 
@@ -139,7 +139,7 @@ The following options can be passed to `start_link/2`:
 * `{try_again_delay, non_neg_integer()}`
 
   If there is a TRYAGAIN response from Redis then wait
-  this many milliseconds before re-sending the command
+  this many milliseconds before re-sending the command.
 
 * `{redirect_attempts, non_neg_integer()}`
 
