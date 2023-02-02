@@ -145,7 +145,7 @@ The following options can be passed to `start_link/2`:
 
   Only do these many retries or re-sends before giving
   up and returning the result. This affects ASK, MOVED
-  and TRYAGAIN responses
+  and TRYAGAIN responses.
 
 * `{info_pid, [pid()]}`
 
@@ -195,15 +195,15 @@ Options passed to `start_link/2` as the options `{client_opts, [...]}`.
 
 * `{reconnect_wait, non_neg_integer()}`
 
-  How long to wait to reconnect after a failed connect attempt
+  How long to wait to reconnect after a failed connect attempt.
 
 * `{info_pid, none | pid()}`
 
-  Pid to send status messages to
+  Pid to send status messages to.
 
 * `{resp_version, 2..3}`
 
-  What RESP (REdis Serialization Protocol) version to use
+  What RESP (REdis Serialization Protocol) version to use.
 
 * `{node_down_timeout, non_neg_integer()}`
 
@@ -215,7 +215,7 @@ Options passed to `start_link/2` as the options `{client_opts, [...]}`.
 * `{use_cluster_id, boolean()}`
 
   Set if the CLUSTER ID should be fetched used in info messages.
-  (not useful if the client is used outside of a cluster)
+  (Not useful if the client is used outside of a cluster.)
 
 ### Connection options
 
@@ -223,25 +223,25 @@ Options passed to `start_link/2` as the options `{client_opts, [{connection_opts
 
 * `{batch_size, non_neg_integer()}`
 
-  If commands are queued up in the process message queue this is the max
-  amount of messages that will be received and sent in one call
+  If commands are queued up in the process message queue, this is the maximum
+  number of messages that will be received and sent in one call.
 
 * `{tcp_options, [gen_tcp:connect_option()]}`
 
-  Options passed to gen_tcp:connect
+  Options passed to `gen_tcp:connect/4`.
 
 * `{tls_options, [ssl:tls_client_option()]}`
 
-  Options passed to ssl:connect. If this config parameter is present
-  tls will be used instead of tcp
+  Options passed to `ssl:connect/3`. If this config parameter is present
+  TLS will be used.
 
 * `{push_cb, push_cb()}`
 
-  Callback for push notifications
+  Callback for push notifications.
 
 * `{response_timeout, non_neg_integer()}`
 
-  Timeout when waiting for a response from Redis, in milliseconds
+  Timeout when waiting for a response from Redis, in milliseconds.
 
 Redis to Erlang Term Representation
 -----------------------------------
