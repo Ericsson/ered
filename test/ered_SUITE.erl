@@ -12,6 +12,7 @@ all() ->
      t_scan_delete_keys,
      t_hard_failover,
      t_manual_failover,
+     t_blackhole,
      t_init_timeout,
      t_split_data,
      t_queue_full,
@@ -210,6 +211,56 @@ t_manual_failover(_) ->
     ct:pal("~p\n", [os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " ROLE")]),
 
     ?MSG(#{msg_type := slot_map_updated}),
+    no_more_msgs().
+
+
+t_blackhole(_) ->
+    %% Simulate that a Redis node is unreachable, e.g. a network failure. We use
+    %% 'docket pause', similar to sending SIGSTOP to a process, to make one
+    %% Redis node unresponsive. This makes TCP recv() and connect() time out.
+    CloseWait = 2000,                           % default is 10000
+    NodeDownTimeout = 2000,                     % default is 2000
+    ResponseTimeout = 10000,                    % default is 10000
+    R = start_cluster([{close_wait, CloseWait},
+                       %% Require no replicas for 'cluster OK'.
+                       {min_replicas, 0},
+                       {client_opts,
+                        [{node_down_timeout, NodeDownTimeout},
+                         {connection_opts,
+                          [{response_timeout, ResponseTimeout}]}]}
+                      ]),
+    Port = get_master_port(R),
+    Pod = get_pod_name_from_port(Port),
+    ClientPid = maps:get({"127.0.0.1", Port}, ered:get_addr_to_client_map(R)),
+    ct:pal("Pausing container: " ++ os:cmd("docker pause " ++ Pod)),
+
+    %% Now when a command times out, the ered_connection process is restarted
+    %% but connect() times out. Ered reports that one is down, thus the cluster
+    %% is not OK. Failover happens. Ered discovers the new master and reports
+    %% that the cluster is OK again.
+    TestPid = self(),
+    ered:command_client_async(ClientPid, [<<"PiNG">>],
+                              fun(Reply) -> TestPid ! {ping_reply, Reply} end),
+
+    ?MSG(#{msg_type := socket_closed, reason := {recv_exit, timeout}, master := true},
+         ResponseTimeout + 1000),
+    ?MSG({ping_reply, {error, node_down}},
+         NodeDownTimeout + 1000),
+    ?MSG(#{msg_type := node_down_timeout, master := true}),
+    ?MSG(#{msg_type := cluster_not_ok, reason := master_down}),
+    ?MSG(#{msg_type := socket_closed, reason := {recv_exit, timeout}, master := false},
+         ResponseTimeout + 1000),
+    ?MSG(#{msg_type := node_down_timeout, master := false},
+         NodeDownTimeout + 1000),
+    ?MSG(#{msg_type := slot_map_updated}),
+    ?MSG(#{msg_type := cluster_ok}),
+    ?MSG(#{msg_type := client_stopped, reason := normal, master := false},
+         CloseWait + 1000),
+
+    ct:pal("Unpausing container: " ++ os:cmd("docker unpause " ++ Pod)),
+
+    %% The node joins the cluster again as a replica and is discovered by ered.
+    ?MSG(#{msg_type := connected, master := false}),
     no_more_msgs().
 
 
