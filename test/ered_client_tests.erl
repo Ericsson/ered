@@ -75,7 +75,7 @@ server_close_socket_t() ->
                        gen_tcp:close(Sock),
 
                        %% resend from client
-                       {ok, Sock2} = gen_tcp:accept(ListenSock),
+                       {ok, _Sock2} = gen_tcp:accept(ListenSock),
                        receive ok -> ok end
                end),
     Client = start_client(Port),
@@ -88,7 +88,7 @@ bad_request_t() ->
     {ok, ListenSock} = gen_tcp:listen(0, [binary, {active , false}]),
     {ok, Port} = inet:port(ListenSock),
     spawn_link(fun() ->
-                       {ok, Sock} = gen_tcp:accept(ListenSock),
+                       {ok, _Sock} = gen_tcp:accept(ListenSock),
                        receive ok -> ok end
                end),
     Client = start_client(Port),
@@ -162,14 +162,14 @@ server_buffer_full_reconnect_t() ->
     Pid = self(),
     %% 5 messages will be pending, 5 messages in queue
     [ered_client:command_async(Client, <<"ping">>, fun(Reply) -> Pid ! {N, Reply} end) || N <- lists:seq(1,11)],
-    receive {connection_status, _ClientInfo, queue_full} -> ok end,
+    receive {connection_status, _ClientInfo1, queue_full} -> ok end,
     %% 1 message over the limit, first one in queue gets kicked out
     {6, {error, queue_overflow}} = get_msg(),
-    receive {connection_status, _ClientInfo, {connection_down, {socket_closed, {recv_exit, closed}}}} -> ok end,
+    receive {connection_status, _ClientInfo2, {connection_down, {socket_closed, {recv_exit, closed}}}} -> ok end,
     %% when connection goes down the pending messages will be put in the queue and the queue
     %% will overflow kicking out the oldest first
     [{N, {error, queue_overflow}} = get_msg() || N <- [1,2,3,4,5]],
-    receive {connection_status, _ClientInfo, queue_ok} -> ok end,
+    receive {connection_status, _ClientInfo3, queue_ok} -> ok end,
     expect_connection_up(Client),
     [{N, {ok, <<"pong">>}} = get_msg() || N <- [7,8,9,10,11]],
     no_more_msgs().
@@ -193,13 +193,13 @@ server_buffer_full_node_goes_down_t() ->
 
     Pid = self(),
     [ered_client:command_async(Client, <<"ping">>, fun(Reply) -> Pid ! {N, Reply} end) || N <- lists:seq(1,11)],
-    receive {connection_status, _ClientInfo, queue_full} -> ok end,
+    receive {connection_status, _ClientInfo1, queue_full} -> ok end,
     {6, {error, queue_overflow}} = get_msg(),
-    receive {connection_status, _ClientInfo, {connection_down, {socket_closed, {recv_exit, closed}}}} -> ok end,
+    receive {connection_status, _ClientInfo2, {connection_down, {socket_closed, {recv_exit, closed}}}} -> ok end,
     [{N, {error, queue_overflow}} = get_msg() || N <- [1,2,3,4,5]],
-    receive {connection_status, _ClientInfo, queue_ok} -> ok end,
-    receive {connection_status, _ClientInfo, {connection_down, {connect_error,econnrefused}}} -> ok end,
-    receive {connection_status, _ClientInfo, {connection_down, node_down_timeout}} -> ok end,
+    receive {connection_status, _ClientInfo3, queue_ok} -> ok end,
+    receive {connection_status, _ClientInfo4, {connection_down, {connect_error,econnrefused}}} -> ok end,
+    receive {connection_status, _ClientInfo5, {connection_down, node_down_timeout}} -> ok end,
     [{N, {error, node_down}} = get_msg() || N <- [7,8,9,10,11]],
 
     %% additional commands should get a node down
@@ -273,13 +273,15 @@ expect_connection_up(Client) ->
     expect_connection_up(Client, infinity).
 
 expect_connection_up(Client, Timeout) ->
-    {connection_status, {Client,Addr,_undefined}, connection_up} = get_msg(Timeout).
+    {connection_status, {Client, _Addr, _undefined}, connection_up} =
+        get_msg(Timeout).
 
 expect_connection_down(Client) ->
     expect_connection_down(Client, infinity).
 
 expect_connection_down(Client, Timeout) ->
-    {connection_status, {Client,Addr,_undefined}, {connection_down, Reason}} = get_msg(Timeout),
+    {connection_status, {Client, _Addr, _undefined}, {connection_down, Reason}} =
+        get_msg(Timeout),
     Reason.
 
 get_msg() ->

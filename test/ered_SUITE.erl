@@ -1,6 +1,6 @@
 -module(ered_SUITE).
 
--compile([export_all]).
+-compile([export_all, nowarn_export_all]).
 
 all() ->
     [
@@ -34,7 +34,7 @@ all() ->
 -define(PORTS, [30001, 30002, 30003, 30004, 30005, 30006]).
 
 
-init_per_suite(Config) ->
+init_per_suite(_Config) ->
     cmd_log("docker run --name redis-1 -d --net=host --restart=on-failure redis:6.2.7 redis-server --cluster-enabled yes --port 30001 --cluster-node-timeout 2000;"
             "docker run --name redis-2 -d --net=host --restart=on-failure redis:6.2.7 redis-server --cluster-enabled yes --port 30002 --cluster-node-timeout 2000;"
             "docker run --name redis-3 -d --net=host --restart=on-failure redis:6.2.7 redis-server --cluster-enabled yes --port 30003 --cluster-node-timeout 2000;"
@@ -60,7 +60,7 @@ init_per_suite(Config) ->
                                 SlotMap = cmd_log("redis-cli -p " ++ integer_to_list(Port) ++ " CLUSTER SLOTS"),
                                 ered_client:stop(Pid),
                                 SlotMap
-                        end(Port) || Port <- ?PORTS],
+                        end(P) || P <- ?PORTS],
             case length(lists:usort(AllNodes)) of
                 1 ->
                     true;
@@ -73,7 +73,7 @@ init_per_suite(Config) ->
     end(20),
     [].
 
-end_per_suite(Config) ->
+end_per_suite(_Config) ->
     os:cmd("docker stop redis-cluster; docker rm redis-cluster;"
            "docker stop redis-1; docker rm redis-1;"
            "docker stop redis-2; docker rm redis-2;"
@@ -220,7 +220,7 @@ t_init_timeout(_) ->
             }
            ],
     ct:pal("~p\n", [os:cmd("redis-cli -p 30001 CLIENT PAUSE 10000")]),
-    {ok, P} = ered:start_link([{localhost, 30001}], [{info_pid, [self()]}] ++ Opts),
+    {ok, _P} = ered:start_link([{localhost, 30001}], [{info_pid, [self()]}] ++ Opts),
 
     ?MSG(#{msg_type := socket_closed, reason := {recv_exit, timeout}}, 3500),
     ?MSG(#{msg_type := node_down_timeout, addr := {localhost, 30001}}, 2500),
@@ -292,7 +292,7 @@ scan_cmd(Client, Cursor) ->
     Callback = fun(Response) -> Pid ! {scan, Response} end,
     ered:command_client_async(Client, [<<"SCAN">>, Cursor, <<"COUNT">>, integer_to_binary(100), <<"MATCH">>, <<"otherkey*">>], Callback).
 
-unlink_cmd(Client, []) ->
+unlink_cmd(_Client, []) ->
     0;
 unlink_cmd(Client, Keys) ->
     Pid = self(),
@@ -639,7 +639,7 @@ cmd_until(Cmd, Regex) ->
 
 
 get_all_masters(R) ->
-    [Port || [SlotStart, SlotEnd, [_Ip, Port| _] | _] <- get_slot_map(R)].
+    [Port || [_SlotStart, _SlotEnd, [_Ip, Port| _] | _] <- get_slot_map(R)].
 
 get_master_from_key(R, Key) ->
     Slot = ered_lib:hash(Key),
