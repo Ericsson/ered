@@ -280,7 +280,7 @@ handle_info({timeout, TimerRef, {close_clients, Remove}}, State) ->
     [ered_client:stop(Client) || Client <- maps:values(Clients)],
     %% remove from nodes and closing map
     {noreply, State#st{nodes = maps:without(ToCloseNow, State#st.nodes),
-                       up = sets:subtract(State#st.up, sets:from_list(ToCloseNow)),
+                       up = sets:subtract(State#st.up, new_set(ToCloseNow)),
                        closing = maps:without(ToCloseNow, State#st.closing)}}.
 
 terminate(_Reason, State) ->
@@ -297,9 +297,13 @@ format_status(_Opt, Status) ->
 %%% Internal functions
 %%%===================================================================
 
+-if(?OTP_RELEASE >= 24).
 new_set(List) ->
-    %% sets:from_list(List, [{version, 2}]). TODO: OTP 24
+    sets:from_list(List, [{version, 2}]).
+-else.
+new_set(List) ->
     sets:from_list(List).
+-endif.
 
 check_cluster_status(State) ->
     case is_slot_map_ok(State) of
