@@ -239,7 +239,7 @@ t_blackhole(_) ->
     %% is not OK. Failover happens. Ered discovers the new master and reports
     %% that the cluster is OK again.
     TestPid = self(),
-    ered:command_client_async(ClientPid, [<<"PiNG">>],
+    ered:command_client_async(ClientPid, [<<"PING">>],
                               fun(Reply) -> TestPid ! {ping_reply, Reply} end),
 
     ?MSG(#{msg_type := socket_closed, reason := {recv_exit, timeout}, master := true},
