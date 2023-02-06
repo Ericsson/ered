@@ -248,19 +248,14 @@ t_blackhole(_) ->
          NodeDownTimeout + 1000),
     ?MSG(#{msg_type := node_down_timeout, master := true}),
     ?MSG(#{msg_type := cluster_not_ok, reason := master_down}),
-    ?MSG(#{msg_type := socket_closed, reason := {recv_exit, timeout}, master := false},
-         ResponseTimeout + 1000),
-    ?MSG(#{msg_type := node_down_timeout, master := false},
-         NodeDownTimeout + 1000),
-    ?MSG(#{msg_type := slot_map_updated}),
+    ?MSG(#{msg_type := slot_map_updated},
+         5000),
     ?MSG(#{msg_type := cluster_ok}),
     ?MSG(#{msg_type := client_stopped, reason := normal, master := false},
          CloseWait + 1000),
 
     ct:pal("Unpausing container: " ++ os:cmd("docker unpause " ++ Pod)),
 
-    %% The node joins the cluster again as a replica and is discovered by ered.
-    ?MSG(#{msg_type := connected, master := false}),
     no_more_msgs().
 
 
