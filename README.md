@@ -154,8 +154,8 @@ The following options can be passed to `start_link/2`:
 * `{update_slot_wait, non_neg_integer()}`
 
   CLUSTER SLOTS command is used to fetch slots from the Redis cluster. This
-  value sets how long to wait before trying to send the command again. Default
-  500.
+  value sets how long in milliseconds to wait before trying to send the command
+  again. Default 500.
 
 * `{client_opts, [ered_client:opt()]}`
 
@@ -168,14 +168,14 @@ The following options can be passed to `start_link/2`:
 
 * `{close_wait, non_neg_integer()}`
 
-  How long to delay the closing of clients that are no longer part of
-  the slot map. The delay is needed so that messages sent to the client
+  How long to delay the closing of clients that are no longer part of the slot
+  map, in milliseconds. The delay is needed so that messages sent to the client
   are not lost in transit. Default 10000.
 
   It's unlikely that you would get any useful response from a node that is no
-  longer part of the slot map, so you may want to set this option to 0 to make
-  pending commands fail as soon as possible and return an error. This option may
-  be deleted in a future version.
+  longer part of the slot map, so you may want to set this option close to zero
+  to make pending commands fail as soon as possible and return an error. This
+  option may be deleted in a future version.
 
 ### Client options
 
@@ -336,7 +336,7 @@ follows:
 * `socket_closed` when the connection has been closed, either by the peer or by
   ered when an error has happened. Reason is `{recv_exit, RecvReason}` if
   `gen_tcp:recv/3` or `ssl:recv/3` has failed. RecvReason is typically `timeout`
-  or one of the `inet:posix()` errors. Reason is be `{send_exit, SendReason}` if
+  or one of the `inet:posix()` errors. Reason is `{send_exit, SendReason}` if
   `gen_tcp:send/2` or `ssl:send/2` has failed.
 
 * `client_stopped` when a connection has been terminated, either because the
