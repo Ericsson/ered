@@ -148,7 +148,8 @@ The following options can be passed to `start_link/2`:
 
 * `{info_pid, [pid()]}`
 
-  List of pids to receive cluster info messages. See `ered_info_msg` module.
+  List of pids to receive cluster info messages. See [Info
+  messages](#info-messages) below.
 
 * `{update_slot_wait, non_neg_integer()}`
 
