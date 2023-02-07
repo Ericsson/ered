@@ -273,8 +273,8 @@ least the key `msg_type`.
 
 Messages about the cluster as a whole:
 
-* `#{msg_type := cluster_ok}` is sent when the cluster is up and and runnning
-  and ered is connected to all nodes.
+* `#{msg_type := cluster_ok}` is sent when the cluster is up and runnning and
+  ered is connected to all nodes.
 
 * `#{msg_type := cluster_not_ok, reason := Reason}` is sent when something is
   wrong, where Reason is one of the following:
