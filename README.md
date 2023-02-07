@@ -303,7 +303,7 @@ Messages about the cluster as a whole:
 * `#{msg_type := cluster_slots_error_response, response := any()}` is sent when
   there was an error updating the cluster slot-to-node mapping.
 
-Messages about the connection to a specific node are on the following form:
+Messages about the connection to a specific node are in the following form:
 
 ```Erlang
 #{msg_type := MsgType,
