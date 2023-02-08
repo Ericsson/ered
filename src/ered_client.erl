@@ -234,6 +234,8 @@ handle_info({timeout, _TimerRef, _Msg}, State) ->
     {noreply, State}.
 
 terminate(Reason, State) ->
+    %% Don't get killed by exit signal back from connect loop when we kill it.
+    process_flag(trap_exit, true),
     exit(State#st.connect_loop_pid, kill),
     reply_all({error, {client_stopped, Reason}}, State),
     report_connection_status({connection_down, {client_stopped, Reason}}, State),
