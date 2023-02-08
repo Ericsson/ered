@@ -184,7 +184,7 @@ handle_cast({trigger_map_update, SlotMapVersion, Node}, State) ->
                            {Addr, _Client} ->
                                [Addr]
                        end,
-            {noreply, start_periodic_slot_info_request(NodeAddr ++ State#st.initial_nodes, State)};
+            {noreply, start_periodic_slot_info_request(NodeAddr, State)};
         false  ->
             {noreply, State}
     end.
@@ -357,7 +357,12 @@ update_cluster_state(ClusterStatus, State) ->
     end.
 
 start_periodic_slot_info_request(State) ->
-    start_periodic_slot_info_request(State#st.initial_nodes, State).
+    %% If we need to update the slot map due to a failover, it is likely that a
+    %% replica of a failing master is located on a different machine
+    %% (anti-affinity) and thus less likely to have crashed along with its
+    %% master than other nodes.
+    PreferredNodes = replicas_of_unavailable_masters(State),
+    start_periodic_slot_info_request(PreferredNodes, State).
 
 start_periodic_slot_info_request(PreferredNodes, State) ->
     case State#st.slot_timer_ref of
@@ -430,6 +435,16 @@ node_is_available(Addr, State) ->
     sets:is_element(Addr, State#st.up) andalso
         not sets:is_element(Addr, State#st.queue_full) andalso
         not sets:is_element(Addr, State#st.reconnecting).
+
+-spec replicas_of_unavailable_masters(#st{}) -> [addr()].
+replicas_of_unavailable_masters(State) ->
+    DownMasters = sets:subtract(State#st.masters, State#st.up),
+    case sets:size(DownMasters) of
+        0 ->
+            [];
+        _ ->
+            ered_lib:slotmap_replicas_of(DownMasters, State#st.slot_map)
+    end.
 
 is_slot_map_ok(State) ->
     %% Need at least two nodes in the cluster. During some startup scenarios it

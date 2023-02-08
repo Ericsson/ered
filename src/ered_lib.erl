@@ -4,6 +4,7 @@
          slotmap_master_slots/1,
          slotmap_master_nodes/1,
          slotmap_all_nodes/1,
+         slotmap_replicas_of/2,
          hash/1]).
 
 -export_type([slot_map/0,
@@ -68,6 +69,17 @@ slotmap_master_nodes(ClusterSlotsReply) ->
 slotmap_all_nodes(ClusterSlotsReply) ->
     AllNodes = [lists:map(fun node_info/1, Nodes) || [_SlotStart, _SlotEnd | Nodes] <- ClusterSlotsReply],
     lists:sort(lists:append(AllNodes)).
+
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec slotmap_replicas_of(sets:set(addr()), slot_map()) -> [addr()].
+%%
+%% Get node addresses of all replicas of the given masters
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+slotmap_replicas_of(Masters, ClusterSlotsReply) ->
+    AllReplicas = [lists:map(fun node_info/1, Replicas)
+                   || [_Start, _End, Master | Replicas] <- ClusterSlotsReply,
+                      sets:is_element(node_info(Master), Masters)],
+    lists:usort(lists:append(AllReplicas)).
 
 node_info([Ip, Port |_])  ->
     if
