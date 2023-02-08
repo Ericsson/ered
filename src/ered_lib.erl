@@ -58,7 +58,7 @@ slotmap_master_slots(ClusterSlotsReply) ->
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 slotmap_master_nodes(ClusterSlotsReply) ->
     Nodes = [node_info(Master) || [_SlotStart, _SlotEnd, Master | _] <- ClusterSlotsReply],
-    lists:sort(Nodes).
+    lists:usort(Nodes).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec slotmap_all_nodes(slot_map()) -> [addr()].
@@ -67,7 +67,7 @@ slotmap_master_nodes(ClusterSlotsReply) ->
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 slotmap_all_nodes(ClusterSlotsReply) ->
     AllNodes = [lists:map(fun node_info/1, Nodes) || [_SlotStart, _SlotEnd | Nodes] <- ClusterSlotsReply],
-    lists:sort(lists:append(AllNodes)).
+    lists:usort(lists:append(AllNodes)).
 
 node_info([Ip, Port |_])  ->
     if
