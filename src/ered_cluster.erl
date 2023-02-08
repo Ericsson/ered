@@ -439,10 +439,10 @@ node_is_available(Addr, State) ->
 -spec replicas_of_unavailable_masters(#st{}) -> [addr()].
 replicas_of_unavailable_masters(State) ->
     DownMasters = sets:subtract(State#st.masters, State#st.up),
-    case sets:size(DownMasters) of
-        0 ->
+    case sets:is_empty(DownMasters) of
+        true ->
             [];
-        _ ->
+        false ->
             ered_lib:slotmap_replicas_of(DownMasters, State#st.slot_map)
     end.
 
