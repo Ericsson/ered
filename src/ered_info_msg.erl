@@ -52,7 +52,7 @@
         #{msg_type := cluster_ok} |
 
         #{msg_type := cluster_not_ok,
-          reason := master_down | master_node_queue_full | bad_slot_map}.
+          reason := master_down | master_queue_full | pending | too_few_nodes | not_all_slots_covered | too_few_replicas}.
 
 
 -type addr() :: ered_client:addr().
@@ -119,6 +119,7 @@ cluster_ok(Pids) ->
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec cluster_nok(master_down |
                   master_queue_full |
+                  pending |
                   too_few_nodes |
                   not_all_slots_covered |
                   too_few_replicas,

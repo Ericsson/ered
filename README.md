@@ -138,23 +138,24 @@ The following options can be passed to `start_link/2`:
 
 * `{try_again_delay, non_neg_integer()}`
 
-  If there is a TRYAGAIN response from Redis then wait
-  this many milliseconds before re-sending the command.
+  If there is a TRYAGAIN response from Redis then wait this many milliseconds
+  before re-sending the command. Default 200.
 
 * `{redirect_attempts, non_neg_integer()}`
 
-  Only do these many retries or re-sends before giving
-  up and returning the result. This affects ASK, MOVED
-  and TRYAGAIN responses.
+  Only do these many retries or re-sends before giving up and returning the
+  result. This affects ASK, MOVED and TRYAGAIN responses. Default 10.
 
 * `{info_pid, [pid()]}`
 
-  List of pids to receive cluster info messages. See `ered_info_msg` module.
+  List of pids to receive cluster info messages. See [Info
+  messages](#info-messages) below.
 
 * `{update_slot_wait, non_neg_integer()}`
 
-  CLUSTER SLOTS command is used to fetch slots from the Redis cluster.
-  This value sets how long to wait before trying to send the command again.
+  CLUSTER SLOTS command is used to fetch slots from the Redis cluster. This
+  value sets how long in milliseconds to wait before trying to send the command
+  again. Default 500.
 
 * `{client_opts, [ered_client:opt()]}`
 
@@ -163,13 +164,18 @@ The following options can be passed to `start_link/2`:
 * `{min_replicas, non_neg_integer()}`
 
   For each Redis master node, the min number of replicas for the cluster
-  to be considered OK.
+  to be considered OK. Default 1.
 
 * `{close_wait, non_neg_integer()}`
 
-  How long to delay the closing of clients that are no longer part of
-  the slot map. The delay is needed so that messages sent to the client
-  are not lost in transit.
+  How long to delay the closing of clients that are no longer part of the slot
+  map, in milliseconds. The delay is needed so that messages sent to the client
+  are not lost in transit. Default 10000.
+
+  It's unlikely that you would get any useful response from a node that is no
+  longer part of the slot map, so you may want to set this option close to zero
+  to make pending commands fail as soon as possible and return an error. This
+  option may be deleted in a future version.
 
 ### Client options
 
@@ -181,21 +187,21 @@ Options passed to `start_link/2` as the options `{client_opts, [...]}`.
 
 * `{max_waiting, non_neg_integer()}`
 
-  Max number of commands allowed to wait in queue.
+  Max number of commands allowed to wait in queue. Default 5000.
 
 * `{max_pending, non_neg_integer()}`
 
   Max number of commands to be pending, i.e. sent to client
-  and waiting for a response.
+  and waiting for a response. Default 128.
 
 * `{queue_ok_level, non_neg_integer()}`
 
   If the queue has been full then it is considered ok
-  again when it reaches this level
+  again when it reaches this level. Default 2000.
 
 * `{reconnect_wait, non_neg_integer()}`
 
-  How long to wait to reconnect after a failed connect attempt.
+  How long to wait to reconnect after a failed connect attempt. Default 1000.
 
 * `{info_pid, none | pid()}`
 
@@ -203,19 +209,23 @@ Options passed to `start_link/2` as the options `{client_opts, [...]}`.
 
 * `{resp_version, 2..3}`
 
-  What RESP (REdis Serialization Protocol) version to use.
+  What RESP (REdis Serialization Protocol) version to use. Default 3.
 
 * `{node_down_timeout, non_neg_integer()}`
 
-  If there is a connection problem and the connection is
-  not recovered before this timeout then the client considers
-  the node down and will clear it's queue and reject all new
-  commands until connection is restored.
+  If there is a connection problem, such as a timeout waiting for a response
+  from Redis, the ered client tries to set up a new connection. If the
+  connection is not recovered within `node_down_timeout`, then the client
+  considers the node down and clears it's queue (commands get an error reply)
+  and starts rejecting all new commands until the connection is restored.
+  Default 2000.
 
 * `{use_cluster_id, boolean()}`
 
-  Set if the CLUSTER ID should be fetched used in info messages.
-  (Not useful if the client is used outside of a cluster.)
+  Set to true if the CLUSTER ID should be fetched and used in info messages.
+  This is set to true automatically when a client is started as part of a
+  cluster client and false otherwise. (Not useful if the client is used outside
+  of a cluster.)
 
 ### Connection options
 
@@ -224,16 +234,24 @@ Options passed to `start_link/2` as the options `{client_opts, [{connection_opts
 * `{batch_size, non_neg_integer()}`
 
   If commands are queued up in the process message queue, this is the maximum
-  number of messages that will be received and sent in one call.
+  number of messages that will be received and sent in one call. Default 16.
 
 * `{tcp_options, [gen_tcp:connect_option()]}`
 
   Options passed to `gen_tcp:connect/4`.
 
+* `{tcp_connect_timeout, timeout()}`
+
+  Timeout passed to gen_tcp:connect/4. Default infinity.
+
 * `{tls_options, [ssl:tls_client_option()]}`
 
   Options passed to `ssl:connect/3`. If this config parameter is present
   TLS will be used.
+
+* `{tls_connect_timeout, timeout()}`
+
+  Timeout passed to ssl:connect/3. Default infinity.
 
 * `{push_cb, push_cb()}`
 
@@ -241,7 +259,98 @@ Options passed to `start_link/2` as the options `{client_opts, [{connection_opts
 
 * `{response_timeout, non_neg_integer()}`
 
-  Timeout when waiting for a response from Redis, in milliseconds.
+  Timeout when waiting for a response from Redis in milliseconds. Default 10000.
+
+  When a timeout happens, the connection is closed and the client attempts to
+  set up a new connection. See the client option `node_down_timeout` above.
+
+Info messages
+-------------
+
+When one or more pids have been provided as the option `{info_pid, [pid()]}` to
+`start_link/2`, these are the messages ered sends. All messages are maps with at
+least the key `msg_type`.
+
+Messages about the cluster as a whole:
+
+* `#{msg_type := cluster_ok}` is sent when the cluster is up and runnning and
+  ered is connected to all nodes.
+
+* `#{msg_type := cluster_not_ok, reason := Reason}` is sent when something is
+  wrong, where Reason is one of the following:
+
+  * `master_down` if one of the master nodes is down or unreachable.
+
+  * `master_queue_full` if one of the master nodes is so busy that the maximum
+    number of queued commands for the node is reached and any further command to
+    that node would be rejected immediately.
+
+  * `pending` if ered has not yet established connections to all nodes.
+
+  * `too_few_nodes` if the cluster has fewer than two nodes.
+
+  * `not_all_slots_covered` if some cluster slot doesn't belong to any node in
+    the cluster.
+
+  * `too_few_replicas` if any of the master nodes has fewer replicas than the
+    minimum number as specified using the option `{min_replicas,
+    non_neg_integer()`. See options above.
+
+* `#{msg_type := slot_map_updated, slot_map := list(), map_version :=
+  non_neg_integer()}` is sent when the cluster slot-to-node mapping has been
+  updated.
+
+* `#{msg_type := cluster_slots_error_response, response := any()}` is sent when
+  there was an error updating the cluster slot-to-node mapping.
+
+Messages about the connection to a specific node are in the following form:
+
+```Erlang
+#{msg_type := MsgType,
+  reason := Reason,
+  master := boolean(),
+  addr := addr(),
+  client_id := pid(),
+  node_id := string()}
+```
+
+The field `msg_type` identifies what kind of event has happened and is described
+below. Reason depends on `msg_type`. Master describes whether the node is a
+master or a replica. Addr is a tuple `{Host, Port}` to the Redis node. Client id
+is the pid of the `ered_client` responsible for the connection. Node id is
+assigned by Redis and is used to identify the node within the cluster.
+
+The possible values of the `msg_type` field for connection events are as
+follows:
+
+* `connected` when the connection to a node has been established. Reason is
+  `none`.
+
+* `connect_error` when connecting to the node fails or the TLS handshake fails.
+  Reason is as returned by `gen_tcp:connect/4` or `{tls_init, TlsReason}` if
+  `ssl:connect/3` fails.
+
+* `init_error` when one of the initial commands sent to Redis has failed, such
+  as the HELLO command. Reason is a list of error reasons.
+
+* `socket_closed` when the connection has been closed, either by the peer or by
+  ered when an error has happened. Reason is `{recv_exit, RecvReason}` if
+  `gen_tcp:recv/3` or `ssl:recv/3` has failed. RecvReason is typically `timeout`
+  or one of the `inet:posix()` errors. Reason is `{send_exit, SendReason}` if
+  `gen_tcp:send/2` or `ssl:send/2` has failed.
+
+* `client_stopped` when a connection has been terminated, either because the
+  node is no longer part of the cluster or because the user is stopping ered.
+  Reason is the terminate reason of the `ered_client` process, typically the
+  atom `normal`.
+
+* `node_down_timeout` when the connection to a node is lost and the connection
+  has not been re-established within the specified time. Reason is `none`.
+
+* `queue_full` when the command queue to the node is full. Reason `none`.
+
+* `queue_ok` when the command queue to the node is not full anymore. Reason is
+  `none`.
 
 Redis to Erlang Term Representation
 -----------------------------------

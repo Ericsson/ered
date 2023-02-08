@@ -34,11 +34,15 @@
         %% If commands are queued up in the process message queue this is the max
         %% amount of messages that will be received and sent in one call
         {batch_size, non_neg_integer()} |
-        %% Options passed to gen_tcp:connect
+        %% Options passed to gen_tcp:connect/4.
         {tcp_options, [gen_tcp:connect_option()]} |
-        %% Options passed to ssl:connect. If this config parameter is present
-        %% tls will be used instead of tcp
+        %% Timeout passed to gen_tcp:connect/4.
+        {tcp_connect_timeout, timeout()} |
+        %% Options passed to ssl:connect/3. If this config parameter is present,
+        %% TLS is used.
         {tls_options, [ssl:tls_client_option()]} |
+        %% Timeout passed to ssl:connect/3.
+        {tls_connect_timeout, timeout()} |
         %% Callback for push notifications
         {push_cb, push_cb()} |
         %% Timeout when waiting for a response from Redis. milliseconds
