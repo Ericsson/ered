@@ -44,6 +44,9 @@
              queue_full = new_set([]) :: addr_set(),
              %% Clients started but not connected yet
              pending = new_set([]) :: addr_set(),
+             %% Clients that lost connection and trying to reconnect, probably a
+             %% harmless situation. These are still considered 'up'.
+             reconnecting = new_set([]) :: addr_set(),
              %% Clients pending to be closed. Mapped to the closing timer
              %% reference
              closing = #{} :: #{addr() => reference()},
@@ -181,7 +184,7 @@ handle_cast({trigger_map_update, SlotMapVersion, Node}, State) ->
                            {Addr, _Client} ->
                                [Addr]
                        end,
-            {noreply, start_periodic_slot_info_request(NodeAddr ++ State#st.initial_nodes, State)};
+            {noreply, start_periodic_slot_info_request(NodeAddr, State)};
         false  ->
             {noreply, State}
     end.
@@ -191,15 +194,18 @@ handle_info(Msg = {connection_status, {_Pid, Addr, _Id} , Status}, State) ->
     ered_info_msg:connection_status(Msg, IsMaster, State#st.info_pid),
     State1 = case Status of
                  {connection_down, {socket_closed, _}} ->
-                     %% Avoid triggering the alarm for a normal from peer side.
-                     %% The cluster will be marked down on connect or node down event.
-                     State;
+                     %% Avoid triggering the alarm for a socket closed by the
+                     %% peer. The cluster will be marked down on failed
+                     %% reconnect or node down event.
+                     State#st{reconnecting = sets:add_element(Addr, State#st.reconnecting)};
                  {connection_down,_} ->
                      State#st{up = sets:del_element(Addr, State#st.up),
-                              pending = sets:del_element(Addr, State#st.pending)};
+                              pending = sets:del_element(Addr, State#st.pending),
+                              reconnecting = sets:del_element(Addr, State#st.reconnecting)};
                  connection_up ->
                      State#st{up = sets:add_element(Addr, State#st.up),
-                              pending = sets:del_element(Addr, State#st.pending)};
+                              pending = sets:del_element(Addr, State#st.pending),
+                              reconnecting = sets:del_element(Addr, State#st.reconnecting)};
                  queue_full ->
                      State#st{queue_full = sets:add_element(Addr, State#st.queue_full)};
                  queue_ok ->
@@ -351,7 +357,12 @@ update_cluster_state(ClusterStatus, State) ->
     end.
 
 start_periodic_slot_info_request(State) ->
-    start_periodic_slot_info_request(State#st.initial_nodes, State).
+    %% If we need to update the slot map due to a failover, it is likely that a
+    %% replica of a failing master is located on a different machine
+    %% (anti-affinity) and thus less likely to have crashed along with its
+    %% master than other nodes.
+    PreferredNodes = replicas_of_unavailable_masters(State),
+    start_periodic_slot_info_request(PreferredNodes, State).
 
 start_periodic_slot_info_request(PreferredNodes, State) ->
     case State#st.slot_timer_ref of
@@ -386,21 +397,53 @@ send_slot_info_request(Node, State) ->
     Cb = fun(Answer) -> Pid ! {slot_info, State#st.slot_map_version, Answer} end,
     ered_client:command_async(Node, [<<"CLUSTER">>, <<"SLOTS">>], Cb).
 
+%% Pick a random available node, preferring the ones in PreferredNodes if any of
+%% them is available.
+%%
+%% Random is useful, since we may send multiple async CLUSTER SLOTS before we
+%% get a reply for the first one, so we don't want the same node over and over.
 pick_node(PreferredNodes, State) ->
-    case sets:is_empty(State#st.up) of
-        true ->
+    case pick_available_node(shuffle(PreferredNodes), State) of
+        none ->
+            %% No preferred node available. Pick one from the 'up' set.
+            Addr = pick_available_node(shuffle(sets:to_list(State#st.up)), State);
+        Addr ->
+            Addr
+    end,
+    case Addr of
+        none ->
             none;
-        false ->
-            %% prioritize initial configured nodes
-            case lists:dropwhile(fun(Addr) -> not sets:is_element(Addr, State#st.up) end,
-                                 PreferredNodes) of
-                [] ->
-                    %% no initial node up, pick one from the up set
-                    Addr = hd(sets:to_list(State#st.up));
-                [Addr|_] ->
-                    Addr
-            end,
+        _ ->
             maps:get(Addr, State#st.nodes)
+    end.
+
+shuffle(List) ->
+    [Y || {_, Y} <- lists:sort([{rand:uniform(16384), X} || X <- List])].
+
+%% Pick node that is up and not queue full.
+pick_available_node([Addr|Addrs], State) ->
+    case node_is_available(Addr, State) of
+        true ->
+            Addr;
+        false ->
+            pick_available_node(Addrs, State)
+    end;
+pick_available_node([], _State) ->
+    none.
+
+node_is_available(Addr, State) ->
+    sets:is_element(Addr, State#st.up) andalso
+        not sets:is_element(Addr, State#st.queue_full) andalso
+        not sets:is_element(Addr, State#st.reconnecting).
+
+-spec replicas_of_unavailable_masters(#st{}) -> [addr()].
+replicas_of_unavailable_masters(State) ->
+    DownMasters = sets:subtract(State#st.masters, State#st.up),
+    case sets:is_empty(DownMasters) of
+        true ->
+            [];
+        false ->
+            ered_lib:slotmap_replicas_of(DownMasters, State#st.slot_map)
     end.
 
 is_slot_map_ok(State) ->
