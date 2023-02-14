@@ -52,9 +52,13 @@ init_per_suite(_Config) ->
 
     cmd_log(" echo 'yes' | docker run --name redis-cluster --net=host -i redis:6.2.7 redis-cli --cluster create 127.0.0.1:30001 127.0.0.1:30002 127.0.0.1:30003 127.0.0.1:30004 127.0.0.1:30005 127.0.0.1:30006 --cluster-replicas 1"),
 
-    %% Wait until cluster is consistent, i.e all nodes have the same single view
-    %% of the slot map. From Redis 6.2 the output of CLUSTER SLOTS is no longer
-    %% unordered, but in slot order.
+    wait_for_consistent_cluster(),
+    [].
+
+%% Wait until cluster is consistent, i.e all nodes have the same single view
+%% of the slot map. From Redis 6.2 the output of CLUSTER SLOTS is no longer
+%% unordered, but in slot order.
+wait_for_consistent_cluster() ->
     fun Loop(N) ->
             AllNodes = [fun(Port) ->
                                 {ok,Pid} = ered_client:start_link("127.0.0.1", Port, []),
@@ -71,8 +75,7 @@ init_per_suite(_Config) ->
                 _ ->
                     error({timeout_consistent_cluster, AllNodes})
             end
-    end(20),
-    [].
+    end(20).
 
 end_per_suite(_Config) ->
     os:cmd("docker stop redis-cluster; docker rm redis-cluster;"
@@ -598,6 +601,7 @@ start_cluster(Opts) ->
     Ports = [30001, 30002, 30003, 30004, 30005, 30006],
     InitialNodes = [{localhost, Port} || Port <- Ports],
 
+    wait_for_consistent_cluster(),
     {ok, P} = ered:start_link(InitialNodes, [{info_pid, [self()]}] ++ Opts),
 
     ?MSG(#{msg_type := connected, addr := {localhost, 30001}}),
