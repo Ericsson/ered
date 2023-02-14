@@ -131,6 +131,17 @@ get_addr_to_client_map(server_ref()) -> #{addr() => client_ref()}.
 
 Get the address to client mapping. This includes all clients.
 
+### `update_slots/1,2`
+
+```Erlang
+update_slots(server_ref()) -> ok.
+update_slots(server_ref(), client_ref()) -> ok.
+```
+
+Manually trigger a slot mapping update. If a client pid or name is provided and
+available, this client is used to fetch the slot map. Otherwise a random node is
+used.
+
 Options
 -------
 
