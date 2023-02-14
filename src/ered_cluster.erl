@@ -247,12 +247,18 @@ handle_info({slot_info, Version, Response}, State) ->
                     Remove = maps:keys(lists:foldl(fun maps:without/2,
                                                    State#st.nodes,
                                                    [State#st.initial_nodes, Nodes])),
-                    %% The close is delayed to give time to update slot map and to handle any
-                    %% messages in transit.
+
+                    %% Deactivate the clients, so they can fail queued and new
+                    %% commands immediately.
+                    [ered_client:deactivate(maps:get(Addr, State#st.nodes)) || Addr <- Remove],
+
+                    %% Stopping the clients is delayed to give time to update
+                    %% slot map and to handle any messages in transit. If the
+                    %% node comes back to the cluster soon enough, we can
+                    %% reactivate these clients if they're not yet stopped.
                     TimerRef = erlang:start_timer(State#st.close_wait, self(), {close_clients, Remove}),
                     NewClosing = maps:merge(maps:from_list([{Addr, TimerRef} || Addr <- Remove]),
                                             State#st.closing),
-
 
                     ered_info_msg:slot_map_updated(ClusterSlotsReply, Version + 1, State#st.info_pid),
 
@@ -496,11 +502,23 @@ start_client(Addr, State) ->
 
 start_clients(Addrs, State) ->
     %% open clients to new nodes not seen before
-    NewNodes = maps:from_list([{Addr, start_client(Addr, State)}
-                               || Addr <- Addrs,
-                                  not maps:is_key(Addr, State#st.nodes)]),
+    %% cancel closing for requested clients
+    {NewNodes, NewClosing} =
+        lists:foldl(fun (Addr, {Nodes, Closing}) ->
+                            case maps:find(Addr, Nodes) of
+                                error ->
+                                    Pid = start_client(Addr, State),
+                                    {Nodes#{Addr => Pid}, Closing};
+                                {ok, Pid} ->
+                                    ered_client:reactivate(Pid),
+                                    {Nodes, maps:remove(Addr, Closing)}
+                            end
+                    end,
+                    {State#st.nodes, State#st.closing},
+                    Addrs),
 
     State#st{nodes = maps:merge(State#st.nodes, NewNodes),
-             pending = sets:union(State#st.pending, new_set(maps:keys(NewNodes))),
-             %% cancel closing for requested clients
-             closing = maps:without(Addrs, State#st.closing)}.
+             pending = sets:union(State#st.pending,
+                                  sets:subtract(new_set(maps:keys(NewNodes)),
+                                                State#st.up)),
+             closing = NewClosing}.

@@ -170,12 +170,9 @@ The following options can be passed to `start_link/2`:
 
   How long to delay the closing of clients that are no longer part of the slot
   map, in milliseconds. The delay is needed so that messages sent to the client
-  are not lost in transit. Default 10000.
-
-  It's unlikely that you would get any useful response from a node that is no
-  longer part of the slot map, so you may want to set this option close to zero
-  to make pending commands fail as soon as possible and return an error. This
-  option may be deleted in a future version.
+  are not lost in transit. Although the closing of these clients is delayed, the
+  clients are put in a state so they respond immediately to commands with
+  `{error, node_deactivated}`. Default 10000.
 
 ### Client options
 
@@ -339,13 +336,16 @@ follows:
   or one of the `inet:posix()` errors. Reason is `{send_exit, SendReason}` if
   `gen_tcp:send/2` or `ssl:send/2` has failed.
 
+* `node_down_timeout` when the connection to a node is lost and the connection
+  has not been re-established within the specified time. Reason is `none`.
+
+* `node_deactivated` when the node is no longer part of the cluster but the
+  client has not yet been stopped. Reason is `none`.
+
 * `client_stopped` when a connection has been terminated, either because the
   node is no longer part of the cluster or because the user is stopping ered.
   Reason is the terminate reason of the `ered_client` process, typically the
   atom `normal`.
-
-* `node_down_timeout` when the connection to a node is lost and the connection
-  has not been re-established within the specified time. Reason is `none`.
 
 * `queue_full` when the command queue to the node is full. Reason `none`.
 

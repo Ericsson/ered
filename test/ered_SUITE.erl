@@ -137,7 +137,7 @@ t_command_pipeline(_) ->
 
 
 t_hard_failover(_) ->
-    R = start_cluster([{close_wait, 2000}]),
+    R = start_cluster(),
     Port = get_master_port(R),
     Pod = get_pod_name_from_port(Port),
     ct:pal("~p\n", [ered:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>])]),
@@ -154,6 +154,7 @@ t_hard_failover(_) ->
     ?MSG(#{msg_type := node_down_timeout, addr := {"127.0.0.1", Port}}, 2500),
 
     ?MSG(#{msg_type := slot_map_updated}, 5000),
+    ?MSG(#{msg_type := node_deactivated, addr := {"127.0.0.1", Port}}),
 
     ct:pal("~p\n", [ered:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>])]),
 
@@ -161,16 +162,13 @@ t_hard_failover(_) ->
 
     %% node back: first the initial add reconnects
     ?MSG(#{msg_type := connected, addr := {localhost, Port}}, 10000),
+    ?MSG(#{msg_type := connected, addr := {"127.0.0.1", Port}, master := false}, 10000),
 
     %% new slotmap when old master comes up as replica
     ?MSG(#{msg_type := slot_map_updated}, 10000),
 
-    %% new client comes up
-    ?MSG(#{msg_type := connected, addr := {"127.0.0.1", Port}, master := false}, 10000),
+    %% a client is already connected to the node, so cluster is ok immediately
     ?MSG(#{msg_type := cluster_ok}),
-
-    %% old client to the failed node is closed since it was removed from slotmap
-    ?MSG(#{msg_type := client_stopped, addr := {"127.0.0.1", Port}, reason := normal}, 2000),
 
     no_more_msgs().
 
@@ -250,6 +248,7 @@ t_blackhole(_) ->
     ?MSG(#{msg_type := cluster_not_ok, reason := master_down}),
     ?MSG(#{msg_type := slot_map_updated},
          5000),
+    ?MSG(#{msg_type := node_deactivated, addr := {"127.0.0.1", Port}}),
     ?MSG(#{msg_type := cluster_ok}),
     ?MSG(#{msg_type := client_stopped, reason := normal, master := false},
          CloseWait + 1000),
