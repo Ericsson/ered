@@ -10,7 +10,7 @@
 %% API
 
 -export([start_link/3,
-         stop/1,
+         stop/1, deactivate/1, reactivate/1,
          command/2, command/3,
          command_async/3]).
 
@@ -59,7 +59,7 @@
          cluster_id = undefined :: undefined | binary(),
 
          queue_full_event_sent = false :: boolean(), % set to true when full, false when reaching queue_ok_level
-         node_down = false :: boolean(),
+         node_status = up :: up | node_down | node_deactivated,
 
          node_down_timer = none :: none | reference(),
          opts = #opts{}
@@ -67,7 +67,7 @@
         }).
 
 
--type command_error()          :: queue_overflow | node_down | {client_stopped, reason()}.
+-type command_error()          :: queue_overflow | node_down | node_deactivated | {client_stopped, reason()}.
 -type command_item()           :: {command, ered_command:redis_command(), reply_fun()}.
 -type command_queue()          :: {Size :: non_neg_integer(), queue:queue(command_item())}.
 
@@ -80,7 +80,9 @@
 -type client_info() :: {pid(), addr(), node_id()}.
 -type status()      :: connection_up | {connection_down, down_reason()} | queue_ok | queue_full.
 -type reason()      :: term(). % ssl reasons are of type any so no point being more specific
--type down_reason() :: node_down_timeout | {client_stopped | connect_error | init_error | socket_closed, reason()}.
+-type down_reason() :: node_down_timeout | node_deactivated |
+                       {client_stopped | connect_error | init_error | socket_closed,
+                        reason()}.
 -type info_msg()    :: {connection_status, client_info(), status()}.
 -type server_ref()  :: pid().
 
@@ -132,6 +134,27 @@ start_link(Host, Port, Opts) ->
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 stop(ServerRef) ->
     gen_server:stop(ServerRef).
+
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec deactivate(server_ref()) -> ok.
+%%
+%% Prepares the client to stop. Cancel all commands in queue and put
+%% the client in a 'node_deactivated' state. The client is still
+%% running though, and can be reactivated if the node comes back to the
+%% cluster before the client is stopped.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+deactivate(ServerRef) ->
+    gen_server:cast(ServerRef, deactivate).
+
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec reactivate(server_ref()) -> ok.
+%%
+%% Reactivates a client that has previously been deactivated. This is
+%% done when a node comes back to a cluster before the client for that
+%% node has been stopped.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+reactivate(ServerRef) ->
+    gen_server:cast(ServerRef, reactivate).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec command(server_ref(), ered_command:command()) -> reply().
@@ -187,14 +210,26 @@ handle_call({command, Command}, From, State) ->
     handle_cast({command, Command, Fun}, State).
 
 
-handle_cast(Command, State) ->
-    if
-        State#st.node_down ->
-            reply_command(Command, {error, node_down}),
-            {noreply, State};
-        true ->
-            {noreply, process_commands(State#st{waiting = q_in(Command, State#st.waiting)})}
-    end.
+handle_cast(Command = {command, _, _}, State) ->
+    case State#st.node_status of
+        up ->
+            {noreply, process_commands(State#st{waiting = q_in(Command, State#st.waiting)})};
+        NodeProblem when NodeProblem =:= node_down; NodeProblem =:= node_deactivated ->
+            reply_command(Command, {error, NodeProblem}),
+            {noreply, State}
+    end;
+
+handle_cast(deactivate, State) ->
+    State1 = cancel_node_down_timer(State),
+    State2 = report_connection_status({connection_down, node_deactivated}, State1),
+    State3 = reply_all({error, node_deactivated}, State2),
+    {noreply, process_commands(State3#st{node_status = node_deactivated})};
+
+handle_cast(reactivate, #st{connection_pid = none} = State) ->
+    {noreply, start_node_down_timer(State)};
+
+handle_cast(reactivate, State) ->
+    {noreply, State#st{node_status = up}}.
 
 
 handle_info({{command_reply, Pid}, Reply}, State = #st{pending = Pending, connection_pid = Pid}) ->
@@ -220,15 +255,19 @@ handle_info(Reason = {socket_closed, _CloseReason}, State) ->
     {noreply, connection_down(Reason, State)};
 
 handle_info({connected, Pid, ClusterId}, State) ->
-    erlang:cancel_timer(State#st.node_down_timer),
-    State1 = State#st{connection_pid = Pid, cluster_id = ClusterId, node_down_timer = none},
-    State2 = report_connection_status(connection_up, State1),
-    {noreply, process_commands(State2#st{node_down = false})};
+    State1 = cancel_node_down_timer(State),
+    State2 = State1#st{connection_pid = Pid, cluster_id = ClusterId,
+                       node_status = case State1#st.node_status of
+                                         node_down -> up;
+                                         OldStatus -> OldStatus
+                                     end},
+    State3 = report_connection_status(connection_up, State2),
+    {noreply, process_commands(State3)};
 
 handle_info({timeout, TimerRef, node_down}, State) when TimerRef == State#st.node_down_timer ->
     State1 = report_connection_status({connection_down, node_down_timeout}, State),
     State2 = reply_all({error, node_down}, State1),
-    {noreply, process_commands(State2#st{node_down = true})};
+    {noreply, process_commands(State2#st{node_status = node_down})};
 
 handle_info({timeout, _TimerRef, _Msg}, State) ->
     {noreply, State}.
@@ -255,13 +294,17 @@ reply_all(Reply, State) ->
     [reply_command(Command, Reply) || Command <- q_to_list(State#st.waiting)],
     State#st{waiting = q_new(), pending = q_new()}.
 
+start_node_down_timer(#st{node_down_timer = none} = State) ->
+    Timeout = State#st.opts#opts.node_down_timeout,
+    State#st{node_down_timer = erlang:start_timer(Timeout, self(), node_down)};
 start_node_down_timer(State) ->
-    case State#st.node_down_timer of
-        none ->
-            State#st{node_down_timer = erlang:start_timer(State#st.opts#opts.node_down_timeout, self(), node_down)};
-        _ ->
-            State
-    end.
+    State.
+
+cancel_node_down_timer(#st{node_down_timer = none} = State) ->
+    State;
+cancel_node_down_timer(#st{node_down_timer = TimerRef} = State) ->
+    erlang:cancel_timer(TimerRef),
+    State#st{node_down_timer = none}.
 
 connection_down(Reason, State) ->
     State1 = State#st{waiting = q_join(State#st.pending, State#st.waiting),
