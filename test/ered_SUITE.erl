@@ -259,7 +259,7 @@ t_blackhole(_) ->
 
     ct:pal("Unpausing container: " ++ os:cmd("docker unpause " ++ Pod)),
     timer:sleep(500),
-    wait_for_cluster_consistent(),
+    wait_for_consistent_cluster(),
 
     %% Since we have {min_replicas, 0} in this testcase, the slot map is not
     %% updated repeatedly until replicas are found. Instead, we use the
