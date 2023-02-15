@@ -110,12 +110,14 @@ stop(ServerRef) ->
     gen_server:stop(ServerRef).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec update_slots(server_ref(), non_neg_integer(), client_ref()) -> ok.
+-spec update_slots(server_ref(), non_neg_integer(), client_ref() | none) -> ok.
 %%
 %% Trigger a CLUSTER SLOTS command towards the specified Redis node if
 %% the slot map version provided is the same as the one stored in the
 %% cluster process state. This is used when a cluster state change is
-%% detected with a MOVED redirection.
+%% detected with a MOVED redirection. It is also used when triggering
+%% a slot update manually. In this case the node is 'none', meaning
+%% no specific node is preferred.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 update_slots(ServerRef, SlotMapVersion, Node) ->
     gen_server:cast(ServerRef, {trigger_map_update, SlotMapVersion, Node}).

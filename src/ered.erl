@@ -16,7 +16,8 @@
          command_client/2, command_client/3,
          command_client_async/3,
          get_clients/1,
-         get_addr_to_client_map/1]).
+         get_addr_to_client_map/1,
+         update_slots/1, update_slots/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -172,6 +173,23 @@ get_clients(ServerRef) ->
 get_addr_to_client_map(ServerRef) ->
     gen_server:call(ServerRef, get_addr_to_client_map).
 
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec update_slots(server_ref()) -> ok.
+%%
+%% Trigger a slot-to-node mapping update using any connected client.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+update_slots(ServerRef) ->
+    gen_server:cast(ServerRef, {update_slots, none}).
+
+-spec update_slots(server_ref(), client_ref()) -> ok.
+%%
+%% Trigger a slot-to-node mapping update using the specified client,
+%% if it's already connected. Otherwise another connected client is
+%% used.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+update_slots(ServerRef, ClientRef) ->
+    gen_server:cast(ServerRef, {update_slots, ClientRef}).
+
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
@@ -205,6 +223,10 @@ handle_call(get_addr_to_client_map, _From, State) ->
 handle_cast({command_async, Command, Key, ReplyFun}, State) ->
     Slot = ered_lib:hash(Key),
     send_command_to_slot(Command, Slot, ReplyFun, State, State#st.redirect_attempts),
+    {noreply, State};
+
+handle_cast({update_slots, ClientRef}, State) ->
+    ered_cluster:update_slots(State#st.cluster_pid, State#st.slot_map_version, ClientRef),
     {noreply, State};
 
 handle_cast({forward_command, Command, Slot, From, Addr, AttemptsLeft}, State) ->

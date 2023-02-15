@@ -258,6 +258,15 @@ t_blackhole(_) ->
          CloseWait + 1000),
 
     ct:pal("Unpausing container: " ++ os:cmd("docker unpause " ++ Pod)),
+    timer:sleep(500),
+    wait_for_consistent_cluster(),
+
+    %% Since we have {min_replicas, 0} in this testcase, the slot map is not
+    %% updated repeatedly until replicas are found. Instead, we use the
+    %% opportunity to test manual slot update here.
+    ered:update_slots(R),
+    ?MSG(#{msg_type := slot_map_updated}),
+    ?MSG(#{msg_type := connected, addr := {"127.0.0.1", Port}, master := false}),
 
     no_more_msgs().
 
