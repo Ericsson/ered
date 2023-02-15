@@ -176,7 +176,7 @@ get_addr_to_client_map(ServerRef) ->
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec update_slots(server_ref()) -> ok.
 %%
-%% Trigger a slot-to-node mapping update.
+%% Trigger a slot-to-node mapping update using any connected client.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 update_slots(ServerRef) ->
     gen_server:cast(ServerRef, {update_slots, none}).
