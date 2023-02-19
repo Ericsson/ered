@@ -29,11 +29,6 @@
 
 -record(st, {
              cluster_state = nok :: ok | nok,
-             %% The initial configured nodes will be prioritized when
-             %% fetching new slot maps and clients to these will not
-             %% be closed even if they are not part of the current
-             %% slot map
-             initial_nodes = [] :: [addr()],
              %% Mapping from address to client for all known clients
              nodes = #{} :: #{addr() => pid()},
              %% Clients in connected state
@@ -158,7 +153,7 @@ init([Addrs, Opts]) ->
                   ({close_wait, Val}, S)       -> S#st{close_wait = Val};
                   (Other, _)                   -> error({badarg, Other})
               end,
-              #st{initial_nodes = Addrs},
+              #st{},
               Opts),
     {ok, start_clients(Addrs, State)}.
 
@@ -245,10 +240,8 @@ handle_info({slot_info, Version, Response}, State) ->
                     Nodes = ered_lib:slotmap_all_nodes(NewMap),
                     MasterNodes = new_set(ered_lib:slotmap_master_nodes(NewMap)),
 
-                    %% remove nodes if they are not in the new map or initial.
-                    Remove = maps:keys(lists:foldl(fun maps:without/2,
-                                                   State#st.nodes,
-                                                   [State#st.initial_nodes, Nodes])),
+                    %% Remove nodes if they are not in the new map.
+                    Remove = maps:keys(maps:without(Nodes, State#st.nodes)),
 
                     %% Deactivate the clients, so they can fail queued and new
                     %% commands immediately.

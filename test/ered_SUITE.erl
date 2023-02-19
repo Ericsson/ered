@@ -62,7 +62,7 @@ wait_for_consistent_cluster() ->
     fun Loop(N) ->
             AllNodes = [fun(Port) ->
                                 {ok,Pid} = ered_client:start_link("127.0.0.1", Port, []),
-                                SlotMap = cmd_log("redis-cli -p " ++ integer_to_list(Port) ++ " CLUSTER SLOTS"),
+                                SlotMap = os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " CLUSTER SLOTS"),
                                 ered_client:stop(Pid),
                                 SlotMap
                         end(P) || P <- ?PORTS],
@@ -146,14 +146,11 @@ t_hard_failover(_) ->
     ct:pal("~p\n", [ered:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>])]),
     ct:pal(os:cmd("docker stop " ++ Pod)),
 
-    ?MSG(#{msg_type := socket_closed, addr := {localhost, Port}, reason := {recv_exit, closed}}),
     ?MSG(#{msg_type := socket_closed, addr := {"127.0.0.1", Port}, reason := {recv_exit, closed}}),
 
     ?MSG(#{msg_type := cluster_not_ok, reason := master_down}),
-    ?MSG(#{msg_type := connect_error, addr := {localhost, Port}, reason := econnrefused}),
     ?MSG(#{msg_type := connect_error, addr := {"127.0.0.1", Port}, reason := econnrefused}),
 
-    ?MSG(#{msg_type := node_down_timeout, addr := {localhost, Port}}, 2500),
     ?MSG(#{msg_type := node_down_timeout, addr := {"127.0.0.1", Port}}, 2500),
 
     ?MSG(#{msg_type := slot_map_updated}, 5000),
@@ -164,7 +161,6 @@ t_hard_failover(_) ->
     ct:pal(os:cmd("docker start " ++ Pod)),
 
     %% node back: first the initial add reconnects
-    ?MSG(#{msg_type := connected, addr := {localhost, Port}}, 10000),
     ?MSG(#{msg_type := connected, addr := {"127.0.0.1", Port}, master := false}, 10000),
 
     %% new slotmap when old master comes up as replica
@@ -288,6 +284,7 @@ t_init_timeout(_) ->
 
     ?MSG(#{msg_type := slot_map_updated}),
 
+    ?MSG(#{msg_type := node_deactivated, addr := {localhost, 30001}}),
     ?MSG(#{msg_type := connected, addr := {"127.0.0.1", 30001}}),
     ?MSG(#{msg_type := connected, addr := {"127.0.0.1", 30002}}),
     ?MSG(#{msg_type := connected, addr := {"127.0.0.1", 30003}}),
@@ -410,10 +407,8 @@ t_kill_client(_) ->
     %% KILL will close the TCP connection to the redis client
     ct:pal("~p\n",[os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " CLIENT KILL TYPE NORMAL")]),
     #{addr := {_, Port}} = msg(msg_type, socket_closed),
-    #{addr := {_, Port}} = msg(msg_type, socket_closed),
 
     %% connection reestablished
-    #{addr := {_, Port}} = msg(msg_type, connected),
     #{addr := {_, Port}} = msg(msg_type, connected),
     no_more_msgs().
 
@@ -606,19 +601,14 @@ move_key(SourcePort, DestPort, Key) ->
 start_cluster() ->
     start_cluster([]).
 start_cluster(Opts) ->
-    Ports = [30001, 30002, 30003, 30004, 30005, 30006],
-    InitialNodes = [{localhost, Port} || Port <- Ports],
+    [Port1, Port2 | PortsRest] = Ports = ?PORTS,
+    InitialNodes = [{"127.0.0.1", Port} || Port <- [Port1, Port2]],
 
     wait_for_consistent_cluster(),
     {ok, P} = ered:start_link(InitialNodes, [{info_pid, [self()]}] ++ Opts),
 
-    ?MSG(#{msg_type := connected, addr := {localhost, 30001}}),
-    ?MSG(#{msg_type := connected, addr := {localhost, 30002}}),
-    ?MSG(#{msg_type := connected, addr := {localhost, 30003}}),
-    ?MSG(#{msg_type := connected, addr := {localhost, 30004}}),
-    ?MSG(#{msg_type := connected, addr := {localhost, 30005}}),
-    ?MSG(#{msg_type := connected, addr := {localhost, 30006}}),
-
+    ConnectedInit = [#{msg_type := connected} = msg(addr, {"127.0.0.1", Port})
+                     || Port <- [Port1, Port2]],
 
     #{slot_map := SlotMap} = msg(msg_type, slot_map_updated, 1000),
 
@@ -627,9 +617,10 @@ start_cluster(Opts) ->
                                       [{Port, Id} || [_Addr, Port, Id |_]<- Nodes]
                               end, SlotMap)),
 
-    R = [#{msg_type := connected} = msg(addr, {"127.0.0.1", Port}) || Port <- Ports],
+    ConnectedRest = [#{msg_type := connected} = msg(addr, {"127.0.0.1", Port})
+                     || Port <- PortsRest],
 
-    ClusterIds = [Id || #{cluster_id := Id} <- R],
+    ClusterIds = [Id || #{cluster_id := Id} <- ConnectedInit ++ ConnectedRest],
     ClusterIds = [maps:get(Port, IdMap) || Port <- Ports],
 
     ?MSG(#{msg_type := cluster_ok}),
