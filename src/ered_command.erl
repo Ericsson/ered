@@ -3,7 +3,8 @@
 %% Command formatting and related functions.
 
 -export([convert_to/1,
-         get_count_and_data/1,
+         get_data/1,
+         get_response_class/1,
          check_result/1,
          add_asking/2,
          fix_ask_reply/2]).
@@ -11,12 +12,13 @@
 -export_type([command/0,
               redis_command/0,
               raw_command/0,
-              raw_command_pipeline/0]).
+              raw_command_pipeline/0,
+              response_class/0]).
 %%%===================================================================
 %%% Definitions
 %%%===================================================================
 
-%% The difference between a pipeline with N 1 and a with 'single'
+%% The difference between a pipeline with length 1 and a with 'single'
 %% command is that the pipeline will return the result in a list. It
 %% would be nice to skip the 'single' and treat it as a pipeline with
 %% N 1 and just unpack it from the list in the calling process. The
@@ -24,14 +26,15 @@
 %% async. It could be handled by wrapping the callback fun in another
 %% fun that unpacks it. Not sure what is worse..
 -type redis_command() ::
-        {redis_command, single, binary()} | %% single command
-        {redis_command, non_neg_integer(), [iolist()]}. %% pipeline command
+        {redis_command, single, binary()} |
+        {redis_command, pipeline, [binary()]}.
 
 
 -type raw_command() :: [binary()].
 -type raw_command_pipeline() :: [raw_command()].
 -type command() :: redis_command() | raw_command() | raw_command_pipeline().
 -type ok_result() :: {ok, ered_parser:parse_result()}.
+-type response_class() :: {binary(), non_neg_integer()} | normal.
 
 %%%===================================================================
 %%% API
@@ -56,7 +59,7 @@ convert_to([]) ->
 
 convert_to(RawCommands = [E|_]) when is_list(E) ->
     Commands = [command_to_bin(RawCommand) || RawCommand <- RawCommands],
-    {redis_command, length(RawCommands), Commands};
+    {redis_command, pipeline, Commands};
 
 convert_to(RawCommand) ->
     Command = command_to_bin(RawCommand),
@@ -72,11 +75,74 @@ command_to_bin(RawCommand) ->
     iolist_to_binary(["*", Len, "\r\n", Elements]).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec get_count_and_data(redis_command()) ->
-          {non_neg_integer(), [iolist()]} | {single, binary}.
+-spec get_data(redis_command()) -> binary() | [binary()].
+%%
+%% Returns the command binary data to send to the socket.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-get_count_and_data({redis_command, Count, Data}) ->
-    {Count, Data}.
+get_data({redis_command, _, Data}) ->
+    Data.
+
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec get_response_class(redis_command()) ->
+          response_class() | [response_class()].
+%%
+%% Returns a classification of the command(s) which is used for
+%% mapping responses to the commands. Special handling is needed for
+%% some pubsub commands.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+get_response_class({redis_command, single, Data}) ->
+    resp_class(Data);
+get_response_class({redis_command, pipeline, Data}) ->
+    lists:map(fun resp_class/1, Data).
+
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec resp_class(binary()) -> response_class().
+%%
+%% Given a RESP-formatted command, returns a classification which can
+%% be used to interpret the response from Redis, particularily for
+%% pubsub commands that don't return anything but expect certain push
+%% messages to indicate success. The command must be in lowercase for
+%% this to work.
+%%
+%% Returns, if the command is [*][un]subscribe, a tuple {pubsub,
+%% CommandName, NumChannels}. Otherwise, 'normal' is returned.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+%% Single digit argc.
+resp_class(<<"*", N, "\r\n$9\r\nsubscribe\r\n", _/binary>>) ->
+    {<<"subscribe">>, N - $0 - 1};
+resp_class(<<"*", N, "\r\n$10\r\n", X, "subscribe\r\n", _/binary>>)
+  when X >= $a; X =< $z ->
+    {<<X, "subscribe">>, N - $0 - 1};
+resp_class(<<"*", N, "\r\n$11\r\nunsubscribe\r\n", _/binary>>) ->
+    {<<"unsubscribe">>, N - $0 - 1};
+resp_class(<<"*", N, "\r\n$12\r\n", X, "unsubscribe\r\n", _/binary>>)
+  when X >= $a; X =< $z ->
+    {<<X, "unsubscribe">>, N - $0 - 1};
+%% Two-digit argc.
+resp_class(<<"*", M, N, "\r\n$9\r\nsubscribe\r\n", _/binary>>) ->
+    {<<"subscribe">>, (M - $0) * 10 + N - $0 - 1};
+resp_class(<<"*", M, N, "\r\n$10\r\n", X, "subscribe\r\n", _/binary>>)
+  when X >= $a; X =< $z ->
+    {<<X, "subscribe">>, (M - $0) * 10 + N - $0 - 1};
+resp_class(<<"*", M, N, "\r\n$11\r\nunsubscribe\r\n", _/binary>>) ->
+    {<<"unsubscribe">>, (M - $0) * 10 + N - $0 - 1};
+resp_class(<<"*", M, N, "\r\n$12\r\n", X, "unsubscribe\r\n", _/binary>>)
+  when X >= $a; X =< $z ->
+    {<<X, "unsubscribe">>, (M - $0) * 10 + N - $0 - 1};
+%% Three-digit argc.
+resp_class(<<"*", L, M, N, "\r\n$9\r\nsubscribe\r\n", _/binary>>) ->
+    {<<"subscribe">>, (L - $0) * 100 + (M - $0) * 10 + N - $0 - 1};
+resp_class(<<"*", L, M, N, "\r\n$10\r\n", X, "subscribe\r\n", _/binary>>)
+  when X >= $a; X =< $z ->
+    {<<X, "subscribe">>, (L - $0) * 100 + (M - $0) * 10 + N - $0 - 1};
+resp_class(<<"*", L, M, N, "\r\n$11\r\nunsubscribe\r\n", _/binary>>) ->
+    {<<"unsubscribe">>, (L - $0) * 100 + (M - $0) * 10 + N - $0 - 1};
+resp_class(<<"*", L, M, N, "\r\n$12\r\n", X, "unsubscribe\r\n", _/binary>>)
+  when X >= $a; X =< $z ->
+    {<<X, "unsubscribe">>, (L - $0) * 100 + (M - $0) * 10 + N - $0 - 1};
+%% Not a subscribe command.
+resp_class(_) ->
+    normal.
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec check_result(ok_result() | any()) ->
@@ -125,21 +191,20 @@ parse_host_and_port(Bin) ->
 %% to filter out what commands to keep.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 add_asking(_, {redis_command, single, Command}) ->
-    {redis_command, 2, [ <<"ASKING\r\n">>, Command]};
+    {redis_command, pipeline, [[<<"ASKING\r\n">>], Command]};
 
-add_asking({ok, OldReplies}, {redis_command, _N, Commands}) ->
+add_asking({ok, OldReplies}, {redis_command, pipeline, Commands}) ->
     %% Extract only the commands with ASK redirection. Even if all commands go to
     %% the same slot it does not have to be the same key. When using hash tags
     %% for instance.
     AskCommands = add_asking_pipeline(OldReplies, Commands),
     %% ASK commands + ASKING
-    N = length(AskCommands) * 2,
-    {redis_command, N, AskCommands}.
+    {redis_command, pipeline, AskCommands}.
 
 add_asking_pipeline([], _) ->
     [];
 add_asking_pipeline([{error, <<"ASK ", _/binary>>} |Replies], [Command |Commands]) ->
-    [[ <<"ASKING\r\n">>, Command] | add_asking_pipeline(Replies, Commands)];
+    [[<<"ASKING\r\n">>], Command | add_asking_pipeline(Replies, Commands)];
 add_asking_pipeline([_ |Replies], [_ |Commands]) ->
     add_asking_pipeline(Replies, Commands).
 

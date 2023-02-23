@@ -15,6 +15,7 @@ all() ->
      t_blackhole,
      t_init_timeout,
      t_split_data,
+     t_subscribe,
      t_queue_full,
      t_kill_client,
      t_new_cluster_master,
@@ -371,6 +372,50 @@ t_split_data(_) ->
     {ok, Data} = ered:command(R, [<<"GET">>, <<"key1">>], <<"key1">>),
     ok.
 
+
+t_subscribe(_) ->
+    TestPid = self(),
+    PushCb = fun(Push) -> TestPid ! {push, Push} end,
+    Opts = [{client_opts, [{connection_opts, [{push_cb, PushCb}]}]}],
+    R = start_cluster(Opts),
+
+    %% Error response
+    {ok, {error, <<"ERR wrong number of arguments", _/binary>>}} =
+        ered:command(R, [<<"subscribe">>], <<"k">>),
+
+    %% Subscribe multiple channels.
+    {ok, undefined} = ered:command(R, [<<"subscribe">>, <<"ch1">>, <<"ch2">>, <<"ch3">>, <<"ch4">>], <<"k">>),
+    {ok, <<"PONG">>} = ered:command(R, [<<"ping">>], <<"k">>),
+    ?MSG({push, [<<"subscribe">>, <<"ch1">>, 1]}),
+    ?MSG({push, [<<"subscribe">>, <<"ch2">>, 2]}),
+    ?MSG({push, [<<"subscribe">>, <<"ch3">>, 3]}),
+    ?MSG({push, [<<"subscribe">>, <<"ch4">>, 4]}),
+
+    %% Publish to the same as where we're subscribed.
+    {ok, 1} = ered:command(R, [<<"publish">>, <<"ch2">>, <<"hello">>], <<"k">>),
+    ?MSG({push, [<<"message">>, <<"ch2">>, <<"hello">>]}),
+
+    %% Publish to a different node; not to the one where we're subscribed.
+    {ok, 0} = ered:command(R, [<<"publish">>, <<"ch2">>, <<"world">>], <<"x">>),
+    ?MSG({push, [<<"message">>, <<"ch2">>, <<"world">>]}),
+
+    %% Unsubscribe some.
+    {ok, undefined} = ered:command(R, [<<"unsubscribe">>, <<"ch2">>, <<"ch1">>], <<"k">>),
+    ?MSG({push, [<<"unsubscribe">>, _Ch1, 3]}),
+    ?MSG({push, [<<"unsubscribe">>, _Ch2, 2]}),
+
+    %% Unsubscribe all.
+    {ok, undefined} = ered:command(R, [<<"unsubscribe">>], <<"k">>),
+    ?MSG({push, [<<"unsubscribe">>, _Ch3, 1]}),
+    ?MSG({push, [<<"unsubscribe">>, _Ch4, 0]}),
+
+    %% Sharded pubsub in Redis 7+. May return a MOVED redirect, but here it is CROSSSLOT.
+    {ok, {error, Reason}} = ered:command(R, [<<"ssubscribe">>, <<"a">>, <<"b">>], <<"a">>),
+    case Reason of
+        <<"CROSSSLOT">> -> ok;                    % Redis 7+
+        <<"ERR unknown command", _/binary>> -> ok % Redis 6
+    end,
+    no_more_msgs().
 
 
 t_queue_full(_) ->

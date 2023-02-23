@@ -51,13 +51,18 @@
 -type result() :: ered_parser:parse_result().
 -type push_cb() :: fun((result()) -> any()).
 -type wait_info() ::
-        {N :: non_neg_integer() | single,
+        {ered_command:response_class() | [ered_command:response_class()],
          pid(),
          Ref :: any(),
          Acc :: [result()]}. % Acc used to store partial pipeline results
 -type host() :: inet:socket_address() | inet:hostname().
 -type connect_result() :: {ok, connection_ref()} | {error, timeout | inet:posix()}.
 -type connection_ref() :: pid().
+
+%% Commands like SUBSCRIBE and UNSUBSCRIBE don't return anything, so we use this
+%% return value.
+-define(pubsub_reply, undefined).
+
 %%%===================================================================
 %%% API
 %%%===================================================================
@@ -216,31 +221,84 @@ read_socket(BytesNeeded, ParserState, State) ->
             throw(Reason)
     end.
 
-handle_result({push, Value = [Type|_]}, ParserState, State)
-  when Type == <<"subscribe">>; Type == <<"psubscribe">>; Type == <<"unsubscribe">>; Type == <<"punsubscribe">> ->
-    %% Pub/sub in resp3 is a bit quirky. The push is supposed to be out of bound data not connected to any request
-    %% but for subscribe and unsubscribe requests the reply will come as a push. The reply for these commands
-    %% need to be handled as a regular reply otherwise things get out of sync. This was tested on Redis 6.0.8.
-    handle_result(Value, ParserState, State);
-handle_result({push, Value}, ParserState, State) ->
+handle_result({push, Value = [Type|_]}, ParserState, State) ->
+    %% Pub/sub in RESP3 is a bit quirky. The push is supposed to be out of bound
+    %% data not connected to any request but for subscribe and unsubscribe
+    %% requests, a successful command is signalled as one or more push messages.
     PushCB = State#recv_st.push_cb,
     PushCB(Value),
-    {ered_parser:next(ParserState), State};
+    State1 = case is_subscribe_push(Type) of
+                 true ->
+                     ct:pal("Subscribe push: ~p", [Value]),
+                     handle_subscribe_push(Value, State);
+                 false ->
+                     State
+             end,
+    {ered_parser:next(ParserState), State1};
 handle_result(Value, ParserState, State) ->
-    {{N, Pid, Ref, Acc}, State1} = pop_waiting(State),
-    %% Check how many replies expected
-    case N of
-        single ->
+    {{RespClass, Pid, Ref, Acc}, State1} = pop_waiting(State),
+    %% Check how many replies expected (list = pipeline)
+    case RespClass of
+        Single when not is_list(Single) ->
             Pid ! {Ref, Value},
             {ered_parser:next(ParserState), State1};
-        1 ->
+        [_] ->
             %% Last one, send the reply
             Pid ! {Ref, lists:reverse([Value | Acc])},
             {ered_parser:next(ParserState), State1};
-        _ ->
+        [_ | RespClasses] ->
             %% More left, save the reply and keep going
-            State2 = push_waiting({N-1, Pid, Ref, [Value | Acc]}, State1),
+            State2 = push_waiting({RespClasses, Pid, Ref, [Value | Acc]}, State1),
             {ered_parser:next(ParserState), State2}
+    end.
+
+is_subscribe_push(<<"subscribe">>) ->
+    true;
+is_subscribe_push(<<X, "subscribe">>) when X >= $a, X =< $z ->
+    true;
+is_subscribe_push(<<"unsubscribe">>) ->
+    true;
+is_subscribe_push(<<X, "unsubscribe">>) when X >= $a, X =< $z ->
+    true;
+is_subscribe_push(_) ->
+    false.
+
+handle_subscribe_push(PushMessage, State) ->
+    case try_pop_waiting(State) of
+        {PoppedWaiting, State1} ->
+            ct:pal("When push came ~p, popped waiting ~p", [PushMessage, PoppedWaiting]),
+            handle_subscribed_popped_waiting(PushMessage, PoppedWaiting, State1);
+        none ->
+            %% No commands pending.
+            ct:pal("No commands pending when push came: ~p", [PushMessage]),
+            State
+    end.
+
+handle_subscribed_popped_waiting(Push, Waiting = {ExpectClass, Pid, Ref, Acc}, State) ->
+    case {ExpectClass, Push} of
+        {{Type, M}, [Type, _, N]}               % simple command
+          when M =:= 0, N =:= 0;                % unsubscribed from all channels
+               M =:= 1 ->                       % or subscribed to all channels
+            Pid ! {Ref, ?pubsub_reply},
+            State;
+        {{Type, M}, [Type, _, _]}               % simple command
+          when M > 1 ->                         % not yet subscribed all channels
+            push_waiting({{Type, M - 1}, Pid, Ref, Acc}, State);
+        {[{Type, M}], [Type, _, N]}             % last command in pipeline
+          when M =:= 0, N =:= 0;                % unsubscribed from all channels
+               M =:= 1 ->                       % or subscribed to all channels
+            Pid ! {Ref, lists:reverse([?pubsub_reply | Acc])},
+            State;
+        {[{Type, M} | Classes], [Type, _, N]}   % pipeline, not the last command
+          when M =:= 0, N =:= 0;                % unsubscribed from all channels
+               M =:= 1 ->                       % or subscribed to all channels
+            push_waiting({Classes, Pid, Ref, [?pubsub_reply | Acc]}, State);
+        {[{Type, M} | Classes], [Type, _, _]}   % pipeline
+          when M > 1 ->                         % not yet subscribed all channels
+            push_waiting({[{Type, M - 1} | Classes], Pid, Ref, Acc}, State);
+        _Otherwise ->
+            %% Not waiting for this particular push message.
+            push_waiting(Waiting, State)
     end.
 
 get_timeout(State) ->
@@ -259,6 +317,14 @@ pop_waiting(State) ->
     [WaitInfo | Rest] = State1#recv_st.waiting,
     {WaitInfo, State1#recv_st{waiting = Rest}}.
 
+try_pop_waiting(State) ->
+    State1 = update_waiting(0, State),
+    case State1#recv_st.waiting of
+        [WaitInfo | Rest] ->
+            {WaitInfo, State1#recv_st{waiting = Rest}};
+        [] ->
+            none
+    end.
 
 push_waiting(WaitInfo,State) ->
     State#recv_st{waiting = [WaitInfo | State#recv_st.waiting]}.
@@ -314,8 +380,9 @@ receive_data(N, Time, Acc) ->
                 {recv_exit, Reason} ->
                     {recv_exit, Reason};
                 {send, Pid, Ref, Commands} ->
-                    {Count, Data} = ered_command:get_count_and_data(Commands),
-                    RefInfo = {Count, Pid, Ref, []},
+                    Data = ered_command:get_data(Commands),
+                    Class = ered_command:get_response_class(Commands),
+                    RefInfo = {Class, Pid, Ref, []},
                     Acc1 = [{RefInfo, Data} | Acc],
                     receive_data(N, 0, Acc1)
             end
