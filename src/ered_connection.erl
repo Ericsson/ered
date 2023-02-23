@@ -229,7 +229,6 @@ handle_result({push, Value = [Type|_]}, ParserState, State) ->
     PushCB(Value),
     State1 = case is_subscribe_push(Type) of
                  true ->
-                     ct:pal("Subscribe push: ~p", [Value]),
                      handle_subscribe_push(Value, State);
                  false ->
                      State
@@ -266,11 +265,9 @@ is_subscribe_push(_) ->
 handle_subscribe_push(PushMessage, State) ->
     case try_pop_waiting(State) of
         {PoppedWaiting, State1} ->
-            ct:pal("When push came ~p, popped waiting ~p", [PushMessage, PoppedWaiting]),
             handle_subscribed_popped_waiting(PushMessage, PoppedWaiting, State1);
         none ->
             %% No commands pending.
-            ct:pal("No commands pending when push came: ~p", [PushMessage]),
             State
     end.
 
