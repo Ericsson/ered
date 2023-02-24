@@ -99,50 +99,53 @@ get_response_class({redis_command, pipeline, Data}) ->
 -spec resp_class(binary()) -> response_class().
 %%
 %% Given a RESP-formatted command, returns a classification which can
-%% be used to interpret the response from Redis, particularily for
+%% be used to interpret the response(s) from Redis, particularily for
 %% pubsub commands that don't return anything but expect certain push
-%% messages to indicate success. The command must be in lowercase for
-%% this to work.
+%% messages to indicate success.
 %%
-%% Returns, if the command is [*][un]subscribe, a tuple {pubsub,
-%% CommandName, NumChannels}. Otherwise, 'normal' is returned.
+%% If the command name ends in "subscribe", returns a tuple
+%% {CommandName, NumChannels}. Returns 'normal' otherwise.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-%% Single digit argc.
-resp_class(<<"*", N, "\r\n$9\r\nsubscribe\r\n", _/binary>>) ->
-    {<<"subscribe">>, N - $0 - 1};
-resp_class(<<"*", N, "\r\n$10\r\n", X, "subscribe\r\n", _/binary>>)
-  when X >= $a; X =< $z ->
-    {<<X, "subscribe">>, N - $0 - 1};
-resp_class(<<"*", N, "\r\n$11\r\nunsubscribe\r\n", _/binary>>) ->
-    {<<"unsubscribe">>, N - $0 - 1};
-resp_class(<<"*", N, "\r\n$12\r\n", X, "unsubscribe\r\n", _/binary>>)
-  when X >= $a; X =< $z ->
-    {<<X, "unsubscribe">>, N - $0 - 1};
-%% Two-digit argc.
-resp_class(<<"*", M, N, "\r\n$9\r\nsubscribe\r\n", _/binary>>) ->
-    {<<"subscribe">>, (M - $0) * 10 + N - $0 - 1};
-resp_class(<<"*", M, N, "\r\n$10\r\n", X, "subscribe\r\n", _/binary>>)
-  when X >= $a; X =< $z ->
-    {<<X, "subscribe">>, (M - $0) * 10 + N - $0 - 1};
-resp_class(<<"*", M, N, "\r\n$11\r\nunsubscribe\r\n", _/binary>>) ->
-    {<<"unsubscribe">>, (M - $0) * 10 + N - $0 - 1};
-resp_class(<<"*", M, N, "\r\n$12\r\n", X, "unsubscribe\r\n", _/binary>>)
-  when X >= $a; X =< $z ->
-    {<<X, "unsubscribe">>, (M - $0) * 10 + N - $0 - 1};
-%% Three-digit argc.
-resp_class(<<"*", L, M, N, "\r\n$9\r\nsubscribe\r\n", _/binary>>) ->
-    {<<"subscribe">>, (L - $0) * 100 + (M - $0) * 10 + N - $0 - 1};
-resp_class(<<"*", L, M, N, "\r\n$10\r\n", X, "subscribe\r\n", _/binary>>)
-  when X >= $a; X =< $z ->
-    {<<X, "subscribe">>, (L - $0) * 100 + (M - $0) * 10 + N - $0 - 1};
-resp_class(<<"*", L, M, N, "\r\n$11\r\nunsubscribe\r\n", _/binary>>) ->
-    {<<"unsubscribe">>, (L - $0) * 100 + (M - $0) * 10 + N - $0 - 1};
-resp_class(<<"*", L, M, N, "\r\n$12\r\n", X, "unsubscribe\r\n", _/binary>>)
-  when X >= $a; X =< $z ->
-    {<<X, "unsubscribe">>, (L - $0) * 100 + (M - $0) * 10 + N - $0 - 1};
-%% Not a subscribe command.
+resp_class(<<"*", _, "\r\n$", X, Y, "\r\n", _/binary>>)
+  when Y =:= $\r, X =/= $9;                     % Shorter than "subscribe"
+       Y =/= $\r, X > $1 orelse Y > $2 ->       % Longer than "punsubscribe"
+    normal;                                     % Quick path for most commands.
+resp_class(<<"*", N, "\r\n$9\r\n", _/binary>> = Subj) ->
+    resp_class_helper(Subj, 8, 9, N - $0);
+resp_class(<<"*", N, "\r\n$1", X, "\r\n", _/binary>> = Subj)
+  when X >= $0, X =< $2, N > 1 ->
+    resp_class_helper(Subj, 9, 10 + X - $0, N - $0);
+resp_class(<<"*", M, N, "\r\n$9\r\n", _/binary>> = Subj) ->
+    resp_class_helper(Subj, 9, 9, (M - $0) * 10 + N - $0);
+resp_class(<<"*", M, N, "\r\n$1", X, "\r\n", _/binary>> = Subj)
+  when X >= $0, X =< $2->
+    resp_class_helper(Subj, 10, 10 + X - $0, (M - $0) * 10 + N - $0);
+resp_class(<<"*", L, M, N, "\r\n$9\r\n", _/binary>> = Subj) ->
+    resp_class_helper(Subj, 10, 9, (L - $0) * 100 + (M - $0) * 10 + N - $0);
+resp_class(<<"*", L, M, N, "\r\n$1", X, "\r\n", _/binary>> = Subj)
+  when X >= $0, X =< $2->
+    resp_class_helper(Subj, 11, 10 + X - $0, (L - $0) * 100 + (M - $0) * 10 + N - $0);
 resp_class(_) ->
     normal.
+
+%% Returns response class when we know that the command starts at Offset within
+%% Subject and is of Length 9-12 chars.
+resp_class_helper(Subject, Offset, Length, Argc) ->
+    case binary:at(Subject, Offset + Length - 2) of
+        B when B =:= $b; B =:= $B ->
+            %% The B in SUBSCRIBE is at the right position (the penultimate
+            %% letter). This check eliminates all regular commands of length
+            %% 9-12 except the ones that end with "subscribe". Now do the slow
+            %% case-insensitive check to be sure.
+            case string:lowercase(binary:part(Subject, Offset, Length)) of
+                <<_:(Length - 9)/binary, "subscribe">> = LowercaseCmd ->
+                    {LowercaseCmd, Argc - 1};
+                _ ->
+                    normal
+            end;
+        _ ->
+            normal
+    end.
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec check_result(ok_result() | any()) ->

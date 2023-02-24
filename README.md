@@ -387,12 +387,16 @@ Pub/sub
 -------
 
 Ered supports pup/sub, including sharded pub/sub, when RESP3 is used. Pushed
-messages are delivered the push callback, so the connection option `push_cb`
+messages are delivered to the push callback, so the connection option `push_cb`
 needs to be provided. See [Connection options](#connection-options).
 
-**Important:** The commands SUBSCRIBE, UNSUBSCRIBE, PSUBSCRIBE, PUNSUBSCRIBE,
-SSUBSCRIBE and SUNSUBSCRIBE must be given in *lowercase* (e.g. "subscribe"),
-otherwise ered gets confused and out of sync. On success these commands return
-`undefined` and one message for each channel is delivered to the push callback
-as a confirmation that subscribing or unsubscribing to the specified channels
-has succeeded.
+For the commands SUBSCRIBE, UNSUBSCRIBE, PSUBSCRIBE, PUNSUBSCRIBE, SSUBSCRIBE
+and SUNSUBSCRIBE, `ered:command/3,4` returns `{ok, undefined}` on success and
+one message for each channel, pattern or shard channel is delivered to the push
+callback as a confirmation that subscribing or unsubscribing succeeded.
+
+Subscriptions are tied to a connection. If the connection is lost, ered
+reconnects automatically, but ered does not automatically subscribe to the same
+channels again after a reconnect. If you want to subscribe again after
+reconnect, [info messages](#info-messages) can be used to detect when a
+connection goes down or comes up.
