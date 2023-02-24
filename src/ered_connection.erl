@@ -272,27 +272,27 @@ handle_subscribe_push(PushMessage, State) ->
     end.
 
 handle_subscribed_popped_waiting(Push, Waiting = {ExpectClass, Pid, Ref, Acc}, State) ->
-    case {ExpectClass, Push} of
-        {{Type, M}, [Type, _, N]}               % simple command
-          when M =:= 0, N =:= 0;                % unsubscribed from all channels
-               M =:= 1 ->                       % or subscribed to all channels
+    case {ExpectClass, hd(Push)} of
+        {{Type, N}, Type}                       % simple command
+          when N =:= 0;                         % unsubscribing from all channels
+               N =:= 1 ->                       % or subscribed to all channels
             Pid ! {Ref, ?pubsub_reply},
             State;
-        {{Type, M}, [Type, _, _]}               % simple command
-          when M > 1 ->                         % not yet subscribed all channels
-            push_waiting({{Type, M - 1}, Pid, Ref, Acc}, State);
-        {[{Type, M}], [Type, _, N]}             % last command in pipeline
-          when M =:= 0, N =:= 0;                % unsubscribed from all channels
-               M =:= 1 ->                       % or subscribed to all channels
+        {{Type, N}, Type}                       % simple command
+          when N > 1 ->                         % not yet subscribed all channels
+            push_waiting({{Type, N - 1}, Pid, Ref, Acc}, State);
+        {[{Type, N}], Type}                     % last command in pipeline
+          when N =:= 0;                         % unsubscribing from all channels
+               N =:= 1 ->                       % or subscribed to all channels
             Pid ! {Ref, lists:reverse([?pubsub_reply | Acc])},
             State;
-        {[{Type, M} | Classes], [Type, _, N]}   % pipeline, not the last command
-          when M =:= 0, N =:= 0;                % unsubscribed from all channels
-               M =:= 1 ->                       % or subscribed to all channels
+        {[{Type, N} | Classes], Type}           % pipeline, not the last command
+          when N =:= 0;                         % unsubscribing from all channels
+               N =:= 1 ->                       % or subscribed to all channels
             push_waiting({Classes, Pid, Ref, [?pubsub_reply | Acc]}, State);
-        {[{Type, M} | Classes], [Type, _, _]}   % pipeline
-          when M > 1 ->                         % not yet subscribed all channels
-            push_waiting({[{Type, M - 1} | Classes], Pid, Ref, Acc}, State);
+        {[{Type, N} | Classes], Type}           % pipeline
+          when N > 1 ->                         % not yet subscribed all channels
+            push_waiting({[{Type, N - 1} | Classes], Pid, Ref, Acc}, State);
         _Otherwise ->
             %% Not waiting for this particular push message.
             push_waiting(Waiting, State)

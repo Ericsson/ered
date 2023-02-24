@@ -399,15 +399,24 @@ t_subscribe(_) ->
     {ok, 0} = ered:command(R, [<<"publish">>, <<"ch2">>, <<"world">>], <<"x">>),
     ?MSG({push, [<<"message">>, <<"ch2">>, <<"world">>]}),
 
+    %% Psubscribe (channel counter is sum of patterns, channels and
+    %% shard-channels)
+    {ok, undefined} = ered:command(R, [<<"psubscribe">>, <<"ch*">>], <<"k">>),
+    ?MSG({push, [<<"psubscribe">>, <<"ch*">>, 5]}),
+
     %% Unsubscribe some.
     {ok, undefined} = ered:command(R, [<<"unsubscribe">>, <<"ch2">>, <<"ch1">>], <<"k">>),
-    ?MSG({push, [<<"unsubscribe">>, _Ch1, 3]}),
-    ?MSG({push, [<<"unsubscribe">>, _Ch2, 2]}),
+    ?MSG({push, [<<"unsubscribe">>, _Ch1, 4]}),
+    ?MSG({push, [<<"unsubscribe">>, _Ch2, 3]}),
 
     %% Unsubscribe all.
     {ok, undefined} = ered:command(R, [<<"unsubscribe">>], <<"k">>),
-    ?MSG({push, [<<"unsubscribe">>, _Ch3, 1]}),
-    ?MSG({push, [<<"unsubscribe">>, _Ch4, 0]}),
+    ?MSG({push, [<<"unsubscribe">>, _Ch3, 2]}),
+    ?MSG({push, [<<"unsubscribe">>, _Ch4, 1]}),
+
+    %% Punsubscribe all.
+    {ok, undefined} = ered:command(R, [<<"punsubscribe">>], <<"k">>),
+    ?MSG({push, [<<"punsubscribe">>, <<"ch*">>, 0]}),
 
     %% Sharded pubsub in Redis 7+. May return a MOVED redirect, but here it is CROSSSLOT.
     {ok, {error, Reason}} = ered:command(R, [<<"ssubscribe">>, <<"a">>, <<"b">>], <<"a">>),
