@@ -33,7 +33,7 @@ trailing_reply_test() ->
     ?debugFmt("~w", [Conn1]),
     ered_connection:command_async(Conn1, [<<"ping">>], ping1),
     receive sent_big_nasty -> ok end,
-    MalformedCommand = {redis_command, 1, undefined},
+    MalformedCommand = {redis_command, pipeline, [undefined]},
     ered_connection:command_async(Conn1, MalformedCommand, no_ref),
 
     %% make sure the ping is received before the connection is shut down
