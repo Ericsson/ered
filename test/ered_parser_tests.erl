@@ -57,6 +57,10 @@ test_data() ->
      {"streamed map",     <<"%?\r\n+a\r\n:1\r\n+b\r\n:2\r\n.\r\n">>,                    #{<<"a">> => 1, <<"b">> => 2}},
      %% Additional tests
      {"streamed set",     <<"~?\r\n+a\r\n:1\r\n+b\r\n:2\r\n.\r\n">>,                    set_from_list([<<"a">>, 1, <<"b">>, 2])},
+     {"float exponent", <<",1.1e100\r\n">>, 1.1e100},
+     {"float exponent no fractions", <<",4e100\r\n">>, 4.0e100},
+     {"float +exponent no fractions", <<",4e+100\r\n">>, 4.0e100},
+     {"float -exponent no fractions", <<",4e-100\r\n">>, 4.0e-100},
      {"float negative", <<",-1.23\r\n">>, -1.23}
     ].
 

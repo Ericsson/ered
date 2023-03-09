@@ -148,8 +148,14 @@ parse_float(Data) ->
     try binary_to_float(Data)
     catch
         error:badarg ->
-            %% maybe its a float without decimal
-            try float(binary_to_integer(Data))
+            %% maybe its a float without decimal fractions
+            try
+                case binary:split(Data, [<<"E">>, <<"e">>]) of
+                    [Integer, Exponent] ->
+                        binary_to_float(<<Integer/binary, ".0e", Exponent/binary>>);
+                    [Integer] ->
+                        float(binary_to_integer(Integer))
+                end
             catch
                 error:badarg -> throw({parse_error, {not_float, Data}})
             end
