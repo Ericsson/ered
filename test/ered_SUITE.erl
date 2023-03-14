@@ -35,14 +35,16 @@ all() ->
 
 -define(PORTS, [30001, 30002, 30003, 30004, 30005, 30006]).
 
+-define(DEFAULT_REDIS_DOCKER_IMAGE, "redis:6.2.7").
 
 init_per_suite(_Config) ->
-    cmd_log("docker run --name redis-1 -d --net=host --restart=on-failure redis:6.2.7 redis-server --cluster-enabled yes --port 30001 --cluster-node-timeout 2000;"
-            "docker run --name redis-2 -d --net=host --restart=on-failure redis:6.2.7 redis-server --cluster-enabled yes --port 30002 --cluster-node-timeout 2000;"
-            "docker run --name redis-3 -d --net=host --restart=on-failure redis:6.2.7 redis-server --cluster-enabled yes --port 30003 --cluster-node-timeout 2000;"
-            "docker run --name redis-4 -d --net=host --restart=on-failure redis:6.2.7 redis-server --cluster-enabled yes --port 30004 --cluster-node-timeout 2000;"
-            "docker run --name redis-5 -d --net=host --restart=on-failure redis:6.2.7 redis-server --cluster-enabled yes --port 30005 --cluster-node-timeout 2000;"
-            "docker run --name redis-6 -d --net=host --restart=on-failure redis:6.2.7 redis-server --cluster-enabled yes --port 30006 --cluster-node-timeout 2000;"),
+    Image = os:getenv("REDIS_DOCKER_IMAGE", ?DEFAULT_REDIS_DOCKER_IMAGE),
+    cmd_log("docker run --name redis-1 -d --net=host --restart=on-failure "++Image++" redis-server --cluster-enabled yes --port 30001 --cluster-node-timeout 2000;"
+            "docker run --name redis-2 -d --net=host --restart=on-failure "++Image++" redis-server --cluster-enabled yes --port 30002 --cluster-node-timeout 2000;"
+            "docker run --name redis-3 -d --net=host --restart=on-failure "++Image++" redis-server --cluster-enabled yes --port 30003 --cluster-node-timeout 2000;"
+            "docker run --name redis-4 -d --net=host --restart=on-failure "++Image++" redis-server --cluster-enabled yes --port 30004 --cluster-node-timeout 2000;"
+            "docker run --name redis-5 -d --net=host --restart=on-failure "++Image++" redis-server --cluster-enabled yes --port 30005 --cluster-node-timeout 2000;"
+            "docker run --name redis-6 -d --net=host --restart=on-failure "++Image++" redis-server --cluster-enabled yes --port 30006 --cluster-node-timeout 2000;"),
 
     timer:sleep(2000),
     lists:foreach(fun(Port) ->
@@ -51,8 +53,9 @@ init_per_suite(_Config) ->
                           ered_client:stop(Pid)
                   end, ?PORTS),
 
-    cmd_log(" echo 'yes' | docker run --name redis-cluster --net=host -i redis:6.2.7 redis-cli --cluster create 127.0.0.1:30001 127.0.0.1:30002 127.0.0.1:30003 127.0.0.1:30004 127.0.0.1:30005 127.0.0.1:30006 --cluster-replicas 1"),
+    cmd_log(" echo 'yes' | docker run --name redis-cluster --net=host -i "++Image++" redis-cli --cluster create 127.0.0.1:30001 127.0.0.1:30002 127.0.0.1:30003 127.0.0.1:30004 127.0.0.1:30005 127.0.0.1:30006 --cluster-replicas 1"),
 
+    timer:sleep(8000), %% In Redis 7+ the replica distribution takes a while
     wait_for_consistent_cluster(),
     [].
 
@@ -421,7 +424,7 @@ t_subscribe(_) ->
     %% Sharded pubsub in Redis 7+. May return a MOVED redirect, but here it is CROSSSLOT.
     {ok, {error, Reason}} = ered:command(R, [<<"ssubscribe">>, <<"a">>, <<"b">>], <<"a">>),
     case Reason of
-        <<"CROSSSLOT">> -> ok;                    % Redis 7+
+        <<"CROSSSLOT", _/binary>> -> ok;          % Redis 7+
         <<"ERR unknown command", _/binary>> -> ok % Redis 6
     end,
     no_more_msgs().
@@ -471,7 +474,8 @@ t_new_cluster_master(_) ->
                        {close_wait, 100}]),
 
     %% Create new master
-    Pod = cmd_log("docker run --name redis-7 -d --net=host --restart=on-failure redis:6.2.7 redis-server --cluster-enabled yes --port 30007 --cluster-node-timeout 2000"),
+    Image = os:getenv("REDIS_DOCKER_IMAGE", ?DEFAULT_REDIS_DOCKER_IMAGE),
+    Pod = cmd_log("docker run --name redis-7 -d --net=host --restart=on-failure "++Image++" redis-server --cluster-enabled yes --port 30007 --cluster-node-timeout 2000"),
     cmd_until("redis-cli -p 30007 CLUSTER MEET 127.0.0.1 30001", "OK"),
     cmd_until("redis-cli -p 30007 CLUSTER INFO", "cluster_state:ok"),
 
@@ -521,8 +525,12 @@ t_new_cluster_master(_) ->
                           cmd_until("redis-cli -p "++ integer_to_list(Port) ++" CLUSTER FORGET "++ NewNodeId, "OK")
                   end, ?PORTS),
     cmd_log("docker stop " ++ Pod),
-    ?MSG(#{msg_type := socket_closed}),
-    ?MSG(#{msg_type := connect_error}),
+
+    %% The removed node triggers different events depending on Redis version
+    receive
+        #{msg_type := socket_closed} -> ?MSG(#{msg_type := connect_error});    % Redis 6
+        #{msg_type := node_deactivated} -> ?MSG(#{msg_type := client_stopped}) % Redis 7+
+    after 1000 -> error(timeout) end,
 
     %% Verify that the cluster is still ok
     {ok, Data} = ered:command(R, [<<"GET">>, Key], Key),
@@ -583,11 +591,15 @@ t_ask_redirect(_) ->
     %% If attempts are set to an uneven number the final reply will be TRYAGAIN from the IMPORTING node.
     %% Since the ASK redirect does not trigger the TRYAGAIN delay this means the time the client waits before
     %% giving up in a TRYAGAIN scenario is effectively cut in half.
-    {ok,{error,<<"ASK", _/binary>>}} = ered:command(R,
-                                                    [<<"MGET">>,
-                                                     <<"{test_key}1">>,
-                                                     <<"{test_key}2">>],
-                                                    Key),
+    {ok,{error,Reason}} = ered:command(R,
+                                       [<<"MGET">>,
+                                        <<"{test_key}1">>,
+                                        <<"{test_key}2">>],
+                                       Key),
+    case Reason of
+        <<"TRYAGAIN", _/binary>> -> ok;  % Redis 7+
+        <<"ASK", _/binary>> -> ok        % Redis 6
+    end,
 
     %% Try the running the same command again but trigger a MIGRATE to move {test_key}1 to the IMPORTING node.
     %% This should lead to the command returning the data for both keys once it asks the correct node.
