@@ -515,22 +515,25 @@ t_new_cluster_master(_) ->
     timer:sleep(1000),
     {ok, Data} = ered:command(R, [<<"GET">>, Key], Key),
     ?MSG(#{msg_type := slot_map_updated}, 5000),
-    %% From Redis v6.2 the node becomes a replica and is no longer removed from the slot map
-    %% which otherwise would trigger a client_stopped message.
-    %% ?MSG(#{msg_type := client_stopped}),
 
-    %% Forget and stop the added node (required from v6.2)
-    NewNodeId = string:trim(cmd_log("redis-cli -p 30007 CLUSTER MYID")),
-    lists:foreach(fun(Port) ->
-                          cmd_until("redis-cli -p "++ integer_to_list(Port) ++" CLUSTER FORGET "++ NewNodeId, "OK")
-                  end, ?PORTS),
-    cmd_log("docker stop " ++ Pod),
-
-    %% The removed node triggers different events depending on Redis version
+    %% Handling of the now unused node depends on Redis version.
+    %% In Redis 7+ the node is removed from the slot map.
     receive
-        #{msg_type := socket_closed} -> ?MSG(#{msg_type := connect_error});    % Redis 6
         #{msg_type := node_deactivated} -> ?MSG(#{msg_type := client_stopped}) % Redis 7+
-    after 1000 -> error(timeout) end,
+    after 1000 ->
+            %% In Redis v6.2 the node becomes a replica, i.e. it is not removed from the slot map.
+            %% A manual remove is required in v6.2
+            NewNodeId = string:trim(cmd_log("redis-cli -p 30007 CLUSTER MYID")),
+            lists:foreach(fun(Port) ->
+                                  cmd_until("redis-cli -p "++ integer_to_list(Port) ++" CLUSTER FORGET "++ NewNodeId, "OK")
+                          end, ?PORTS),
+            ered:update_slots(R),
+            ?MSG(#{msg_type := slot_map_updated}),
+            ?MSG(#{msg_type := node_deactivated}),
+            ?MSG(#{msg_type := client_stopped})
+    end,
+
+    cmd_log("docker stop " ++ Pod),
 
     %% Verify that the cluster is still ok
     {ok, Data} = ered:command(R, [<<"GET">>, Key], Key),
