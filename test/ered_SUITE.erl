@@ -39,7 +39,11 @@ all() ->
 
 init_per_suite(_Config) ->
     Image = os:getenv("REDIS_DOCKER_IMAGE", ?DEFAULT_REDIS_DOCKER_IMAGE),
-    os:cmd([io_lib:format("docker run --name redis-~p -d --net=host --restart=on-failure ~s redis-server --cluster-enabled yes --port ~p --cluster-node-timeout 2000;", [P, Image, P])
+    os:cmd([io_lib:format("docker run --name redis-~p -d --net=host"
+                          " --restart=on-failure ~s redis-server"
+                          " --cluster-enabled yes --port ~p"
+                          " --cluster-node-timeout 2000;",
+                          [P, Image, P])
             || P <- ?PORTS]),
 
     timer:sleep(2000),
