@@ -39,12 +39,8 @@ all() ->
 
 init_per_suite(_Config) ->
     Image = os:getenv("REDIS_DOCKER_IMAGE", ?DEFAULT_REDIS_DOCKER_IMAGE),
-    cmd_log("docker run --name redis-1 -d --net=host --restart=on-failure "++Image++" redis-server --cluster-enabled yes --port 30001 --cluster-node-timeout 2000;"
-            "docker run --name redis-2 -d --net=host --restart=on-failure "++Image++" redis-server --cluster-enabled yes --port 30002 --cluster-node-timeout 2000;"
-            "docker run --name redis-3 -d --net=host --restart=on-failure "++Image++" redis-server --cluster-enabled yes --port 30003 --cluster-node-timeout 2000;"
-            "docker run --name redis-4 -d --net=host --restart=on-failure "++Image++" redis-server --cluster-enabled yes --port 30004 --cluster-node-timeout 2000;"
-            "docker run --name redis-5 -d --net=host --restart=on-failure "++Image++" redis-server --cluster-enabled yes --port 30005 --cluster-node-timeout 2000;"
-            "docker run --name redis-6 -d --net=host --restart=on-failure "++Image++" redis-server --cluster-enabled yes --port 30006 --cluster-node-timeout 2000;"),
+    os:cmd([io_lib:format("docker run --name redis-~p -d --net=host --restart=on-failure ~s redis-server --cluster-enabled yes --port ~p --cluster-node-timeout 2000;", [P, Image, P])
+            || P <- ?PORTS]),
 
     timer:sleep(2000),
     lists:foreach(fun(Port) ->
@@ -53,7 +49,7 @@ init_per_suite(_Config) ->
                           ered_client:stop(Pid)
                   end, ?PORTS),
 
-    cmd_log(" echo 'yes' | docker run --name redis-cluster --net=host -i "++Image++" redis-cli --cluster create 127.0.0.1:30001 127.0.0.1:30002 127.0.0.1:30003 127.0.0.1:30004 127.0.0.1:30005 127.0.0.1:30006 --cluster-replicas 1"),
+    cmd_log(" echo 'yes' | docker run --name redis-cluster --rm --net=host -i " ++ Image ++ " redis-cli --cluster-replicas 1 --cluster create " ++ [io_lib:format("127.0.0.1:~p ", [P]) || P <- ?PORTS]),
 
     timer:sleep(8000), %% In Redis 7+ the replica distribution takes a while
     wait_for_consistent_cluster(),
@@ -82,14 +78,9 @@ wait_for_consistent_cluster() ->
     end(20).
 
 end_per_suite(_Config) ->
-    os:cmd("docker stop redis-cluster; docker rm redis-cluster;"
-           "docker stop redis-1; docker rm redis-1;"
-           "docker stop redis-2; docker rm redis-2;"
-           "docker stop redis-3; docker rm redis-3;"
-           "docker stop redis-4; docker rm redis-4;"
-           "docker stop redis-5; docker rm redis-5;"
-           "docker stop redis-6; docker rm redis-6;"
-           "docker stop redis-7; docker rm redis-7"). % redis-7 used in t_new_cluster_master
+    %% Stop containers, redis-30007 used in t_new_cluster_master
+    os:cmd([io_lib:format("docker stop redis-~p; docker rm redis-~p;", [P, P])
+            || P <- ?PORTS ++ [30007]]).
 
 
 t_command(_) ->
@@ -475,7 +466,7 @@ t_new_cluster_master(_) ->
 
     %% Create new master
     Image = os:getenv("REDIS_DOCKER_IMAGE", ?DEFAULT_REDIS_DOCKER_IMAGE),
-    Pod = cmd_log("docker run --name redis-7 -d --net=host --restart=on-failure "++Image++" redis-server --cluster-enabled yes --port 30007 --cluster-node-timeout 2000"),
+    Pod = cmd_log("docker run --name redis-30007 -d --net=host --restart=on-failure "++Image++" redis-server --cluster-enabled yes --port 30007 --cluster-node-timeout 2000"),
     cmd_until("redis-cli -p 30007 CLUSTER MEET 127.0.0.1 30001", "OK"),
     cmd_until("redis-cli -p 30007 CLUSTER INFO", "cluster_state:ok"),
 
@@ -776,5 +767,4 @@ get_master_port(R) ->
     Port.
 
 get_pod_name_from_port(Port) ->
-    N = lists:last(integer_to_list(Port)),
-    "redis-" ++ [N].
+    "redis-" ++ integer_to_list(Port).
