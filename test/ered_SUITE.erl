@@ -55,7 +55,6 @@ init_per_suite(_Config) ->
 
     cmd_log(" echo 'yes' | docker run --name redis-cluster --rm --net=host -i " ++ Image ++ " redis-cli --cluster-replicas 1 --cluster create " ++ [io_lib:format("127.0.0.1:~p ", [P]) || P <- ?PORTS]),
 
-    timer:sleep(8000), %% In Redis 7+ the replica distribution takes a while
     wait_for_consistent_cluster(),
     [].
 
@@ -70,8 +69,15 @@ wait_for_consistent_cluster() ->
                                 ered_client:stop(Pid),
                                 SlotMap
                         end(P) || P <- ?PORTS],
+            %% Get the amount of nodes in the first reply. The reply format has improved between
+            %% Redis 6 and 7, but to handle Redis 6 we count each expected port in the reply.
+            NoOfNodes = length([X || X <- [lists:member(integer_to_binary(P),
+                                                        binary:split(list_to_binary(hd(AllNodes)), <<"\n">>, [global]))
+                                           || P <- ?PORTS],
+                                     X =:= true]),
+
             case length(lists:usort(AllNodes)) of
-                1 ->
+                1 when NoOfNodes == length(?PORTS) ->
                     true;
                 _ when N > 0 ->
                     timer:sleep(500),
