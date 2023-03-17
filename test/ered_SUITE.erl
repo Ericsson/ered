@@ -59,30 +59,30 @@ init_per_suite(_Config) ->
     [].
 
 %% Wait until cluster is consistent, i.e all nodes have the same single view
-%% of the slot map. From Redis 6.2 the output of CLUSTER SLOTS is no longer
-%% unordered, but in slot order.
+%% of the slot map and all configured nodes are included in the slot map.
 wait_for_consistent_cluster() ->
     fun Loop(N) ->
             AllNodes = [fun(Port) ->
                                 {ok,Pid} = ered_client:start_link("127.0.0.1", Port, []),
-                                SlotMap = os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " CLUSTER SLOTS"),
+                                {ok, SlotMap} = ered_client:command(Pid, [<<"CLUSTER">>, <<"SLOTS">>]),
                                 ered_client:stop(Pid),
                                 SlotMap
                         end(P) || P <- ?PORTS],
-            %% Get the amount of nodes in the first reply. The reply format has improved between
-            %% Redis 6 and 7, but to handle Redis 6 we count each expected port in the reply.
-            NoOfNodes = length([X || X <- [lists:member(integer_to_binary(P),
-                                                        binary:split(list_to_binary(hd(AllNodes)), <<"\n">>, [global]))
-                                           || P <- ?PORTS],
-                                     X =:= true]),
-
-            case length(lists:usort(AllNodes)) of
-                1 when NoOfNodes == length(?PORTS) ->
-                    true;
-                _ when N > 0 ->
+            case lists:usort(AllNodes) of
+                [Node] ->
+                    Ports = [Port || {_Ip, Port} <- ered_lib:slotmap_all_nodes(Node)],
+                    case Ports =:= ?PORTS of
+                        true -> true;
+                        false when N > 0 ->
+                            timer:sleep(500),
+                            Loop(N-1);
+                        false ->
+                            error({timeout_consistent_cluster, Node, ?PORTS})
+                    end;
+                _NotAllIdentical when N > 0 ->
                     timer:sleep(500),
                     Loop(N-1);
-                _ ->
+                _NotAllIdentical ->
                     error({timeout_consistent_cluster, AllNodes})
             end
     end(20).
