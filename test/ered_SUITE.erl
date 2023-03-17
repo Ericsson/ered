@@ -59,31 +59,29 @@ init_per_suite(_Config) ->
     [].
 
 %% Wait until cluster is consistent, i.e all nodes have the same single view
-%% of the slot map and all configured nodes are included in the slot map.
+%% of the slot map and all cluster nodes are included in the slot map.
 wait_for_consistent_cluster() ->
     fun Loop(N) ->
-            AllNodes = [fun(Port) ->
-                                {ok,Pid} = ered_client:start_link("127.0.0.1", Port, []),
+            SlotMaps = [fun(Port) ->
+                                {ok, Pid} = ered_client:start_link("127.0.0.1", Port, []),
                                 {ok, SlotMap} = ered_client:command(Pid, [<<"CLUSTER">>, <<"SLOTS">>]),
                                 ered_client:stop(Pid),
                                 SlotMap
                         end(P) || P <- ?PORTS],
-            case lists:usort(AllNodes) of
-                [Node] ->
-                    Ports = [Port || {_Ip, Port} <- ered_lib:slotmap_all_nodes(Node)],
-                    case Ports =:= ?PORTS of
-                        true -> true;
-                        false when N > 0 ->
-                            timer:sleep(500),
-                            Loop(N-1);
-                        false ->
-                            error({timeout_consistent_cluster, Node, ?PORTS})
-                    end;
-                _NotAllIdentical when N > 0 ->
+            Consistent = case lists:usort(SlotMaps) of
+                             [SlotMap] ->
+                                 ?PORTS =:= [Port || {_Ip, Port} <- ered_lib:slotmap_all_nodes(SlotMap)];
+                             _NotAllIdentical ->
+                                 false
+                         end,
+            case Consistent of
+                true ->
+                    true;
+                false when N > 0 ->
                     timer:sleep(500),
                     Loop(N-1);
-                _NotAllIdentical ->
-                    error({timeout_consistent_cluster, AllNodes})
+                false ->
+                    error({timeout_consistent_cluster, SlotMaps})
             end
     end(20).
 
