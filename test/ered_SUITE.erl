@@ -526,7 +526,11 @@ t_new_cluster_master(_) ->
             lists:foreach(fun(Port) ->
                                   cmd_until("redis-cli -p "++ integer_to_list(Port) ++" CLUSTER FORGET "++ NewNodeId, "OK")
                           end, ?PORTS),
-            ered:update_slots(R),
+            %% Update slotmap by picking a specific node to avoid using port 30007.
+            %% The node using port 30007 includes itself in the slotmap and dont
+            %% accept CLUSTER FORGET. This avoids intermittent missing messages.
+            ClientPid = maps:get({"127.0.0.1", 30001}, ered:get_addr_to_client_map(R)),
+            ered:update_slots(R, ClientPid),
             ?MSG(#{msg_type := slot_map_updated}),
             ?MSG(#{msg_type := node_deactivated}),
             ?MSG(#{msg_type := client_stopped})
