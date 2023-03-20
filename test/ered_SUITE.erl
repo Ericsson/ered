@@ -35,14 +35,16 @@ all() ->
 
 -define(PORTS, [30001, 30002, 30003, 30004, 30005, 30006]).
 
+-define(DEFAULT_REDIS_DOCKER_IMAGE, "redis:6.2.7").
 
 init_per_suite(_Config) ->
-    cmd_log("docker run --name redis-1 -d --net=host --restart=on-failure redis:6.2.7 redis-server --cluster-enabled yes --port 30001 --cluster-node-timeout 2000;"
-            "docker run --name redis-2 -d --net=host --restart=on-failure redis:6.2.7 redis-server --cluster-enabled yes --port 30002 --cluster-node-timeout 2000;"
-            "docker run --name redis-3 -d --net=host --restart=on-failure redis:6.2.7 redis-server --cluster-enabled yes --port 30003 --cluster-node-timeout 2000;"
-            "docker run --name redis-4 -d --net=host --restart=on-failure redis:6.2.7 redis-server --cluster-enabled yes --port 30004 --cluster-node-timeout 2000;"
-            "docker run --name redis-5 -d --net=host --restart=on-failure redis:6.2.7 redis-server --cluster-enabled yes --port 30005 --cluster-node-timeout 2000;"
-            "docker run --name redis-6 -d --net=host --restart=on-failure redis:6.2.7 redis-server --cluster-enabled yes --port 30006 --cluster-node-timeout 2000;"),
+    Image = os:getenv("REDIS_DOCKER_IMAGE", ?DEFAULT_REDIS_DOCKER_IMAGE),
+    os:cmd([io_lib:format("docker run --name redis-~p -d --net=host"
+                          " --restart=on-failure ~s redis-server"
+                          " --cluster-enabled yes --port ~p"
+                          " --cluster-node-timeout 2000;",
+                          [P, Image, P])
+            || P <- ?PORTS]),
 
     timer:sleep(2000),
     lists:foreach(fun(Port) ->
@@ -51,42 +53,42 @@ init_per_suite(_Config) ->
                           ered_client:stop(Pid)
                   end, ?PORTS),
 
-    cmd_log(" echo 'yes' | docker run --name redis-cluster --net=host -i redis:6.2.7 redis-cli --cluster create 127.0.0.1:30001 127.0.0.1:30002 127.0.0.1:30003 127.0.0.1:30004 127.0.0.1:30005 127.0.0.1:30006 --cluster-replicas 1"),
+    cmd_log(" echo 'yes' | docker run --name redis-cluster --rm --net=host -i " ++ Image ++ " redis-cli --cluster-replicas 1 --cluster create " ++ [io_lib:format("127.0.0.1:~p ", [P]) || P <- ?PORTS]),
 
     wait_for_consistent_cluster(),
     [].
 
 %% Wait until cluster is consistent, i.e all nodes have the same single view
-%% of the slot map. From Redis 6.2 the output of CLUSTER SLOTS is no longer
-%% unordered, but in slot order.
+%% of the slot map and all cluster nodes are included in the slot map.
 wait_for_consistent_cluster() ->
     fun Loop(N) ->
-            AllNodes = [fun(Port) ->
-                                {ok,Pid} = ered_client:start_link("127.0.0.1", Port, []),
-                                SlotMap = os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " CLUSTER SLOTS"),
+            SlotMaps = [fun(Port) ->
+                                {ok, Pid} = ered_client:start_link("127.0.0.1", Port, []),
+                                {ok, SlotMap} = ered_client:command(Pid, [<<"CLUSTER">>, <<"SLOTS">>]),
                                 ered_client:stop(Pid),
                                 SlotMap
                         end(P) || P <- ?PORTS],
-            case length(lists:usort(AllNodes)) of
-                1 ->
+            Consistent = case lists:usort(SlotMaps) of
+                             [SlotMap] ->
+                                 ?PORTS =:= [Port || {_Ip, Port} <- ered_lib:slotmap_all_nodes(SlotMap)];
+                             _NotAllIdentical ->
+                                 false
+                         end,
+            case Consistent of
+                true ->
                     true;
-                _ when N > 0 ->
+                false when N > 0 ->
                     timer:sleep(500),
                     Loop(N-1);
-                _ ->
-                    error({timeout_consistent_cluster, AllNodes})
+                false ->
+                    error({timeout_consistent_cluster, SlotMaps})
             end
     end(20).
 
 end_per_suite(_Config) ->
-    os:cmd("docker stop redis-cluster; docker rm redis-cluster;"
-           "docker stop redis-1; docker rm redis-1;"
-           "docker stop redis-2; docker rm redis-2;"
-           "docker stop redis-3; docker rm redis-3;"
-           "docker stop redis-4; docker rm redis-4;"
-           "docker stop redis-5; docker rm redis-5;"
-           "docker stop redis-6; docker rm redis-6;"
-           "docker stop redis-7; docker rm redis-7"). % redis-7 used in t_new_cluster_master
+    %% Stop containers, redis-30007 used in t_new_cluster_master
+    os:cmd([io_lib:format("docker stop redis-~p; docker rm redis-~p;", [P, P])
+            || P <- ?PORTS ++ [30007]]).
 
 
 t_command(_) ->
@@ -421,7 +423,7 @@ t_subscribe(_) ->
     %% Sharded pubsub in Redis 7+. May return a MOVED redirect, but here it is CROSSSLOT.
     {ok, {error, Reason}} = ered:command(R, [<<"ssubscribe">>, <<"a">>, <<"b">>], <<"a">>),
     case Reason of
-        <<"CROSSSLOT">> -> ok;                    % Redis 7+
+        <<"CROSSSLOT", _/binary>> -> ok;          % Redis 7+
         <<"ERR unknown command", _/binary>> -> ok % Redis 6
     end,
     no_more_msgs().
@@ -471,7 +473,8 @@ t_new_cluster_master(_) ->
                        {close_wait, 100}]),
 
     %% Create new master
-    Pod = cmd_log("docker run --name redis-7 -d --net=host --restart=on-failure redis:6.2.7 redis-server --cluster-enabled yes --port 30007 --cluster-node-timeout 2000"),
+    Image = os:getenv("REDIS_DOCKER_IMAGE", ?DEFAULT_REDIS_DOCKER_IMAGE),
+    Pod = cmd_log("docker run --name redis-30007 -d --net=host --restart=on-failure "++Image++" redis-server --cluster-enabled yes --port 30007 --cluster-node-timeout 2000"),
     cmd_until("redis-cli -p 30007 CLUSTER MEET 127.0.0.1 30001", "OK"),
     cmd_until("redis-cli -p 30007 CLUSTER INFO", "cluster_state:ok"),
 
@@ -511,18 +514,29 @@ t_new_cluster_master(_) ->
     timer:sleep(1000),
     {ok, Data} = ered:command(R, [<<"GET">>, Key], Key),
     ?MSG(#{msg_type := slot_map_updated}, 5000),
-    %% From Redis v6.2 the node becomes a replica and is no longer removed from the slot map
-    %% which otherwise would trigger a client_stopped message.
-    %% ?MSG(#{msg_type := client_stopped}),
 
-    %% Forget and stop the added node (required from v6.2)
-    NewNodeId = string:trim(cmd_log("redis-cli -p 30007 CLUSTER MYID")),
-    lists:foreach(fun(Port) ->
-                          cmd_until("redis-cli -p "++ integer_to_list(Port) ++" CLUSTER FORGET "++ NewNodeId, "OK")
-                  end, ?PORTS),
+    %% Handling of the now unused node depends on Redis version.
+    %% In Redis 7+ the node is removed from the slot map.
+    receive
+        #{msg_type := node_deactivated} -> ?MSG(#{msg_type := client_stopped}) % Redis 7+
+    after 1000 ->
+            %% In Redis v6.2 the node becomes a replica, i.e. it is not removed from the slot map.
+            %% A manual remove is required in v6.2
+            NewNodeId = string:trim(cmd_log("redis-cli -p 30007 CLUSTER MYID")),
+            lists:foreach(fun(Port) ->
+                                  cmd_until("redis-cli -p "++ integer_to_list(Port) ++" CLUSTER FORGET "++ NewNodeId, "OK")
+                          end, ?PORTS),
+            %% Update slotmap by picking a specific node to avoid using port 30007.
+            %% The node using port 30007 includes itself in the slotmap and dont
+            %% accept CLUSTER FORGET. This avoids intermittent missing messages.
+            ClientPid = maps:get({"127.0.0.1", 30001}, ered:get_addr_to_client_map(R)),
+            ered:update_slots(R, ClientPid),
+            ?MSG(#{msg_type := slot_map_updated}),
+            ?MSG(#{msg_type := node_deactivated}),
+            ?MSG(#{msg_type := client_stopped})
+    end,
+
     cmd_log("docker stop " ++ Pod),
-    ?MSG(#{msg_type := socket_closed}),
-    ?MSG(#{msg_type := connect_error}),
 
     %% Verify that the cluster is still ok
     {ok, Data} = ered:command(R, [<<"GET">>, Key], Key),
@@ -583,11 +597,15 @@ t_ask_redirect(_) ->
     %% If attempts are set to an uneven number the final reply will be TRYAGAIN from the IMPORTING node.
     %% Since the ASK redirect does not trigger the TRYAGAIN delay this means the time the client waits before
     %% giving up in a TRYAGAIN scenario is effectively cut in half.
-    {ok,{error,<<"ASK", _/binary>>}} = ered:command(R,
-                                                    [<<"MGET">>,
-                                                     <<"{test_key}1">>,
-                                                     <<"{test_key}2">>],
-                                                    Key),
+    {ok,{error,Reason}} = ered:command(R,
+                                       [<<"MGET">>,
+                                        <<"{test_key}1">>,
+                                        <<"{test_key}2">>],
+                                       Key),
+    case Reason of
+        <<"TRYAGAIN", _/binary>> -> ok;  % Redis 7+
+        <<"ASK", _/binary>> -> ok        % Redis 6
+    end,
 
     %% Try the running the same command again but trigger a MIGRATE to move {test_key}1 to the IMPORTING node.
     %% This should lead to the command returning the data for both keys once it asks the correct node.
@@ -761,5 +779,4 @@ get_master_port(R) ->
     Port.
 
 get_pod_name_from_port(Port) ->
-    N = lists:last(integer_to_list(Port)),
-    "redis-" ++ [N].
+    "redis-" ++ integer_to_list(Port).

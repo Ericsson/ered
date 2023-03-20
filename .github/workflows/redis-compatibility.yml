@@ -1,0 +1,31 @@
+name: Redis compatibility testing
+
+on: [push, pull_request]
+
+jobs:
+  redis:
+    name: Redis ${{ matrix.redis-version }}
+    runs-on: ubuntu-20.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - redis-version: 7.0.9
+          - redis-version: 6.2.11
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install redis-cli required by common tests
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: redis-server
+          version: 1.0
+      - name: Install Erlang/OTP
+        run: |
+          DEB_NAME="esl-erlang_25.2.3-3~ubuntu~focal_amd64.deb"
+          curl -f https://packages.erlang-solutions.com/erlang/debian/pool/$DEB_NAME -o $DEB_NAME
+          sudo dpkg --install $DEB_NAME
+      - name: Build and run common tests
+        env:
+          REDIS_DOCKER_IMAGE: redis:${{ matrix.redis-version }}
+        run: |
+          rebar3 ct
