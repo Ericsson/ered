@@ -16,6 +16,10 @@ run_test_() ->
      {spawn, fun server_buffer_full_node_goes_down_t/0},
      {spawn, fun send_timeout_t/0},
      {spawn, fun fail_hello_t/0},
+     {spawn, fun hello_with_auth_t/0},
+     {spawn, fun hello_with_auth_fail_t/0},
+     {spawn, fun auth_t/0},
+     {spawn, fun auth_fail_t/0},
      {spawn, fun empty_string_host_t/0},
      {spawn, fun bad_host_t/0}
     ].
@@ -257,6 +261,101 @@ fail_hello_t() ->
     {ok,Client} = ered_client:start_link("127.0.0.1", Port, [{info_pid, self()}]),
     {init_error, [<<"NOPROTO unsupported protocol version">>]} = expect_connection_down(Client),
     receive done -> ok end,
+    no_more_msgs().
+
+hello_with_auth_t() ->
+    {ok, ListenSock} = gen_tcp:listen(0, [binary, {active , false}]),
+    {ok, Port} = inet:port(ListenSock),
+    Pid = self(),
+    spawn_link(fun() ->
+                       {ok, Sock} = gen_tcp:accept(ListenSock),
+                       {ok, <<"*5\r\n"
+                              "$5\r\nHELLO\r\n"
+                              "$1\r\n3\r\n"
+                              "$4\r\nAUTH\r\n"
+                              "$3\r\nali\r\n"
+                              "$6\r\nsesame\r\n">>} = gen_tcp:recv(Sock, 0),
+                       ok = gen_tcp:send(Sock, <<"%7\r\n"
+                                                 "$6\r\nserver\r\n"
+                                                 "$5\r\nredis\r\n"
+                                                 "$7\r\nversion\r\n"
+                                                 "$5\r\n6.0.0\r\n"
+                                                 "$5\r\nproto\r\n"
+                                                 ":3\r\n"
+                                                 "$2\r\nid\r\n"
+                                                 ":10\r\n"
+                                                 "$4\r\nmode\r\n"
+                                                 "$10\r\nstandalone\r\n"
+                                                 "$4\r\nrole\r\n"
+                                                 "$6\r\nmaster\r\n"
+                                                 "$7\r\nmodules\r\n"
+                                                 "*0\r\n">>),
+                       Pid ! done
+               end),
+    {ok, _Client} = ered_client:start_link("127.0.0.1", Port, [{info_pid, self()},
+                                                               {auth, {<<"ali">>, <<"sesame">>}}]),
+    receive done -> ok end,
+    no_more_msgs().
+
+hello_with_auth_fail_t() ->
+    {ok, ListenSock} = gen_tcp:listen(0, [binary, {active , false}]),
+    {ok, Port} = inet:port(ListenSock),
+    Pid = self(),
+    spawn_link(fun() ->
+                       {ok, Sock} = gen_tcp:accept(ListenSock),
+                       {ok, <<"*5\r\n"
+                              "$5\r\nHELLO\r\n"
+                              "$1\r\n3\r\n"
+                              "$4\r\nAUTH\r\n"
+                              "$3\r\nali\r\n"
+                              "$6\r\nsesame\r\n">>} = Hello = gen_tcp:recv(Sock, 0),
+                       ok = gen_tcp:send(Sock,
+                                         <<"-WRONGPASS invalid username-password"
+                                           " pair or user is disabled.\r\n">>)
+               end),
+    {ok, Client} = ered_client:start_link("127.0.0.1", Port, [{info_pid, self()},
+                                                              {auth, {<<"ali">>, <<"sesame">>}}]),
+    {init_error, [<<"WRONGPASS", _/binary>>]} = expect_connection_down(Client),
+    no_more_msgs().
+
+auth_t() ->
+    {ok, ListenSock} = gen_tcp:listen(0, [binary, {active , false}]),
+    {ok, Port} = inet:port(ListenSock),
+    Pid = self(),
+    spawn_link(fun() ->
+                       {ok, Sock} = gen_tcp:accept(ListenSock),
+                       {ok, <<"*3\r\n"
+                              "$4\r\nAUTH\r\n"
+                              "$3\r\nali\r\n"
+                              "$6\r\nsesame\r\n">>} = gen_tcp:recv(Sock, 0),
+                       ok = gen_tcp:send(Sock, <<"+OK\r\n">>),
+
+                       Pid ! done
+               end),
+    {ok, _Client} = ered_client:start_link("127.0.0.1", Port, [{info_pid, self()},
+                                                               {resp_version, 2},
+                                                               {auth, {<<"ali">>, <<"sesame">>}}]),
+    receive done -> ok end,
+    no_more_msgs().
+
+auth_fail_t() ->
+    {ok, ListenSock} = gen_tcp:listen(0, [binary, {active , false}]),
+    {ok, Port} = inet:port(ListenSock),
+    Pid = self(),
+    spawn_link(fun() ->
+                       {ok, Sock} = gen_tcp:accept(ListenSock),
+                       {ok, <<"*3\r\n"
+                              "$4\r\nAUTH\r\n"
+                              "$3\r\nali\r\n"
+                              "$6\r\nsesame\r\n">>} = Auth = gen_tcp:recv(Sock, 0),
+                       ok = gen_tcp:send(Sock,
+                                         <<"-WRONGPASS invalid username-password"
+                                           " pair or user is disabled.\r\n">>)
+               end),
+    {ok,Client} = ered_client:start_link("127.0.0.1", Port, [{info_pid, self()},
+                                                             {resp_version, 2},
+                                                             {auth, {<<"ali">>, <<"sesame">>}}]),
+    {init_error, [<<"WRONGPASS", _/binary>>]} = expect_connection_down(Client),
     no_more_msgs().
 
 empty_string_host_t() ->
