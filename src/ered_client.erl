@@ -37,6 +37,7 @@
          connection_opts = [] :: [ered_connection:opt()],
          resp_version = 3 :: 2..3,
          use_cluster_id = false :: boolean(),
+         auth = none :: {binary(), binary()} | none,
          reconnect_wait = 1000 :: non_neg_integer(),
 
          node_down_timeout = 2000 :: non_neg_integer(),
@@ -110,7 +111,9 @@
         {node_down_timeout, non_neg_integer()} |
         %% Set if the CLUSTER ID should be fetched used in info messages.
         %% (not useful if the client is used outside of a cluster)
-        {use_cluster_id, boolean()}.
+        {use_cluster_id, boolean()} |
+        %% Username and password for Redis authentication (AUTH or HELLO).
+        {auth, {binary(), binary()}}.
 
 %%%===================================================================
 %%% API
@@ -195,6 +198,7 @@ init([Host, Port, OptsList]) ->
                 ({resp_version, Val}, S)      -> S#opts{resp_version = Val};
                 ({node_down_timeout, Val}, S) -> S#opts{node_down_timeout = Val};
                 ({use_cluster_id, Val}, S)    -> S#opts{use_cluster_id = Val};
+                ({auth, Auth = {_, _}}, S)    -> S#opts{auth = Auth};
                 (Other, _)                    -> error({badarg, Other})
              end,
              #opts{host = Host, port = Port},
@@ -436,7 +440,16 @@ connect(Pid, Opts) ->
 
 init(MainPid, ConnectionPid, Opts) ->
     Cmd1 =  [[<<"CLUSTER">>, <<"MYID">>] || Opts#opts.use_cluster_id],
-    Cmd2 =  [[<<"HELLO">>, <<"3">>] || Opts#opts.resp_version == 3],
+    Cmd2 = case {Opts#opts.resp_version, Opts#opts.auth} of
+               {3, {Username, Password}} ->
+                   [[<<"HELLO">>, <<"3">>, <<"AUTH">>, Username, Password]];
+               {3, none} ->
+                   [[<<"HELLO">>, <<"3">>]];
+               {2, {Username, Password}} ->
+                   [[<<"AUTH">>, Username, Password]];
+               {2, none} ->
+                   []
+           end,
     case Cmd1 ++ Cmd2 of
         [] ->
             {ok, undefined};

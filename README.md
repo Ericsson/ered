@@ -235,6 +235,11 @@ Options passed to `start_link/2` as the options `{client_opts, [...]}`.
   cluster client and false otherwise. (Not useful if the client is used outside
   of a cluster.)
 
+* `{auth, {Username :: binary(), Password :: binary()}}`
+
+  Username and password for Redis authentication. If a password is configured
+  without a username, use `default` as the username.
+
 ### Connection options
 
 Options passed to `start_link/2` as the options `{client_opts, [{connection_opts, [...]}]}`.
