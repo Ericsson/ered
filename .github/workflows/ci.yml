@@ -34,7 +34,6 @@ jobs:
         include: # See https://www.erlang-solutions.com/downloads/
           - otp-version: 25.0.3
           - otp-version: 24.3.3
-          - otp-version: 23.3.4.5
     steps:
       - uses: actions/checkout@v3
       - name: Install Erlang/OTP
