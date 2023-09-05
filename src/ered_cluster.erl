@@ -231,6 +231,10 @@ handle_info({slot_info, Version, Response}, State) ->
             %% error sent from redis
             ered_info_msg:cluster_slots_error_response(Error, State#st.info_pid),
             {noreply, State};
+        {ok, []} ->
+            %% Empty slotmap. Maybe the node has been CLUSTER RESET.
+            ered_info_msg:cluster_slots_error_response(empty, State#st.info_pid),
+            {noreply, State};
         {ok, ClusterSlotsReply} ->
             NewMap = lists:sort(ClusterSlotsReply),
             case NewMap == State#st.slot_map of
@@ -377,7 +381,8 @@ start_periodic_slot_info_request(PreferredNodes, State) ->
                     Tref = erlang:start_timer(
                              State#st.update_slot_wait,
                              self(),
-                             {time_to_update_slots,PreferredNodes}),
+                             {time_to_update_slots,
+                              lists:delete(Node, PreferredNodes)}),
                     State#st{slot_timer_ref = Tref}
             end;
         _Else ->

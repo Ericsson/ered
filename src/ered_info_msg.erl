@@ -98,9 +98,9 @@ slot_map_updated(ClusterSlotsReply, Version, Pids) ->
 
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec cluster_slots_error_response(binary(), [pid()]) -> ok.
+-spec cluster_slots_error_response(binary() | empty, [pid()]) -> ok.
 %%
-%% Redis returned and error message when trying to fetch the slot map.
+%% Redis returned an error message when trying to fetch the slot map.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 cluster_slots_error_response(Response, Pids) ->
     send_info(#{msg_type => cluster_slots_error_response,
