@@ -3,8 +3,8 @@
 %% Functions used to format and send info messages
 
 -export([connection_status/3,
-         slot_map_updated/3,
-         cluster_slots_error_response/2,
+         slot_map_updated/4,
+         cluster_slots_error_response/3,
          cluster_ok/1,
          cluster_nok/2
         ]).
@@ -44,9 +44,11 @@
 
         #{msg_type := slot_map_updated,
           slot_map := ClusterSlotsReply :: any(),
+          addr := addr(),
           map_version := non_neg_integer()} |
 
         #{msg_type := cluster_slots_error_response,
+          addr := addr(),
           response := RedisReply :: any()} |
 
         #{msg_type := cluster_ok} |
@@ -86,24 +88,26 @@ connection_status(ClientInfo, IsMaster, Pids) ->
               Pids).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec slot_map_updated(ered_lib:slot_map(), non_neg_integer(), [pid()]) -> ok.
+-spec slot_map_updated(ered_lib:slot_map(), non_neg_integer(), addr(), [pid()]) -> ok.
 %%
 %% A new slot map received from Redis, different from the current one.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-slot_map_updated(ClusterSlotsReply, Version, Pids) ->
+slot_map_updated(ClusterSlotsReply, Version, FromAddr, Pids) ->
     send_info(#{msg_type => slot_map_updated,
                 slot_map => ClusterSlotsReply,
+                addr => FromAddr,
                 map_version => Version},
               Pids).
 
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec cluster_slots_error_response(binary() | empty, [pid()]) -> ok.
+-spec cluster_slots_error_response(binary() | empty, addr(), [pid()]) -> ok.
 %%
 %% Redis returned an error message when trying to fetch the slot map.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-cluster_slots_error_response(Response, Pids) ->
+cluster_slots_error_response(Response, FromAddr, Pids) ->
     send_info(#{msg_type => cluster_slots_error_response,
+                addr => FromAddr,
                 response => Response},
               Pids).
 
