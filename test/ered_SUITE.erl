@@ -348,7 +348,7 @@ t_empty_initial_slotmap(_) ->
 
     %% Ered updates the slotmap repeatedly until all slots are covered and all
     %% masters have a replica. In the end, we're connected to all nodes.
-    [?MSG(#{msg_type := connected, addr := {"127.0.0.1", Port}})
+    [?MSG(#{msg_type := connected, addr := {"127.0.0.1", Port}}, 10000)
      || Port <- ?PORTS],
     ?MSG(#{msg_type := cluster_ok}),
 
