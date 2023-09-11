@@ -14,6 +14,8 @@ all() ->
      t_manual_failover,
      t_blackhole,
      t_init_timeout,
+     t_empty_slotmap,
+     t_empty_initial_slotmap,
      t_split_data,
      t_subscribe,
      t_queue_full,
@@ -38,13 +40,14 @@ all() ->
 -define(DEFAULT_REDIS_DOCKER_IMAGE, "redis:6.2.7").
 
 init_per_suite(_Config) ->
+    stop_containers(), % just in case there is junk from previous runs
     Image = os:getenv("REDIS_DOCKER_IMAGE", ?DEFAULT_REDIS_DOCKER_IMAGE),
-    os:cmd([io_lib:format("docker run --name redis-~p -d --net=host"
-                          " --restart=on-failure ~s redis-server"
-                          " --cluster-enabled yes --port ~p"
-                          " --cluster-node-timeout 2000;",
-                          [P, Image, P])
-            || P <- ?PORTS]),
+    cmd_log([io_lib:format("docker run --name redis-~p -d --net=host"
+                           " --restart=on-failure ~s redis-server"
+                           " --cluster-enabled yes --port ~p"
+                           " --cluster-node-timeout 2000;",
+                           [P, Image, P])
+             || P <- ?PORTS]),
 
     timer:sleep(2000),
     lists:foreach(fun(Port) ->
@@ -53,10 +56,27 @@ init_per_suite(_Config) ->
                           ered_client:stop(Pid)
                   end, ?PORTS),
 
-    cmd_log(" echo 'yes' | docker run --name redis-cluster --rm --net=host -i " ++ Image ++ " redis-cli --cluster-replicas 1 --cluster create " ++ [io_lib:format("127.0.0.1:~p ", [P]) || P <- ?PORTS]),
-
+    create_cluster(),
     wait_for_consistent_cluster(),
     [].
+
+create_cluster() ->
+    Image = os:getenv("REDIS_DOCKER_IMAGE", ?DEFAULT_REDIS_DOCKER_IMAGE),
+    Hosts = [io_lib:format("127.0.0.1:~p ", [P]) || P <- ?PORTS],
+    Cmd = io_lib:format("echo 'yes' | "
+                        "docker run --name redis-cluster --rm --net=host -i ~s "
+                        "redis-cli --cluster-replicas 1 --cluster create ~s",
+                        [Image, Hosts]),
+    cmd_log(Cmd).
+
+reset_cluster() ->
+    Pids = [begin
+                {ok, Pid} = ered_client:start_link("127.0.0.1", Port, []),
+                Pid
+            end || Port <- ?PORTS],
+    [{ok, <<"OK">>} = ered_client:command(Pid, [<<"CLUSTER">>, <<"RESET">>]) || Pid <- Pids],
+    [{ok, []} = ered_client:command(Pid, [<<"CLUSTER">>, <<"SLOTS">>]) || Pid <- Pids],
+    lists:foreach(fun ered_client:stop/1, Pids).
 
 %% Wait until cluster is consistent, i.e all nodes have the same single view
 %% of the slot map and all cluster nodes are included in the slot map.
@@ -86,9 +106,12 @@ wait_for_consistent_cluster() ->
     end(20).
 
 end_per_suite(_Config) ->
+    stop_containers().
+
+stop_containers() ->
     %% Stop containers, redis-30007 used in t_new_cluster_master
-    os:cmd([io_lib:format("docker stop redis-~p; docker rm redis-~p;", [P, P])
-            || P <- ?PORTS ++ [30007]]).
+    cmd_log([io_lib:format("docker stop redis-~p; docker rm redis-~p;", [P, P])
+             || P <- ?PORTS ++ [30007]]).
 
 
 t_command(_) ->
@@ -299,6 +322,48 @@ t_init_timeout(_) ->
     no_more_msgs().
 
 
+t_empty_slotmap(_) ->
+    R = start_cluster(),
+    reset_cluster(),
+    {ok, {error, <<"CLUSTERDOWN Hash slot not served">>}} =
+        ered:command(R, [<<"GET">>, <<"hello">>], <<"hello">>),
+    ?MSG(#{msg_type := cluster_slots_error_response,
+           response := empty,
+           addr := {"127.0.0.1", _Port}}),
+    create_cluster(),
+    no_more_msgs().
+
+
+t_empty_initial_slotmap(_) ->
+    reset_cluster(),
+    {ok, R} = ered:start_link([{"127.0.0.1", 30001}], [{info_pid, [self()]}]),
+    ?MSG(#{msg_type := cluster_slots_error_response,
+           response := empty,
+           addr := {"127.0.0.1", 30001}}),
+    {error, unmapped_slot} =
+        ered:command(R, [<<"GET">>, <<"hello">>], <<"hello">>),
+
+    %% Now restore the cluster and check that ered reaches an OK state.
+    create_cluster(),
+
+    %% Ered updates the slotmap repeatedly until all slots are covered and all
+    %% masters have a replica. In the end, we're connected to all nodes.
+    [?MSG(#{msg_type := connected, addr := {"127.0.0.1", Port}})
+     || Port <- ?PORTS],
+    ?MSG(#{msg_type := cluster_ok}),
+
+    %% Ingore all slotmap updates. There may be multiple of those before all
+    %% nodes have discovered each other.
+    (fun Loop() ->
+             receive
+                 #{msg_type := slot_map_updated} -> Loop()
+             after 0 -> ok
+             end
+     end)(),
+
+    no_more_msgs().
+
+
 t_scan_delete_keys(_) ->
     R = start_cluster(),
     Clients = ered:get_clients(R),
@@ -430,7 +495,7 @@ t_subscribe(_) ->
 
 
 t_queue_full(_) ->
-    ct:pal("~p\n", [os:cmd("redis-cli -p 30001 INFO")]),
+    ct:pal("~s\n", [os:cmd("redis-cli -p 30001 INFO")]),
 
     Opts = [{max_pending, 10}, {max_waiting, 10}, {queue_ok_level, 5}, {node_down_timeout, 10000}],
     Client = start_cluster([{client_opts, Opts}]),
@@ -445,7 +510,7 @@ t_queue_full(_) ->
     end(21),
 
     recv({reply, {error, queue_overflow}}, 1000),
-    [ct:pal("~p\n", [os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " CLIENT UNPAUSE")]) || Port <- Ports],
+    [ct:pal("~s\n", [os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " CLIENT UNPAUSE")]) || Port <- Ports],
     msg(msg_type, queue_full),
     #{reason := master_queue_full} = msg(msg_type, cluster_not_ok),
 
@@ -742,7 +807,7 @@ scan_helper(Client, Curs0, Acc0) ->
 
 cmd_log(Cmd) ->
     R = os:cmd(Cmd),
-    ct:pal("~p -> ~s\n", [Cmd, R]),
+    ct:pal("~s\n~s\n", [Cmd, R]),
     R.
 
 cmd_until(Cmd, Regex) ->
