@@ -219,7 +219,7 @@ handle_info(Msg = {connection_status, {_Pid, Addr, _Id} , Status}, State) ->
             {noreply, update_cluster_state(ClusterStatus, State1)}
     end;
 
-handle_info({slot_info, Version, Response}, State) ->
+handle_info({slot_info, Version, Response, FromAddr}, State) ->
     case Response of
         _ when Version < State#st.slot_map_version ->
             %% got a response for a request triggered for an old version of the slot map, ignore
@@ -229,7 +229,11 @@ handle_info({slot_info, Version, Response}, State) ->
             {noreply, State};
         {ok, {error, Error}} ->
             %% error sent from redis
-            ered_info_msg:cluster_slots_error_response(Error, State#st.info_pid),
+            ered_info_msg:cluster_slots_error_response(Error, FromAddr, State#st.info_pid),
+            {noreply, State};
+        {ok, []} ->
+            %% Empty slotmap. Maybe the node has been CLUSTER RESET.
+            ered_info_msg:cluster_slots_error_response(empty, FromAddr, State#st.info_pid),
             {noreply, State};
         {ok, ClusterSlotsReply} ->
             NewMap = lists:sort(ClusterSlotsReply),
@@ -255,7 +259,8 @@ handle_info({slot_info, Version, Response}, State) ->
                     NewClosing = maps:merge(maps:from_list([{Addr, TimerRef} || Addr <- Remove]),
                                             State#st.closing),
 
-                    ered_info_msg:slot_map_updated(ClusterSlotsReply, Version + 1, State#st.info_pid),
+                    ered_info_msg:slot_map_updated(ClusterSlotsReply, Version + 1,
+                                                   FromAddr, State#st.info_pid),
 
                     %% open new clients
                     State1 = start_clients(Nodes, State),
@@ -377,7 +382,8 @@ start_periodic_slot_info_request(PreferredNodes, State) ->
                     Tref = erlang:start_timer(
                              State#st.update_slot_wait,
                              self(),
-                             {time_to_update_slots,PreferredNodes}),
+                             {time_to_update_slots,
+                              lists:delete(Node, PreferredNodes)}),
                     State#st{slot_timer_ref = Tref}
             end;
         _Else ->
@@ -393,9 +399,10 @@ stop_periodic_slot_info_request(State) ->
             State#st{slot_timer_ref = none}
     end.
 
-send_slot_info_request(Node, State) ->
+send_slot_info_request(Addr, State) ->
+    Node = maps:get(Addr, State#st.nodes),
     Pid = self(),
-    Cb = fun(Answer) -> Pid ! {slot_info, State#st.slot_map_version, Answer} end,
+    Cb = fun(Answer) -> Pid ! {slot_info, State#st.slot_map_version, Answer, Addr} end,
     ered_client:command_async(Node, [<<"CLUSTER">>, <<"SLOTS">>], Cb).
 
 %% Pick a random available node, preferring the ones in PreferredNodes if any of
@@ -407,15 +414,9 @@ pick_node(PreferredNodes, State) ->
     case pick_available_node(shuffle(PreferredNodes), State) of
         none ->
             %% No preferred node available. Pick one from the 'up' set.
-            Addr = pick_available_node(shuffle(sets:to_list(State#st.up)), State);
+            pick_available_node(shuffle(sets:to_list(State#st.up)), State);
         Addr ->
             Addr
-    end,
-    case Addr of
-        none ->
-            none;
-        _ ->
-            maps:get(Addr, State#st.nodes)
     end.
 
 shuffle(List) ->

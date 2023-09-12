@@ -310,11 +310,13 @@ Messages about the cluster as a whole:
     non_neg_integer()`. See options above.
 
 * `#{msg_type := slot_map_updated, slot_map := list(), map_version :=
-  non_neg_integer()}` is sent when the cluster slot-to-node mapping has been
-  updated.
+  non_neg_integer(), addr := addr()}` is sent when the cluster slot-to-node
+  mapping has been updated.
 
-* `#{msg_type := cluster_slots_error_response, response := any()}` is sent when
-  there was an error updating the cluster slot-to-node mapping.
+* `#{msg_type := cluster_slots_error_response, response := any(), addr :=
+  addr()}` is sent when there was an error updating the cluster slot-to-node
+  mapping. The `response` is either an error or the atom `empty` if the CLUSTER
+  SLOTS returned an empty list, which is treated like an error.
 
 Messages about the connection to a specific node are in the following form:
 
