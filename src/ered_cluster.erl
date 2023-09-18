@@ -190,11 +190,25 @@ handle_info(Msg = {connection_status, {_Pid, Addr, _Id} , Status}, State) ->
     IsMaster = sets:is_element(Addr, State#st.masters),
     ered_info_msg:connection_status(Msg, IsMaster, State#st.info_pid),
     State1 = case Status of
-                 {connection_down, {socket_closed, _}} ->
+                 {connection_down, {Reason, _}} when Reason =:= socket_closed;
+                                                     Reason =:= connect_error ->
                      %% Avoid triggering the alarm for a socket closed by the
-                     %% peer. The cluster will be marked down on failed
-                     %% reconnect or node down event.
-                     State#st{reconnecting = sets:add_element(Addr, State#st.reconnecting)};
+                     %% peer. The cluster will be marked down on the node down
+                     %% timeout.
+                     Reconnecting = sets:add_element(Addr, State#st.reconnecting),
+                     NewState = State#st{reconnecting = Reconnecting},
+                     case (sets:is_element(Addr, State#st.masters) andalso
+                           sets:is_element(Addr, State#st.up) andalso
+                           not sets:is_element(Addr, State#st.reconnecting)) of
+                         true ->
+                             %% Update the slotmap now, just in case the node
+                             %% which is failing is no longer a master, so we
+                             %% don't need to signal 'cluster_not_ok' if we can
+                             %% avoid it.
+                             start_periodic_slot_info_request(NewState);
+                         false ->
+                             NewState
+                     end;
                  {connection_down,_} ->
                      State#st{up = sets:del_element(Addr, State#st.up),
                               pending = sets:del_element(Addr, State#st.pending),
@@ -440,7 +454,9 @@ node_is_available(Addr, State) ->
 
 -spec replicas_of_unavailable_masters(#st{}) -> [addr()].
 replicas_of_unavailable_masters(State) ->
-    DownMasters = sets:subtract(State#st.masters, State#st.up),
+    DownMasters = sets:subtract(State#st.masters,
+                                sets:subtract(State#st.up,
+                                              State#st.reconnecting)),
     case sets:is_empty(DownMasters) of
         true ->
             [];
