@@ -300,8 +300,6 @@ Messages about the cluster as a whole:
 
   * `pending` if ered has not yet established connections to all nodes.
 
-  * `too_few_nodes` if the cluster has fewer than two nodes.
-
   * `not_all_slots_covered` if some cluster slot doesn't belong to any node in
     the cluster.
 
