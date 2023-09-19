@@ -70,7 +70,7 @@ init_per_suite(_Config) ->
 
 init_per_testcase(_Testcase, Config) ->
     %% Quick check that cluster is OK; otherwise restart everything.
-    case catch check_cluster_consistent(?PORTS) of
+    case catch check_consistent_cluster(?PORTS) of
         ok ->
             [];
         _ ->
@@ -103,7 +103,7 @@ wait_for_consistent_cluster() ->
 
 wait_for_consistent_cluster(Ports) ->
     fun Loop(N) ->
-            case check_cluster_consistent(Ports) of
+            case check_consistent_cluster(Ports) of
                 ok ->
                     true;
                 {error, _} when N > 0 ->
@@ -114,7 +114,7 @@ wait_for_consistent_cluster(Ports) ->
             end
     end(20).
 
-check_cluster_consistent(Ports) ->
+check_consistent_cluster(Ports) ->
     SlotMaps = [fun(Port) ->
                         {ok, Pid} = ered_client:start_link("127.0.0.1", Port, []),
                         {ok, SlotMap} = ered_client:command(Pid, [<<"CLUSTER">>, <<"SLOTS">>]),
@@ -272,7 +272,7 @@ t_manual_failover_then_old_master_down(_) ->
     %% down before ered was triggered to update the slotmap, ered still doesn't
     %% report 'cluster_not_ok'.
     R = start_cluster([{min_replicas, 0}]),
-    {Port, _NewMasterPort} = do_manual_failover(R),
+    {Port, NewMasterPort} = do_manual_failover(R),
 
     %% Failover done. Now shutdown the old master and stop the container. The
     %% connection to it is lost. Ered still believes it's a master because it
@@ -283,6 +283,10 @@ t_manual_failover_then_old_master_down(_) ->
            master := true,
            msg_type := socket_closed,
            reason := {recv_exit, closed}}),
+
+    %% Ered prefers the replica of the disconnected node for slot map update,
+    %% since it is likely to know about a failover first; it is the new master.
+    ?MSG(#{msg_type := slot_map_updated, addr := {"127.0.0.1", NewMasterPort}}),
 
     %% Wait for the cluster to become consistent without the stopped node.
     wait_for_consistent_cluster(?PORTS -- [Port]),
@@ -301,19 +305,9 @@ t_manual_failover_then_old_master_down(_) ->
 
     %% We allow a number of info messages during this procedure, but not the
     %% status change events 'cluster_not_ok' and 'cluster_ok'.
-    fun Loop() ->
-            receive
-                #{addr := {"127.0.0.1", Port}, msg_type := Type}
-                  when Type =:= connect_error;
-                       Type =:= node_down_timeout;
-                       Type =:= node_deactivated ->
-                    Loop();
-                #{msg_type := slot_map_updated} ->
-                    Loop()
-            after 0 ->
-                    ok
-            end
-    end(),
+    ?OPTIONAL_MSG(#{addr := {"127.0.0.1", Port}, msg_type := connect_error}),
+    ?OPTIONAL_MSG(#{addr := {"127.0.0.1", Port}, msg_type := node_down_timeout}),
+    ?OPTIONAL_MSG(#{addr := {"127.0.0.1", Port}, msg_type := node_deactivated}),
     no_more_msgs().
 
 t_blackhole(_) ->
