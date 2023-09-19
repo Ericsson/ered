@@ -426,13 +426,15 @@ t_empty_initial_slotmap(_) ->
     ?MSG(#{msg_type := cluster_ok}),
 
     %% Ingore all slotmap updates. There may be multiple of those before all
-    %% nodes have discovered each other.
-    (fun Loop() ->
-             receive
-                 #{msg_type := slot_map_updated} -> Loop()
-             after 0 -> ok
-             end
-     end)(),
+    %% nodes have discovered each other. There may be incomplete slotmaps as
+    %% well before all nodes have discovered each other, so the connections to
+    %% some nodes may be temporarily deactivated.
+    ?OPTIONAL_MSG(#{msg_type := slot_map_updated}),
+    ?OPTIONAL_MSG(#{msg_type := slot_map_updated}),
+    ?OPTIONAL_MSG(#{msg_type := slot_map_updated}),
+    ?OPTIONAL_MSG(#{msg_type := slot_map_updated}),
+    ?OPTIONAL_MSG(#{msg_type := node_deactivated}),
+    ?OPTIONAL_MSG(#{msg_type := node_deactivated}),
 
     no_more_msgs().
 
