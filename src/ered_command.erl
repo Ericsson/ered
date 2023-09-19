@@ -67,12 +67,12 @@ convert_to(RawCommand) ->
 
 command_to_bin(RawCommand) ->
     Len = integer_to_list(length(RawCommand)),
-    Elements = [["$", integer_to_list(size(Bin)), "\r\n", Bin, "\r\n"] || Bin <- RawCommand],
+    Elements = [[$$, integer_to_list(size(Bin)), $\r, $\n, Bin, $\r, $\n] || Bin <- RawCommand],
     %% Maybe this could be kept as an iolist?
     %% TODO profile this.
     %% Since this is copied around a bit between processes it might be cheaper to keep it as a binary
     %% since then it will be heap allocated if big. Just pure speculation..
-    iolist_to_binary(["*", Len, "\r\n", Elements]).
+    iolist_to_binary([$*, Len, $\r, $\n, Elements]).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec get_data(redis_command()) -> binary() | [binary()].
