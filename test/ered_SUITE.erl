@@ -269,7 +269,7 @@ t_manual_failover(_) ->
 
 t_manual_failover_then_old_master_down(_) ->
     %% Check that if a manual failover is triggered and the old master is taken
-    %% down before ered was triggered to update the slotpam, ered still doesn't
+    %% down before ered was triggered to update the slotmap, ered still doesn't
     %% report 'cluster_not_ok'.
     R = start_cluster([{min_replicas, 0}]),
     {Port, _NewMasterPort} = do_manual_failover(R),
@@ -284,7 +284,7 @@ t_manual_failover_then_old_master_down(_) ->
            msg_type := socket_closed,
            reason := {recv_exit, closed}}),
 
-    %% Wait for the cluster to become constentent without the stopped node.
+    %% Wait for the cluster to become consistent without the stopped node.
     wait_for_consistent_cluster(?PORTS -- [Port]),
 
     %% Start container and wait for it to come up.
