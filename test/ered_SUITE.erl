@@ -342,10 +342,14 @@ t_blackhole(_) ->
          ResponseTimeout + 1000),
     ?MSG({ping_reply, {error, _Reason}}, % node_down or node_deactivated
          NodeDownTimeout + 1000),
-    ?MSG(#{msg_type := slot_map_updated}),
+    ?MSG(#{msg_type := slot_map_updated},
+         5000),
+    ?OPTIONAL_MSG(#{msg_type := node_down_timeout, addr := {"127.0.0.1", Port}}),
+    ?OPTIONAL_MSG(#{msg_type := cluster_not_ok, reason := master_down}),
     ?MSG(#{msg_type := node_deactivated, addr := {"127.0.0.1", Port}}),
     ?MSG(#{msg_type := client_stopped, reason := normal, master := false},
          CloseWait + 1000),
+    ?OPTIONAL_MSG(#{msg_type := cluster_ok}),
 
     ct:pal("Unpausing container: " ++ os:cmd("docker unpause " ++ Pod)),
     timer:sleep(500),
