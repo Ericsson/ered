@@ -465,22 +465,15 @@ replicas_of_unavailable_masters(State) ->
     end.
 
 is_slot_map_ok(State) ->
-    %% Need at least two nodes in the cluster. During some startup scenarios it
-    %% is possible to have a intermittent situation with only one node.
-    if
-        length(State#st.slot_map) < 2 ->
-            too_few_nodes;
+    case all_slots_covered(State) of
+        false ->
+            not_all_slots_covered;
         true ->
-            case all_slots_covered(State) of
+            case check_replica_count(State) of
                 false ->
-                    not_all_slots_covered;
+                    too_few_replicas;
                 true ->
-                    case check_replica_count(State) of
-                        false ->
-                            too_few_replicas;
-                        true ->
-                            ok
-                    end
+                    ok
             end
     end.
 
