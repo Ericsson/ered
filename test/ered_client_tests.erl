@@ -300,7 +300,6 @@ hello_with_auth_t() ->
 hello_with_auth_fail_t() ->
     {ok, ListenSock} = gen_tcp:listen(0, [binary, {active , false}]),
     {ok, Port} = inet:port(ListenSock),
-    Pid = self(),
     spawn_link(fun() ->
                        {ok, Sock} = gen_tcp:accept(ListenSock),
                        {ok, <<"*5\r\n"
@@ -308,7 +307,7 @@ hello_with_auth_fail_t() ->
                               "$1\r\n3\r\n"
                               "$4\r\nAUTH\r\n"
                               "$3\r\nali\r\n"
-                              "$6\r\nsesame\r\n">>} = Hello = gen_tcp:recv(Sock, 0),
+                              "$6\r\nsesame\r\n">>} = gen_tcp:recv(Sock, 0),
                        ok = gen_tcp:send(Sock,
                                          <<"-WRONGPASS invalid username-password"
                                            " pair or user is disabled.\r\n">>)
@@ -341,13 +340,12 @@ auth_t() ->
 auth_fail_t() ->
     {ok, ListenSock} = gen_tcp:listen(0, [binary, {active , false}]),
     {ok, Port} = inet:port(ListenSock),
-    Pid = self(),
     spawn_link(fun() ->
                        {ok, Sock} = gen_tcp:accept(ListenSock),
                        {ok, <<"*3\r\n"
                               "$4\r\nAUTH\r\n"
                               "$3\r\nali\r\n"
-                              "$6\r\nsesame\r\n">>} = Auth = gen_tcp:recv(Sock, 0),
+                              "$6\r\nsesame\r\n">>} = gen_tcp:recv(Sock, 0),
                        ok = gen_tcp:send(Sock,
                                          <<"-WRONGPASS invalid username-password"
                                            " pair or user is disabled.\r\n">>)
