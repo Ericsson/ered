@@ -54,7 +54,7 @@
              update_delay = 1000, % 1s delay between slot map update requests
              client_opts = [],
              update_slot_wait = 500,
-             min_replicas = 1,
+             min_replicas = 0,
              close_wait = 10000
 
             }).
@@ -493,6 +493,8 @@ all_slots_covered(State) ->
     %% check so last slot is ok
     R == 16384.
 
+check_replica_count(#st{min_replicas = 0}) ->
+    true;
 check_replica_count(State) ->
     lists:all(fun([_Start, _Stop, _Master | Replicas]) ->
                       length(Replicas) >= State#st.min_replicas

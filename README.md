@@ -175,7 +175,7 @@ The following options can be passed to `start_link/2`:
 * `{min_replicas, non_neg_integer()}`
 
   For each Redis master node, the min number of replicas for the cluster
-  to be considered OK. Default 1.
+  to be considered OK. Default 0.
 
 * `{close_wait, non_neg_integer()}`
 
