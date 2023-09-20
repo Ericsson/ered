@@ -424,12 +424,14 @@ t_empty_initial_slotmap(_) ->
     %% masters have a replica. In the end, we're connected to all nodes.
     [?MSG(#{msg_type := connected, addr := {"127.0.0.1", Port}}, 10000)
      || Port <- ?PORTS],
-    ?MSG(#{msg_type := cluster_ok}),
+    ?MSG(#{msg_type := cluster_ok}, 5000),
 
     %% Ingore all slotmap updates. There may be multiple of those before all
     %% nodes have discovered each other. There may be incomplete slotmaps as
     %% well before all nodes have discovered each other, so the connections to
     %% some nodes may be temporarily deactivated.
+    ?OPTIONAL_MSG(#{msg_type := slot_map_updated}),
+    ?OPTIONAL_MSG(#{msg_type := slot_map_updated}),
     ?OPTIONAL_MSG(#{msg_type := slot_map_updated}),
     ?OPTIONAL_MSG(#{msg_type := slot_map_updated}),
     ?OPTIONAL_MSG(#{msg_type := slot_map_updated}),
