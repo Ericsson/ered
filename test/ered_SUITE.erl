@@ -193,7 +193,7 @@ t_command_pipeline(_) ->
 
 
 t_hard_failover(_) ->
-    R = start_cluster(),
+    R = start_cluster([{min_replicas, 1}]),
     Port = get_master_port(R),
     Pod = get_pod_name_from_port(Port),
     ct:pal("~p\n", [ered:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>])]),
@@ -409,7 +409,8 @@ t_empty_slotmap(_) ->
 
 t_empty_initial_slotmap(_) ->
     reset_cluster(),
-    {ok, R} = ered:start_link([{"127.0.0.1", 30001}], [{info_pid, [self()]}]),
+    {ok, R} = ered:start_link([{"127.0.0.1", 30001}],
+                              [{info_pid, [self()]}, {min_replicas, 1}]),
     ?MSG(#{msg_type := cluster_slots_error_response,
            response := empty,
            addr := {"127.0.0.1", 30001}}),
