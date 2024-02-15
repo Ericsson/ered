@@ -266,6 +266,26 @@ handle_info(#{msg_type := slot_map_updated}, State) ->
                        slot_map_version = MapVersion,
                        addr_map = AddrToPid}};
 
+handle_info(#{msg_type := _, addr := Addr, client_id := Pid}, State)
+  when is_map(State#st.addr_map) ->
+    case maps:find(Addr, State#st.addr_map) of
+        {ok, Pid} ->
+            {noreply, State};
+        {ok, OldPid} ->
+            %% The pid has changed for this client. It was probably restarted.
+            %% Replace the pid in our lookup tables.
+            ClientList = [case P of
+                              OldPid -> Pid;
+                              Other -> Other
+                          end || P <- tuple_to_list(State#st.clients)],
+            State1 = State#st{addr_map = (State#st.addr_map)#{Addr := Pid},
+                              clients = list_to_tuple(ClientList)},
+            {noreply, State1};
+        error ->
+            %% This address is not part of the slot mapping anymore.
+            {noreply, State}
+    end;
+
 handle_info(_Ignore, State) ->
     %% Could use a proxy process to receive the slot map udate to avoid this catch all handle_info
     {noreply, State}.

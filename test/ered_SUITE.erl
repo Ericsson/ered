@@ -9,6 +9,7 @@ all() ->
      t_command_all,
      t_command_client,
      t_command_pipeline,
+     t_client_crash,
      t_scan_delete_keys,
      t_hard_failover,
      t_manual_failover,
@@ -192,6 +193,26 @@ t_command_pipeline(_) ->
     no_more_msgs().
 
 
+t_client_crash(_) ->
+    R = start_cluster(),
+    Port = get_master_from_key(R, <<"k">>),
+    Addr = {"127.0.0.1", Port},
+    AddrToPid0 = ered:get_addr_to_client_map(R),
+    Pid0 = maps:get(Addr, AddrToPid0),
+    exit(Pid0, crash),
+    ?MSG(#{addr := {"127.0.0.1", Port}, master := true, msg_type := client_stopped}),
+    ?MSG(#{msg_type := cluster_not_ok, reason := master_down}),
+    %% Command hangs when pid is dead (FIXME)
+    %%{ok, <<"OK">>} = ered:command(R, [<<"SET">>, <<"k">>, <<"v">>], <<"k">>),
+    ?MSG(#{addr := {"127.0.0.1", Port}, master := true, msg_type := connected}),
+    AddrToPid1 = ered:get_addr_to_client_map(R),
+    Pid1 = maps:get(Addr, AddrToPid1),
+    true = (Pid1 =/= Pid0),
+    {ok, <<"OK">>} = ered:command(R, [<<"SET">>, <<"k">>, <<"v">>], <<"k">>),
+    ?MSG(#{msg_type := cluster_ok}),
+    no_more_msgs().
+
+
 t_hard_failover(_) ->
     R = start_cluster([{min_replicas, 1}]),
     Port = get_master_port(R),
@@ -348,7 +369,7 @@ t_blackhole(_) ->
     ?OPTIONAL_MSG(#{msg_type := cluster_not_ok, reason := master_down}),
     ?MSG(#{msg_type := node_deactivated, addr := {"127.0.0.1", Port}}),
     ?OPTIONAL_MSG(#{msg_type := cluster_ok}),
-    ?MSG(#{msg_type := client_stopped, reason := normal, master := false},
+    ?MSG(#{msg_type := client_stopped, reason := shutdown, master := false},
          CloseWait + 1000),
 
     ct:pal("Unpausing container: " ++ os:cmd("docker unpause " ++ Pod)),
