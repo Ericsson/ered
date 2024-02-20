@@ -1,7 +1,9 @@
 -module(ered_SUITE).
 
 -compile([export_all, nowarn_export_all]).
-
+-if(false).
+all() -> [t_client_crash].
+-else.
 all() ->
     [
      t_command,
@@ -26,7 +28,7 @@ all() ->
      t_ask_redirect,
      t_client_map
     ].
-
+-endif.
 
 -define(MSG(Pattern, Timeout),
         receive
@@ -51,11 +53,18 @@ all() ->
 init_per_suite(_Config) ->
     stop_containers(), % just in case there is junk from previous runs
     Image = os:getenv("REDIS_DOCKER_IMAGE", ?DEFAULT_REDIS_DOCKER_IMAGE),
+    EnableDebugCommand = case Image of
+                             "redis:" ++ [N, $. | _] when N >= $1, N < $7 ->
+                                 ""; % Option does not exist.
+                             _Redis7 ->
+                                 " --enable-debug-command yes"
+                         end,
     cmd_log([io_lib:format("docker run --name redis-~p -d --net=host"
                            " --restart=on-failure ~s redis-server"
+                           "~s"
                            " --cluster-enabled yes --port ~p"
                            " --cluster-node-timeout 2000;",
-                           [P, Image, P])
+                           [P, Image, EnableDebugCommand, P])
              || P <- ?PORTS]),
 
     timer:sleep(2000),
@@ -139,7 +148,7 @@ end_per_suite(_Config) ->
 stop_containers() ->
     %% Stop containers, redis-30007 used in t_new_cluster_master
     cmd_log([io_lib:format("docker stop redis-~p; docker rm redis-~p;", [P, P])
-             || P <- ?PORTS ++ [30007]]).
+             || P <- ?PORTS ++ [30007, cluster]]).
 
 
 t_command(_) ->
@@ -199,11 +208,35 @@ t_client_crash(_) ->
     Addr = {"127.0.0.1", Port},
     AddrToPid0 = ered:get_addr_to_client_map(R),
     Pid0 = maps:get(Addr, AddrToPid0),
+    monitor(process, Pid0),
+    TestPid = self(),
+    SleepCommand = [<<"DEBUG">>, <<"SLEEP">>, <<"3">>],
+    spawn_link(fun () ->
+                       Result = ered:command(R, SleepCommand, <<"k">>),
+                       TestPid ! {crashed_command_result, Result}
+               end),
+    ered:command_async(R, SleepCommand, <<"k">>,
+                       fun (Reply) ->
+                               %% We never get this reply. The process crashes
+                               %% before it is sent.
+                               TestPid ! {crashed_async_command_result, Reply}
+                       end),
     exit(Pid0, crash),
+    ?MSG({crashed_command_result, {error, crash}}),
     ?MSG(#{addr := {"127.0.0.1", Port}, master := true, msg_type := client_stopped}),
+    ?MSG({'DOWN', _Mon, process, Pid0, crash}),
     ?MSG(#{msg_type := cluster_not_ok, reason := master_down}),
-    %% Command hangs when pid is dead (FIXME)
-    %%{ok, <<"OK">>} = ered:command(R, [<<"SET">>, <<"k">>, <<"v">>], <<"k">>),
+    %% Instant error when client pid is dead. There's a race condition here. The
+    %% new client process can potentiallt come up fast and return "OK" to the
+    %% following commands.
+    {error, client_down} = ered:command(R, [<<"SET">>, <<"k">>, <<"v">>], <<"k">>),
+    ered:command_async(R, [<<"SET">>, <<"k">>, <<"v">>], <<"k">>,
+                       fun (Reply) ->
+                               %% This command does get a reply.
+                               TestPid ! {async_command_when_down, Reply}
+                       end),
+    ?MSG({async_command_when_down, {error, client_down}}),
+    %% End of race condition.
     ?MSG(#{addr := {"127.0.0.1", Port}, master := true, msg_type := connected}),
     AddrToPid1 = ered:get_addr_to_client_map(R),
     Pid1 = maps:get(Addr, AddrToPid1),
