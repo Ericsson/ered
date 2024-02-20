@@ -201,7 +201,7 @@ handle_info(Msg = {connection_status, {Pid, Addr, _Id}, Status}, State0) ->
                 error ->
                     %% Node not part of the cluster and was already removed.
                     State0
-             end,
+            end,
     IsMaster = sets:is_element(Addr, State#st.masters),
     ered_info_msg:connection_status(Msg, IsMaster, State#st.info_pid),
     State1 = case Status of
