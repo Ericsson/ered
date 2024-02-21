@@ -1,9 +1,7 @@
 -module(ered_SUITE).
 
 -compile([export_all, nowarn_export_all]).
--if(false).
-all() -> [t_client_crash].
--else.
+
 all() ->
     [
      t_command,
@@ -28,7 +26,6 @@ all() ->
      t_ask_redirect,
      t_client_map
     ].
--endif.
 
 -define(MSG(Pattern, Timeout),
         receive
@@ -146,7 +143,8 @@ end_per_suite(_Config) ->
     stop_containers().
 
 stop_containers() ->
-    %% Stop containers, redis-30007 used in t_new_cluster_master
+    %% Stop containers. redis-30007 is used in t_new_cluster_master and
+    %% redis-cluster for running redis-cli in create_cluster.
     cmd_log([io_lib:format("docker stop redis-~p; docker rm redis-~p;", [P, P])
              || P <- ?PORTS ++ [30007, cluster]]).
 
@@ -217,8 +215,8 @@ t_client_crash(_) ->
                end),
     ered:command_async(R, SleepCommand, <<"k">>,
                        fun (Reply) ->
-                               %% We never get this reply. The process crashes
-                               %% before it is sent.
+                               %% We never get this reply. The ered_client
+                               %% process crashes before it is sent.
                                TestPid ! {crashed_async_command_result, Reply}
                        end),
     exit(Pid0, crash),
@@ -227,7 +225,7 @@ t_client_crash(_) ->
     ?MSG({'DOWN', _Mon, process, Pid0, crash}),
     ?MSG(#{msg_type := cluster_not_ok, reason := master_down}),
     %% Instant error when client pid is dead. There's a race condition here. The
-    %% new client process can potentiallt come up fast and return "OK" to the
+    %% new client process can potentially come up fast and return "OK" to the
     %% following commands.
     {error, client_down} = ered:command(R, [<<"SET">>, <<"k">>, <<"v">>], <<"k">>),
     ered:command_async(R, [<<"SET">>, <<"k">>, <<"v">>], <<"k">>,

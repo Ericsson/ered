@@ -35,8 +35,9 @@
 %%%===================================================================
 
 -record(st, {cluster_pid :: pid(),
-             slots :: binary(), % byte at slot maps to index in clients tuple
-             clients = {} :: tuple(), % of pid() (or addr() as placeholder)
+             slots :: binary(),       % The byte att offset N is an index into
+                                                % the clients tuple for slot N.
+             clients = {} :: tuple(), % ... of pid() (or addr() as placeholder)
              slot_map_version = 0 :: non_neg_integer(),
              addr_map = #{} :: #{addr() => pid() | Placeholder :: addr()},
              pending = #{} :: #{gen_server:from() => pid()},
