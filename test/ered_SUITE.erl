@@ -10,6 +10,7 @@ all() ->
      t_command_client,
      t_command_pipeline,
      t_client_crash,
+     t_client_killed,
      t_scan_delete_keys,
      t_hard_failover,
      t_manual_failover,
@@ -208,7 +209,55 @@ t_client_crash(_) ->
     Pid0 = maps:get(Addr, AddrToPid0),
     monitor(process, Pid0),
     TestPid = self(),
-    SleepCommand = [<<"DEBUG">>, <<"SLEEP">>, <<"3">>],
+    SleepCommand = [<<"DEBUG">>, <<"SLEEP">>, <<"1">>],
+    spawn_link(fun () ->
+                       Result = ered:command(R, SleepCommand, <<"k">>),
+                       TestPid ! {crashed_command_result, Result}
+               end),
+    ered:command_async(R, SleepCommand, <<"k">>,
+                       fun (Reply) ->
+                               TestPid ! {crashed_async_command_result, Reply}
+                       end),
+    timer:sleep(100),
+    exit(Pid0, crash),
+    ?MSG({crashed_async_command_result,{error,{client_stopped,crash}}}),
+    ?MSG({crashed_command_result,{error,{client_stopped,crash}}}),
+    ?MSG(#{addr := {"127.0.0.1", Port}, master := true, msg_type := client_stopped}),
+    ?MSG({'DOWN', _Mon, process, Pid0, crash}),
+    ?MSG(#{msg_type := cluster_not_ok, reason := master_down}),
+    %% Instant error when client pid is dead. There's a race condition here. The
+    %% new client process can potentially come up fast and return "OK" to the
+    %% following commands.
+    {error, client_down} = ered:command(R, [<<"SET">>, <<"k">>, <<"v">>], <<"k">>),
+    ered:command_async(R, [<<"SET">>, <<"k">>, <<"v">>], <<"k">>,
+                       fun (Reply) ->
+                               %% This command does get a reply.
+                               TestPid ! {async_command_when_down, Reply}
+                       end),
+    ?MSG({async_command_when_down, {error, client_down}}),
+    %% End of race condition.
+    ?MSG(#{addr := {"127.0.0.1", Port}, master := true, msg_type := connected}, 10000),
+    AddrToPid1 = ered:get_addr_to_client_map(R),
+    Pid1 = maps:get(Addr, AddrToPid1),
+    true = (Pid1 =/= Pid0),
+    {ok, <<"OK">>} = ered:command(R, [<<"SET">>, <<"k">>, <<"v">>], <<"k">>),
+    ?MSG(#{msg_type := cluster_ok}),
+    no_more_msgs().
+
+
+t_client_killed(_) ->
+    %% This test case simulates the scenario that a client process crashes
+    %% before a command has been added to the waiting queue. It's a race
+    %% condition, but by killing the process hard and preventing terminate/2
+    %% from calling reply_all/2, we achieve a similar result.
+    R = start_cluster(),
+    Port = get_master_from_key(R, <<"k">>),
+    Addr = {"127.0.0.1", Port},
+    AddrToPid0 = ered:get_addr_to_client_map(R),
+    Pid0 = maps:get(Addr, AddrToPid0),
+    monitor(process, Pid0),
+    TestPid = self(),
+    SleepCommand = [<<"DEBUG">>, <<"SLEEP">>, <<"1">>],
     spawn_link(fun () ->
                        Result = ered:command(R, SleepCommand, <<"k">>),
                        TestPid ! {crashed_command_result, Result}
@@ -219,11 +268,12 @@ t_client_crash(_) ->
                                %% process crashes before it is sent.
                                TestPid ! {crashed_async_command_result, Reply}
                        end),
-    exit(Pid0, crash),
-    ?MSG({crashed_command_result, {error, crash}}),
-    ?MSG(#{addr := {"127.0.0.1", Port}, master := true, msg_type := client_stopped}),
-    ?MSG({'DOWN', _Mon, process, Pid0, crash}),
-    ?MSG(#{msg_type := cluster_not_ok, reason := master_down}),
+    exit(Pid0, kill),
+    ?MSG({crashed_command_result, {error, killed}}),
+    ?MSG({'DOWN', _Mon, process, Pid0, killed}),
+    %% We don't get 'cluster_not_ok' here, because ered_cluster relies on a
+    %% message from ered_client. Using a monitor instead would be more reliable.
+
     %% Instant error when client pid is dead. There's a race condition here. The
     %% new client process can potentially come up fast and return "OK" to the
     %% following commands.
@@ -240,7 +290,7 @@ t_client_crash(_) ->
     Pid1 = maps:get(Addr, AddrToPid1),
     true = (Pid1 =/= Pid0),
     {ok, <<"OK">>} = ered:command(R, [<<"SET">>, <<"k">>, <<"v">>], <<"k">>),
-    ?MSG(#{msg_type := cluster_ok}),
+    %% We don't get message 'cluster_ok' becuase we never got 'cluster_not_ok'.
     no_more_msgs().
 
 
