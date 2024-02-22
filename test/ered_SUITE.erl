@@ -290,7 +290,7 @@ t_client_killed(_) ->
     Pid1 = maps:get(Addr, AddrToPid1),
     true = (Pid1 =/= Pid0),
     {ok, <<"OK">>} = ered:command(R, [<<"SET">>, <<"k">>, <<"v">>], <<"k">>),
-    %% We don't get message 'cluster_ok' becuase we never got 'cluster_not_ok'.
+    %% We don't get message 'cluster_ok' because we never got 'cluster_not_ok'.
     no_more_msgs().
 
 
