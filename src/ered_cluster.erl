@@ -29,6 +29,8 @@
 
 -record(st, {
              cluster_state = nok :: ok | nok,
+             %% Supervisor for our client processes
+             client_sup :: pid(),
              %% Mapping from address to client for all known clients
              nodes = #{} :: #{addr() => pid()},
              %% Clients in connected state
@@ -145,6 +147,7 @@ connect_node(ServerRef, Addr) ->
 %%%===================================================================
 
 init([Addrs, Opts]) ->
+    {ok, ClientSup} = ered_client_sup:start_link(),
     State = lists:foldl(
               fun ({info_pid, Val}, S)         -> S#st{info_pid = Val};
                   ({update_slot_wait, Val}, S) -> S#st{update_slot_wait = Val};
@@ -153,7 +156,7 @@ init([Addrs, Opts]) ->
                   ({close_wait, Val}, S)       -> S#st{close_wait = Val};
                   (Other, _)                   -> error({badarg, Other})
               end,
-              #st{},
+              #st{client_sup = ClientSup},
               Opts),
     {ok, start_clients(Addrs, State)}.
 
@@ -186,7 +189,19 @@ handle_cast({trigger_map_update, SlotMapVersion, Node}, State) ->
             {noreply, State}
     end.
 
-handle_info(Msg = {connection_status, {_Pid, Addr, _Id} , Status}, State) ->
+handle_info(Msg = {connection_status, {Pid, Addr, _Id}, Status}, State0) ->
+    State = case maps:find(Addr, State0#st.nodes) of
+                {ok, Pid} ->
+                    %% Client pid unchanged.
+                    State0;
+                {ok, _OldPid} ->
+                    %% New client pid for this address. It may have been
+                    %% restarted by the client supervisor.
+                    State0#st{nodes = (State0#st.nodes)#{Addr => Pid}};
+                error ->
+                    %% Node not part of the cluster and was already removed.
+                    State0
+            end,
     IsMaster = sets:is_element(Addr, State#st.masters),
     ered_info_msg:connection_status(Msg, IsMaster, State#st.info_pid),
     State1 = case Status of
@@ -303,14 +318,16 @@ handle_info({timeout, TimerRef, {close_clients, Remove}}, State) ->
                      {Addr, Tref} <- maps:to_list(maps:with(Remove, State#st.closing)),
                      Tref == TimerRef],
     Clients = maps:with(ToCloseNow, State#st.nodes),
-    [ered_client:stop(Client) || Client <- maps:values(Clients)],
+    [ered_client_sup:stop_client(State#st.client_sup, Client)
+     || Client <- maps:keys(Clients)],
     %% remove from nodes and closing map
     {noreply, State#st{nodes = maps:without(ToCloseNow, State#st.nodes),
                        up = sets:subtract(State#st.up, new_set(ToCloseNow)),
                        closing = maps:without(ToCloseNow, State#st.closing)}}.
 
 terminate(_Reason, State) ->
-    [ered_client:stop(Pid) || Pid <- maps:values(State#st.nodes)],
+    [ered_client_sup:stop_client(State#st.client_sup, Pid)
+     || Pid <- maps:keys(State#st.nodes)],
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -504,7 +521,7 @@ check_replica_count(State) ->
 start_client(Addr, State) ->
     {Host, Port} = Addr,
     Opts = [{info_pid, self()}, {use_cluster_id, true}] ++ State#st.client_opts,
-    {ok, Pid} = ered_client:start_link(Host, Port, Opts),
+    {ok, Pid} = ered_client_sup:start_client(State#st.client_sup, Host, Port, Opts),
     Pid.
 
 start_clients(Addrs, State) ->

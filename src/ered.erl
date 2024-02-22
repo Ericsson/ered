@@ -35,10 +35,15 @@
 %%%===================================================================
 
 -record(st, {cluster_pid :: pid(),
-             slots :: binary(),
-             clients = {} :: tuple(), % of pid()
+             slots :: binary(),                 % The byte at offset N is an
+                                                % index into the clients tuple
+                                                % for slot N.
+             clients = {} :: tuple(),           % Tuple of pid(), or addr() as
+                                                % placeholder when the process
+                                                % is gone.
              slot_map_version = 0 :: non_neg_integer(),
-             addr_map = {},
+             addr_map = #{} :: #{addr() => pid() | Placeholder :: addr()},
+             pending = #{} :: #{gen_server:from() => pid()},
              try_again_delay :: non_neg_integer(),
              redirect_attempts :: non_neg_integer()
             }).
@@ -211,8 +216,8 @@ init([Addrs, Opts1]) ->
 
 handle_call({command, Command, Key}, From, State) ->
     Slot = ered_lib:hash(Key),
-    send_command_to_slot(Command, Slot, From, State, State#st.redirect_attempts),
-    {noreply, State};
+    State1 = send_command_to_slot(Command, Slot, From, State, State#st.redirect_attempts),
+    {noreply, State1};
 
 handle_call(get_clients, _From, State) ->
     {reply, tuple_to_list(State#st.clients), State};
@@ -222,8 +227,11 @@ handle_call(get_addr_to_client_map, _From, State) ->
 
 handle_cast({command_async, Command, Key, ReplyFun}, State) ->
     Slot = ered_lib:hash(Key),
-    send_command_to_slot(Command, Slot, ReplyFun, State, State#st.redirect_attempts),
-    {noreply, State};
+    State1 = send_command_to_slot(Command, Slot, ReplyFun, State, State#st.redirect_attempts),
+    {noreply, State1};
+
+handle_cast({replied, To}, State) ->
+    {noreply, State#st{pending = maps:remove(To, State#st.pending)}};
 
 handle_cast({update_slots, ClientRef}, State) ->
     ered_cluster:update_slots(State#st.cluster_pid, State#st.slot_map_version, ClientRef),
@@ -244,8 +252,8 @@ handle_cast({forward_command_asking, Command, Slot, From, Addr, AttemptsLeft, Ol
     {noreply, State1}.
 
 handle_info({command_try_again, Command, Slot, From, AttemptsLeft}, State) ->
-    send_command_to_slot(Command, Slot, From, State, AttemptsLeft),
-    {noreply, State};
+    State1 = send_command_to_slot(Command, Slot, From, State, AttemptsLeft),
+    {noreply, State1};
 
 handle_info(#{msg_type := slot_map_updated}, State) ->
     {MapVersion, ClusterMap, AddrToPid} = ered_cluster:get_slot_map_info(State#st.cluster_pid),
@@ -261,13 +269,62 @@ handle_info(#{msg_type := slot_map_updated}, State) ->
 
     Slots = create_lookup_table(ClusterMap, AddrToIx),
     Clients = create_client_pid_tuple(MasterAddrToPid, AddrToIx),
+    %% Monitor the client processes
+    maps:foreach(fun (Addr, Pid) when map_get(Addr, State#st.addr_map) =:= Pid ->
+                         ok; % Process already known
+                     (Addr, Pid) ->
+                         _ = monitor(process, Pid, [{tag, {'DOWN', Addr}}])
+                 end,
+                 AddrToPid),
     {noreply, State#st{slots = Slots,
                        clients = Clients,
                        slot_map_version = MapVersion,
                        addr_map = AddrToPid}};
 
+handle_info(#{msg_type := connected, addr := Addr, client_id := Pid},
+            State = #st{addr_map = AddrMap, clients = Clients})
+  when is_map(State#st.addr_map) ->
+    case maps:find(Addr, AddrMap) of
+        {ok, Pid} ->
+            %% We already have this pid.
+            {noreply, State};
+        {ok, OldPid} ->
+            %% The pid has changed for this client. It was probably restarted.
+            _Mon = monitor(process, Pid, [{tag, {'DOWN', Addr}}]),
+            %% Replace the pid in our lookup tables.
+            ClientList = [case P of
+                              OldPid -> Pid;
+                              Other -> Other
+                          end || P <- tuple_to_list(Clients)],
+            {noreply, State#st{addr_map = AddrMap#{Addr := Pid},
+                               clients = list_to_tuple(ClientList)}};
+        error ->
+            _Mon = monitor(process, Pid, [{tag, {'DOWN', Addr}}]),
+            {noreply, State#st{addr_map = AddrMap#{Addr => Pid}}}
+    end;
+
+handle_info({{'DOWN', Addr}, _Mon, process, Pid, ExitReason}, State)
+  when map_get(Addr, State#st.addr_map) =:= Pid ->
+    %% Client process is down. Abort all requests to this client.
+    Pending = maps:fold(fun (From, To, Acc) when To =:= Pid ->
+                                gen_server:reply(From, {error, ExitReason}),
+                                maps:remove(From, Acc);
+                            (_From, _To, Acc) ->
+                                Acc
+                        end,
+                        State#st.pending,
+                        State#st.pending),
+    %% Put a placeholder instead of a pid in the lookup structures.
+    Placeholder = Addr,
+    ClientList = [case P of
+                      Pid -> Placeholder;
+                      Other -> Other
+                  end || P <- tuple_to_list(State#st.clients)],
+    {noreply, State#st{addr_map = (State#st.addr_map)#{Addr := Placeholder},
+                       clients = list_to_tuple(ClientList),
+                       pending = Pending}};
+
 handle_info(_Ignore, State) ->
-    %% Could use a proxy process to receive the slot map udate to avoid this catch all handle_info
     {noreply, State}.
 
 terminate(_Reason, State) ->
@@ -286,16 +343,30 @@ format_status(_Opt, Status) ->
 send_command_to_slot(Command, Slot, From, State, AttemptsLeft) ->
     case binary:at(State#st.slots, Slot) of
         0 ->
-            reply(From, {error, unmapped_slot});
+            reply(From, {error, unmapped_slot}, none),
+            State;
         Ix ->
-            Client = element(Ix, State#st.clients),
-            Fun = create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft),
-            ered_client:command_async(Client, Command, Fun)
-    end,
-    ok.
+            case element(Ix, State#st.clients) of
+                Client when is_pid(Client) ->
+                    Fun = create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft),
+                    ered_client:command_async(Client, Command, Fun),
+                    put_pending(From, Client, State);
+                _Placeholder ->
+                    reply(From, {error, client_down}, none),
+                    State
+            end
+    end.
+
+put_pending(From = {_, _}, Client, State) ->
+    %% Gen_server call. Store so we can reply if Client crashes.
+    State#st{pending = maps:put(From, Client, State#st.pending)};
+put_pending(ReplyFun, _Client, State) when is_function(ReplyFun) ->
+    %% Cast with reply fun. We don't keep track of those.
+    State.
 
 create_reply_fun(_Command, _Slot, _Client, From, _State, 0) ->
-    fun(Reply) -> reply(From, Reply) end;
+    Pid = self(),
+    fun(Reply) -> reply(From, Reply, Pid) end;
 
 create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft) ->
     Pid = self(),
@@ -307,7 +378,7 @@ create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft) ->
     fun(Reply) ->
             case ered_command:check_result(Reply) of
                 normal ->
-                    reply(From, Reply);
+                    reply(From, Reply, Pid);
                 {moved, Addr} ->
                     ered_cluster:update_slots(ClusterPid, SlotMapVersion, Client),
                     gen_server:cast(Pid, {forward_command, Command, Slot, From, Addr, AttemptsLeft-1});
@@ -317,15 +388,18 @@ create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft) ->
                     erlang:send_after(TryAgainDelay, Pid, {command_try_again, Command, Slot, From, AttemptsLeft-1});
                 cluster_down ->
                     ered_cluster:update_slots(ClusterPid, SlotMapVersion, Client),
-                    reply(From, Reply)
+                    reply(From, Reply, Pid)
             end
     end.
 
 %% Handle a reply, either by sending it back to a gen server caller or by
 %% applying a reply function.
-reply(To = {_, _}, Reply) ->
+reply(To = {_, _}, Reply, EredPid) when is_pid(EredPid) ->
+    gen_server:reply(To, Reply),
+    gen_server:cast(EredPid, {replied, To});
+reply(To = {_, _}, Reply, none) ->
     gen_server:reply(To, Reply);
-reply(ReplyFun, Reply) when is_function(ReplyFun, 1) ->
+reply(ReplyFun, Reply, _EredPid) when is_function(ReplyFun, 1) ->
     ReplyFun(Reply).
 
 create_client_pid_tuple(AddrToPid, AddrToIx) ->
@@ -360,6 +434,7 @@ connect_addr(Addr, State) ->
     case maps:get(Addr, State#st.addr_map, not_found) of
         not_found ->
             Client = ered_cluster:connect_node(State#st.cluster_pid, Addr),
+            _Mon = monitor(process, Client, [{tag, {'DOWN', Addr}}]),
             {Client, State#st{addr_map = maps:put(Addr, Client, State#st.addr_map)}};
         Client ->
             {Client, State}

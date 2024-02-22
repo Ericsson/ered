@@ -204,6 +204,7 @@ init([Host, Port, OptsList]) ->
              #opts{host = Host, port = Port},
              OptsList),
 
+    process_flag(trap_exit, true),
     Pid = self(),
     ConnectPid = spawn_link(fun() -> connect(Pid, Opts) end),
     {ok, start_node_down_timer(#st{opts = Opts,
@@ -274,11 +275,12 @@ handle_info({timeout, TimerRef, node_down}, State) when TimerRef == State#st.nod
     {noreply, process_commands(State2#st{node_status = node_down})};
 
 handle_info({timeout, _TimerRef, _Msg}, State) ->
-    {noreply, State}.
+    {noreply, State};
+
+handle_info({'EXIT', _From, Reason}, State) ->
+    {stop, Reason, State}.
 
 terminate(Reason, State) ->
-    %% Don't get killed by exit signal back from connect loop when we kill it.
-    process_flag(trap_exit, true),
     exit(State#st.connect_loop_pid, kill),
     reply_all({error, {client_stopped, Reason}}, State),
     report_connection_status({connection_down, {client_stopped, Reason}}, State),
