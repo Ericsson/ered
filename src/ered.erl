@@ -35,7 +35,7 @@
 %%%===================================================================
 
 -record(st, {cluster_pid :: pid(),
-             slots :: binary(),                 % The byte att offset N is an
+             slots :: binary(),                 % The byte at offset N is an
                                                 % index into the clients tuple
                                                 % for slot N.
              clients = {} :: tuple(),           % Tuple of pid(), or addr() as
