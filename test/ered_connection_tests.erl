@@ -9,6 +9,8 @@ split_data_test() ->
     <<"OK">> = ered_connection:command(Conn1, [<<"set">>, <<"key1">>, Data]),
     Data = ered_connection:command(Conn1, [<<"get">>, <<"key1">>]).
 
+%% Supress warnings due to expected failures from MalformedCommand.
+-dialyzer({[no_fail_call, no_return], trailing_reply_test/0}).
 trailing_reply_test() ->
     Pid = self(),
     %% 277124 byte nested array, it takes a non-trivial time to parse
@@ -49,6 +51,8 @@ trailing_reply_test() ->
 receive_msg() ->
     receive Msg -> Msg end.
 
+%% This function is used from trailing_reply_test()
+-dialyzer({no_unused, ensure_empty/0}).
 ensure_empty() ->
     empty = receive Msg -> Msg after 0 -> empty end.
 

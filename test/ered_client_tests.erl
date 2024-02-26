@@ -88,6 +88,8 @@ server_close_socket_t() ->
     expect_connection_up(Client).
 
 
+%% Suppress warning from command 'bad_request'
+-dialyzer({no_fail_call, bad_request_t/0}).
 bad_request_t() ->
     {ok, ListenSock} = gen_tcp:listen(0, [binary, {active , false}]),
     {ok, Port} = inet:port(ListenSock),
@@ -211,7 +213,8 @@ server_buffer_full_node_goes_down_t() ->
     no_more_msgs().
 
 
-
+%% Suppress warning from option 'bad_option'
+-dialyzer({no_fail_call, bad_option_t/0}).
 bad_option_t() ->
     ?_assertError({badarg,bad_option}, ered_client:start_link("127.0.0.1", 0, [bad_option])).
 
