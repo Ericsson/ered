@@ -54,3 +54,5 @@ jobs:
           rebar3 eunit
       - name: Run common tests
         run: rebar3 ct
+      - name: Run dialyzer
+        run: rebar3 as test dialyzer
