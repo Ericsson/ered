@@ -61,7 +61,7 @@
 -type addr()       :: ered_cluster:addr().
 -type server_ref() :: pid().
 -type command()    :: ered_command:command().
--type reply()      :: ered_client:reply().
+-type reply()      :: ered_client:reply() | {error, unmapped_slot | client_down}.
 -type reply_fun()  :: ered_client:reply_fun().
 -type key()        :: binary().
 -type client_ref() :: ered_client:server_ref().

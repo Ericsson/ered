@@ -34,7 +34,7 @@ request_t() ->
                        receive ok -> ok end
                end),
     Client = start_client(Port),
-    {ok, <<"pong">>} = ered_client:command(Client, <<"ping">>).
+    {ok, <<"pong">>} = ered_client:command(Client, [<<"ping">>]).
 
 
 fail_connect_t() ->
@@ -62,7 +62,7 @@ fail_parse_t() ->
     Client = start_client(Port),
     Pid = self(),
     spawn_link(fun() ->
-                       Pid ! ered_client:command(Client, <<"ping">>)
+                       Pid ! ered_client:command(Client, [<<"ping">>])
                end),
     expect_connection_up(Client),
     Reason = {recv_exit, {parse_error,{invalid_data,<<"&pong">>}}},
@@ -88,6 +88,8 @@ server_close_socket_t() ->
     expect_connection_up(Client).
 
 
+%% Suppress warning from command 'bad_request'
+-dialyzer({no_fail_call, bad_request_t/0}).
 bad_request_t() ->
     {ok, ListenSock} = gen_tcp:listen(0, [binary, {active , false}]),
     {ok, Port} = inet:port(ListenSock),
@@ -128,7 +130,7 @@ server_buffer_full_t() ->
     expect_connection_up(Client),
 
     Pid = self(),
-    [ered_client:command_async(Client, <<"ping">>, fun(Reply) -> Pid ! {N, Reply} end) || N <- lists:seq(1,11)],
+    [ered_client:command_async(Client, [<<"ping">>], fun(Reply) -> Pid ! {N, Reply} end) || N <- lists:seq(1,11)],
     receive {connection_status, _, queue_full} -> ok end,
     {6, {error, queue_overflow}} = get_msg(),
     receive {connection_status, _, queue_ok} -> ok end,
@@ -165,7 +167,7 @@ server_buffer_full_reconnect_t() ->
 
     Pid = self(),
     %% 5 messages will be pending, 5 messages in queue
-    [ered_client:command_async(Client, <<"ping">>, fun(Reply) -> Pid ! {N, Reply} end) || N <- lists:seq(1,11)],
+    [ered_client:command_async(Client, [<<"ping">>], fun(Reply) -> Pid ! {N, Reply} end) || N <- lists:seq(1,11)],
     receive {connection_status, _ClientInfo1, queue_full} -> ok end,
     %% 1 message over the limit, first one in queue gets kicked out
     {6, {error, queue_overflow}} = get_msg(),
@@ -196,7 +198,7 @@ server_buffer_full_node_goes_down_t() ->
     expect_connection_up(Client),
 
     Pid = self(),
-    [ered_client:command_async(Client, <<"ping">>, fun(Reply) -> Pid ! {N, Reply} end) || N <- lists:seq(1,11)],
+    [ered_client:command_async(Client, [<<"ping">>], fun(Reply) -> Pid ! {N, Reply} end) || N <- lists:seq(1,11)],
     receive {connection_status, _ClientInfo1, queue_full} -> ok end,
     {6, {error, queue_overflow}} = get_msg(),
     receive {connection_status, _ClientInfo2, {connection_down, {socket_closed, {recv_exit, closed}}}} -> ok end,
@@ -207,11 +209,12 @@ server_buffer_full_node_goes_down_t() ->
     [{N, {error, node_down}} = get_msg() || N <- [7,8,9,10,11]],
 
     %% additional commands should get a node down
-    {error, node_down} =  ered_client:command(Client, <<"ping">>),
+    {error, node_down} =  ered_client:command(Client, [<<"ping">>]),
     no_more_msgs().
 
 
-
+%% Suppress warning from option 'bad_option'
+-dialyzer({no_fail_call, bad_option_t/0}).
 bad_option_t() ->
     ?_assertError({badarg,bad_option}, ered_client:start_link("127.0.0.1", 0, [bad_option])).
 
@@ -236,7 +239,7 @@ send_timeout_t() ->
     Client = start_client(Port, [{connection_opts, [{response_timeout, 100}]}]),
     expect_connection_up(Client),
     Pid = self(),
-    ered_client:command_async(Client, <<"ping">>, fun(Reply) -> Pid ! {reply, Reply} end),
+    ered_client:command_async(Client, [<<"ping">>], fun(Reply) -> Pid ! {reply, Reply} end),
     %% this should come after max 1000ms
     receive {connection_status, _ClientInfo, {connection_down, {socket_closed, {recv_exit, timeout}}}} -> ok after 2000 -> timeout_error() end,
     expect_connection_up(Client),
