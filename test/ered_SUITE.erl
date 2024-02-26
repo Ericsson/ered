@@ -68,7 +68,7 @@ init_per_suite(_Config) ->
     timer:sleep(2000),
     lists:foreach(fun(Port) ->
                           {ok,Pid} = ered_client:start_link("127.0.0.1", Port, []),
-                          {ok, <<"PONG">>} = ered_client:command(Pid, <<"ping">>),
+                          {ok, <<"PONG">>} = ered_client:command(Pid, [<<"ping">>]),
                           ered_client:stop(Pid)
                   end, ?PORTS),
 
