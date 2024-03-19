@@ -79,14 +79,29 @@
 
 -type host()        :: ered_connection:host().
 -type addr()        :: {host(), inet:port_number()}.
--type node_id()     :: binary() | undefined.
--type client_info() :: {pid(), addr(), node_id()}.
 -type status()      :: connection_up | {connection_down, down_reason()} | queue_ok | queue_full.
 -type reason()      :: term(). % ssl reasons are of type any so no point being more specific
 -type down_reason() :: node_down_timeout | node_deactivated |
                        {client_stopped | connect_error | init_error | socket_closed,
                         reason()}.
--type info_msg()    :: {connection_status, client_info(), status()}.
+-type info_msg(MsgType, Reason) ::
+        #{msg_type := MsgType,
+          reason := Reason,
+          master => boolean(), % Optional. Added by ered_cluster.
+          addr := addr(),
+          client_id := pid(),
+          cluster_id => binary() % Optional. Used by ered_cluster.
+         }.
+-type info_msg() ::
+        info_msg(connected, none) |
+        info_msg(socket_closed, any()) |
+        info_msg(connect_error, any()) |
+        info_msg(init_error, any()) |
+        info_msg(node_down_timeout, none) |
+        info_msg(node_deactivated, none) |
+        info_msg(queue_ok, none) |
+        info_msg(queue_full, none) |
+        info_msg(client_stopped, any()).
 -type server_ref()  :: pid().
 
 -type opt() ::
@@ -413,13 +428,11 @@ reply_command({command, _, Fun}, Reply) ->
 get_command_payload({command, Command, _Fun}) ->
     Command.
 
+-spec report_connection_status(status(), #st{}) -> #st{}.
 report_connection_status(Status, State = #st{last_status = Status}) ->
     State;
 report_connection_status(Status, State) ->
-    #opts{host = Host, port = Port} = State#st.opts,
-    ClusterId = State#st.cluster_id,
-    Msg = {connection_status, {self(), {Host, Port}, ClusterId}, Status},
-    send_info(Msg, State),
+    send_info(Status, State),
     case Status of
         %% Skip saving the last_status in this to avoid an extra connect_error event.
         %% The usual case is that there is a connect_error and then node_down and then
@@ -431,15 +444,32 @@ report_connection_status(Status, State) ->
     end.
 
 
--spec send_info(info_msg(), #st{}) -> ok.
-send_info(Msg, State) ->
-    Pid = State#st.opts#opts.info_pid,
-    case Pid of
-        none ->
-            ok;
-        _ ->
-            Pid ! Msg
-    end,
+-spec send_info(status(), #st{}) -> ok.
+send_info(Status, #st{opts = #opts{info_pid = Pid,
+                                   host = Host,
+                                   port = Port},
+                      cluster_id = ClusterId}) when is_pid(Pid) ->
+    {MsgType, Reason} =
+        case Status of
+            connection_up                        -> {connected, none};
+            {connection_down, R} when is_atom(R) -> {R, none};
+            {connection_down, R}                 -> R;
+            queue_full                           -> {queue_full, none};
+            queue_ok                             -> {queue_ok, none}
+        end,
+    Msg0 = #{msg_type  => MsgType,
+             reason    => Reason,
+             addr      => {Host, Port},
+             client_id => self()},
+    Msg = case ClusterId of
+              undefined ->
+                  Msg0;
+              Id when is_binary(Id) ->
+                  Msg0#{cluster_id => ClusterId}
+          end,
+    Pid ! Msg,
+    ok;
+send_info(_Msg, _State) ->
     ok.
 
 

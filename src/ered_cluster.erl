@@ -298,12 +298,12 @@ handle_info({command_try_again, Command, Slot, From, AttemptsLeft}, State) ->
     State1 = send_command_to_slot(Command, Slot, From, State, AttemptsLeft),
     {noreply, State1};
 
-handle_info(Msg = {connection_status, {_Pid, Addr, _Id}, Status}, State) ->
+handle_info(Msg = #{msg_type := MsgType, client_id := _Pid, addr := Addr}, State) ->
     IsMaster = sets:is_element(Addr, State#st.masters),
     ered_info_msg:connection_status(Msg, IsMaster, State#st.info_pid),
-    State1 = case Status of
-                 {connection_down, {Reason, _}} when Reason =:= socket_closed;
-                                                     Reason =:= connect_error ->
+    State1 = case MsgType of
+                 _ when MsgType =:= socket_closed;
+                        MsgType =:= connect_error ->
                      %% Avoid triggering the alarm for a socket closed by the
                      %% peer. The cluster will be marked down on the node down
                      %% timeout.
@@ -321,11 +321,15 @@ handle_info(Msg = {connection_status, {_Pid, Addr, _Id}, Status}, State) ->
                          false ->
                              NewState
                      end;
-                 {connection_down,_} ->
+                 _ when MsgType =:= node_down_timeout;
+                        MsgType =:= node_deactivated;
+                        MsgType =:= init_error;
+                        MsgType =:= client_stopped ->
+                     %% Client is down.
                      State#st{up = sets:del_element(Addr, State#st.up),
                               pending = sets:del_element(Addr, State#st.pending),
                               reconnecting = sets:del_element(Addr, State#st.reconnecting)};
-                 connection_up ->
+                 connected ->
                      State#st{up = sets:add_element(Addr, State#st.up),
                               pending = sets:del_element(Addr, State#st.pending),
                               reconnecting = sets:del_element(Addr, State#st.reconnecting)};

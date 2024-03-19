@@ -66,7 +66,7 @@ fail_parse_t() ->
                end),
     expect_connection_up(Client),
     Reason = {recv_exit, {parse_error,{invalid_data,<<"&pong">>}}},
-    receive {connection_status, _ClientInfo, {connection_down, {socket_closed, Reason}}} -> ok end,
+    receive #{msg_type := socket_closed, reason := Reason} -> ok end,
     expect_connection_up(Client),
     {ok, <<"pong">>} = get_msg().
 
@@ -84,7 +84,7 @@ server_close_socket_t() ->
                end),
     Client = start_client(Port),
     expect_connection_up(Client),
-    receive {connection_status, _ClientInfo, {connection_down, {socket_closed, {recv_exit, closed}}}} -> ok end,
+    receive #{msg_type := socket_closed, reason := {recv_exit, closed}} -> ok end,
     expect_connection_up(Client).
 
 
@@ -131,9 +131,9 @@ server_buffer_full_t() ->
 
     Pid = self(),
     [ered_client:command_async(Client, [<<"ping">>], fun(Reply) -> Pid ! {N, Reply} end) || N <- lists:seq(1,11)],
-    receive {connection_status, _, queue_full} -> ok end,
+    receive #{msg_type := queue_full} -> ok end,
     {6, {error, queue_overflow}} = get_msg(),
-    receive {connection_status, _, queue_ok} -> ok end,
+    receive #{msg_type := queue_ok} -> ok end,
     [{N, {ok, <<"pong">>}} = get_msg()|| N <- [1,2,3,4,5,7,8,9,10,11]],
     no_more_msgs().
 
@@ -168,14 +168,14 @@ server_buffer_full_reconnect_t() ->
     Pid = self(),
     %% 5 messages will be pending, 5 messages in queue
     [ered_client:command_async(Client, [<<"ping">>], fun(Reply) -> Pid ! {N, Reply} end) || N <- lists:seq(1,11)],
-    receive {connection_status, _ClientInfo1, queue_full} -> ok end,
+    receive #{msg_type := queue_full} -> ok end,
     %% 1 message over the limit, first one in queue gets kicked out
     {6, {error, queue_overflow}} = get_msg(),
-    receive {connection_status, _ClientInfo2, {connection_down, {socket_closed, {recv_exit, closed}}}} -> ok end,
+    receive #{msg_type := socket_closed, reason := {recv_exit, closed}} -> ok end,
     %% when connection goes down the pending messages will be put in the queue and the queue
     %% will overflow kicking out the oldest first
     [{N, {error, queue_overflow}} = get_msg() || N <- [1,2,3,4,5]],
-    receive {connection_status, _ClientInfo3, queue_ok} -> ok end,
+    receive #{msg_type := queue_ok} -> ok end,
     expect_connection_up(Client),
     [{N, {ok, <<"pong">>}} = get_msg() || N <- [7,8,9,10,11]],
     no_more_msgs().
@@ -199,13 +199,13 @@ server_buffer_full_node_goes_down_t() ->
 
     Pid = self(),
     [ered_client:command_async(Client, [<<"ping">>], fun(Reply) -> Pid ! {N, Reply} end) || N <- lists:seq(1,11)],
-    receive {connection_status, _ClientInfo1, queue_full} -> ok end,
+    receive #{msg_type := queue_full} -> ok end,
     {6, {error, queue_overflow}} = get_msg(),
-    receive {connection_status, _ClientInfo2, {connection_down, {socket_closed, {recv_exit, closed}}}} -> ok end,
+    receive #{msg_type := socket_closed, reason := {recv_exit, closed}} -> ok end,
     [{N, {error, queue_overflow}} = get_msg() || N <- [1,2,3,4,5]],
-    receive {connection_status, _ClientInfo3, queue_ok} -> ok end,
-    receive {connection_status, _ClientInfo4, {connection_down, {connect_error,econnrefused}}} -> ok end,
-    receive {connection_status, _ClientInfo5, {connection_down, node_down_timeout}} -> ok end,
+    receive #{msg_type := queue_ok} -> ok end,
+    receive #{msg_type := connect_error, reason := econnrefused} -> ok end,
+    receive #{msg_type := node_down_timeout} -> ok end,
     [{N, {error, node_down}} = get_msg() || N <- [7,8,9,10,11]],
 
     %% additional commands should get a node down
@@ -241,7 +241,7 @@ send_timeout_t() ->
     Pid = self(),
     ered_client:command_async(Client, [<<"ping">>], fun(Reply) -> Pid ! {reply, Reply} end),
     %% this should come after max 1000ms
-    receive {connection_status, _ClientInfo, {connection_down, {socket_closed, {recv_exit, timeout}}}} -> ok after 2000 -> timeout_error() end,
+    receive #{msg_type := socket_closed, reason := {recv_exit, timeout}} -> ok after 2000 -> timeout_error() end,
     expect_connection_up(Client),
     {reply, {ok, <<"pong">>}} = get_msg(),
     no_more_msgs().
@@ -381,16 +381,17 @@ expect_connection_up(Client) ->
     expect_connection_up(Client, infinity).
 
 expect_connection_up(Client, Timeout) ->
-    {connection_status, {Client, _Addr, _undefined}, connection_up} =
+    #{msg_type := connected, client_id := Client} =
         get_msg(Timeout).
 
 expect_connection_down(Client) ->
     expect_connection_down(Client, infinity).
 
 expect_connection_down(Client, Timeout) ->
-    {connection_status, {Client, _Addr, _undefined}, {connection_down, Reason}} =
+    #{msg_type := MsgType, reason := Reason, client_id := Client} =
         get_msg(Timeout),
-    Reason.
+    if Reason =/= none -> ok end,
+    {MsgType, Reason}.
 
 get_msg() ->
     get_msg(infinity).
