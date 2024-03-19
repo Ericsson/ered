@@ -66,10 +66,11 @@ init_per_suite(_Config) ->
              || P <- ?PORTS]),
 
     timer:sleep(2000),
+    {ok, _} = application:ensure_all_started(ered, temporary),
     lists:foreach(fun(Port) ->
-                          {ok,Pid} = ered_client:start_link("127.0.0.1", Port, []),
+                          {ok,Pid} = ered_client:connect("127.0.0.1", Port, []),
                           {ok, <<"PONG">>} = ered_client:command(Pid, [<<"ping">>]),
-                          ered_client:stop(Pid)
+                          ered_client:close(Pid)
                   end, ?PORTS),
 
     create_cluster(),
@@ -97,12 +98,12 @@ create_cluster() ->
 
 reset_cluster() ->
     Pids = [begin
-                {ok, Pid} = ered_client:start_link("127.0.0.1", Port, []),
+                {ok, Pid} = ered_client:connect("127.0.0.1", Port, []),
                 Pid
             end || Port <- ?PORTS],
     [{ok, <<"OK">>} = ered_client:command(Pid, [<<"CLUSTER">>, <<"RESET">>]) || Pid <- Pids],
     [{ok, []} = ered_client:command(Pid, [<<"CLUSTER">>, <<"SLOTS">>]) || Pid <- Pids],
-    lists:foreach(fun ered_client:stop/1, Pids).
+    lists:foreach(fun ered_client:close/1, Pids).
 
 %% Wait until cluster is consistent, i.e all nodes have the same single view
 %% of the slot map and all cluster nodes are included in the slot map.
@@ -124,9 +125,9 @@ wait_for_consistent_cluster(Ports) ->
 
 check_consistent_cluster(Ports) ->
     SlotMaps = [fun(Port) ->
-                        {ok, Pid} = ered_client:start_link("127.0.0.1", Port, []),
+                        {ok, Pid} = ered_client:connect("127.0.0.1", Port, []),
                         {ok, SlotMap} = ered_client:command(Pid, [<<"CLUSTER">>, <<"SLOTS">>]),
-                        ered_client:stop(Pid),
+                        ered_client:close(Pid),
                         SlotMap
                 end(P) || P <- Ports],
     Consistent = case lists:usort(SlotMaps) of
@@ -478,7 +479,7 @@ t_init_timeout(_) ->
             }
            ],
     ct:pal("~p\n", [os:cmd("redis-cli -p 30001 CLIENT PAUSE 10000")]),
-    {ok, _P} = ered:start_link([{localhost, 30001}], [{info_pid, [self()]}] ++ Opts),
+    {ok, _P} = ered:connect_cluster([{localhost, 30001}], [{info_pid, [self()]}] ++ Opts),
 
     ?MSG(#{msg_type := socket_closed, reason := {recv_exit, timeout}}, 3500),
     ?MSG(#{msg_type := node_down_timeout, addr := {localhost, 30001}}, 2500),
@@ -515,8 +516,8 @@ t_empty_slotmap(_) ->
 
 t_empty_initial_slotmap(_) ->
     reset_cluster(),
-    {ok, R} = ered:start_link([{"127.0.0.1", 30001}],
-                              [{info_pid, [self()]}, {min_replicas, 1}]),
+    {ok, R} = ered:connect_cluster([{"127.0.0.1", 30001}],
+                                   [{info_pid, [self()]}, {min_replicas, 1}]),
     ?MSG(#{msg_type := cluster_slots_error_response,
            response := empty,
            addr := {"127.0.0.1", 30001}}),
@@ -789,7 +790,7 @@ t_new_cluster_master(_) ->
 
     %% Verify that the cluster is still ok
     {ok, Data} = ered:command(R, [<<"GET">>, Key], Key),
-    ered:stop(R),
+    ered:close(R),
     no_more_msgs().
 
 t_ask_redirect(_) ->
@@ -926,7 +927,7 @@ start_cluster(Opts) ->
     InitialNodes = [{"127.0.0.1", Port} || Port <- [Port1, Port2]],
 
     wait_for_consistent_cluster(),
-    {ok, P} = ered:start_link(InitialNodes, [{info_pid, [self()]}] ++ Opts),
+    {ok, P} = ered:connect_cluster(InitialNodes, [{info_pid, [self()]}] ++ Opts),
 
     ConnectedInit = [#{msg_type := connected} = msg(addr, {"127.0.0.1", Port})
                      || Port <- [Port1, Port2]],

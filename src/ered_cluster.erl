@@ -8,7 +8,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/2,
+-export([start_link/4,
          stop/1,
          command/4, command_async/4,
          command_all/2, command_all/3,
@@ -32,8 +32,6 @@
 
 -record(st, {
              cluster_state = nok :: ok | nok,
-             %% Supervisor for our client processes
-             client_sup :: pid(),
 
              %% Structures for fast slot-to-pid lookup.
              slots :: binary(),                 % The byte at offset N is an
@@ -67,6 +65,8 @@
              slot_map_version = 0,
              slot_timer_ref = none,
 
+             client_sup :: pid(),
+             controlling_process :: pid(),
              info_pid = [] :: [pid()],
              try_again_delay = 200 :: non_neg_integer(),
              redirect_attempts = 10 :: non_neg_integer(),
@@ -116,13 +116,13 @@
 %%%===================================================================
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec start_link([addr()], [opt()]) -> {ok, server_ref()} | {error, term()}.
+-spec start_link([addr()], [opt()], pid(), pid()) -> {ok, server_ref()} | {error, term()}.
 %%
 %% Start the cluster process. Clients will be set up to the provided
 %% addresses and cluster information will be retrieved.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-start_link(Addrs, Opts) ->
-    gen_server:start_link(?MODULE, [Addrs, Opts], []).
+start_link(Addrs, Opts, ClientSup, User) ->
+    gen_server:start_link(?MODULE, {Addrs, Opts, ClientSup, User}, []).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec stop(server_ref()) -> ok.
@@ -219,8 +219,7 @@ connect_node(ServerRef, Addr) ->
 %%% gen_server callbacks
 %%%===================================================================
 
-init([Addrs, Opts]) ->
-    {ok, ClientSup} = ered_client_sup:start_link(),
+init({Addrs, Opts, ClientSup, User}) ->
     State = lists:foldl(
               fun ({info_pid, Val}, S)         -> S#st{info_pid = Val};
                   ({try_again_delay, Val}, S)  -> S#st{try_again_delay = Val};
@@ -231,9 +230,11 @@ init([Addrs, Opts]) ->
                   ({close_wait, Val}, S)       -> S#st{close_wait = Val};
                   (Other, _)                   -> error({badarg, Other})
               end,
-              #st{client_sup = ClientSup,
-                  slots      = create_lookup_table(0, [], <<>>)},
+              #st{controlling_process = User,
+                  client_sup          = ClientSup,
+                  slots               = create_lookup_table(0, [], <<>>)},
               Opts),
+    monitor(process, User),
     {ok, start_clients(Addrs, State)}.
 
 handle_call({command, Command, Key}, From, State) ->
@@ -474,6 +475,9 @@ handle_info({{'DOWN', Addr}, _Mon, process, Pid, ExitReason}, State)
                         up = sets:del_element(Addr, State#st.up),
                         queue_full = sets:del_element(Addr, State#st.queue_full),
                         reconnecting = sets:del_element(Addr, State#st.reconnecting)}};
+
+handle_info({'DOWN', _Mon, process, Pid, ExitReason}, State = #st{controlling_process = Pid}) ->
+    {stop, ExitReason, State};
 
 handle_info(_Ignore, State) ->
     {noreply, State}.
@@ -769,7 +773,7 @@ check_replica_count(State) ->
 start_client(Addr, State) ->
     {Host, Port} = Addr,
     Opts = [{info_pid, self()}, {use_cluster_id, true}] ++ State#st.client_opts,
-    {ok, Pid} = ered_client_sup:start_client(State#st.client_sup, Host, Port, Opts),
+    {ok, Pid} = ered_client_sup:start_client(State#st.client_sup, Host, Port, Opts, self()),
     _ = monitor(process, Pid, [{tag, {'DOWN', Addr}}]),
     Pid.
 

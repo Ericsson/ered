@@ -3,8 +3,8 @@
 %% External API for using connecting and sending commands to Redis cluster.
 
 %% API
--export([start_link/2,
-         stop/1,
+-export([connect_cluster/2, connect_client/3,
+         close/1,
          command/3, command/4,
          command_async/4,
          command_all/2, command_all/3,
@@ -27,6 +27,7 @@
 
 -type opt()        :: ered_cluster:opt().
 -type addr()       :: ered_cluster:addr().
+-type host()       :: ered_connection:host().
 -type server_ref() :: pid().
 -type command()    :: ered_command:command().
 -type reply()      :: ered_client:reply() | {error, unmapped_slot | client_down}.
@@ -39,7 +40,7 @@
 %%%===================================================================
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec start_link([addr()], [opt()]) -> {ok, server_ref()} | {error, term()}.
+-spec connect_cluster([addr()], [opt()]) -> {ok, server_ref()} | {error, term()}.
 %%
 %% Start the cluster handling
 %% process which will set up clients to the provided addresses and
@@ -47,16 +48,31 @@
 %% all Redis node clients are connected this process is ready to
 %% serve requests.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-start_link(Addrs, Opts) ->
-    ered_cluster:start_link(Addrs, Opts).
+connect_cluster(Addrs, Opts) ->
+    try ered_cluster_sup:start_child() of
+        {ok, ClusterSup} ->
+            {ok, ClientSup} = ered_dyn_cluster_sup:start_client_sup(ClusterSup),
+            {ok, ClusterPid} = ered_dyn_cluster_sup:start_cluster_mgr(ClusterSup, Addrs, Opts, ClientSup, self()),
+            {ok, ClusterPid}
+    catch exit:{noproc, _} ->
+            {error, ered_not_started}
+    end.
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec stop(server_ref()) -> ok.
+-spec connect_client(host(), inet:port_number(), [opt()]) -> {ok, client_ref()} | {error, term()}.
+%%
+%% Open a single client connection to a Redis node.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+connect_client(Host, Port, Opts) ->
+    ered_client:connect(Host, Port, Opts).
+
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec close(server_ref()) -> ok.
 %%
 %% Stop the cluster handling
 %% process and in turn disconnect and stop all clients.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-stop(ServerRef) ->
+close(ServerRef) ->
     ered_cluster:stop(ServerRef).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
