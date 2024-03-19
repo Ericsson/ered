@@ -9,8 +9,9 @@
 
 %% API
 
--export([start_link/3,
-         stop/1, deactivate/1, reactivate/1,
+-export([start_link/3, start_link/4,
+         connect/3, close/1,
+         deactivate/1, reactivate/1,
          command/2, command/3,
          command_async/3]).
 
@@ -52,6 +53,7 @@
         {
          connect_loop_pid = none,
          connection_pid = none,
+         controlling_process :: pid(),
          last_status = none,
 
          waiting = q_new() :: command_queue(),
@@ -122,20 +124,38 @@
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec start_link(host(), inet:port_number(), [opt()]) ->
           {ok, server_ref()} | {error, term()}.
+-spec start_link(host(), inet:port_number(), [opt()], pid()) ->
+          {ok, server_ref()} | {error, term()}.
 %%
 %% Start the client process. Create a connection towards the provided
-%% address.
+%% address. Typically called by a supervisor. Use connect/3 instead.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 start_link(Host, Port, Opts) ->
-    gen_server:start_link(?MODULE, [Host, Port, Opts], []).
+    start_link(Host, Port, Opts, self()).
+start_link(Host, Port, Opts, User) ->
+    gen_server:start_link(?MODULE, {Host, Port, Opts, User}, []).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec stop(server_ref()) -> ok.
+-spec connect(host(), inet:port_number(), [opt()]) ->
+          {ok, server_ref()} | {error, term()}.
+%%
+%% Create a standalone connection supervised by the ered application.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+connect(Host, Port, Opts) ->
+    try ered_client_sup:start_client(ered_standalone_sup, Host, Port, Opts, self()) of
+        {ok, ClientPid} ->
+            {ok, ClientPid}
+    catch exit:{noproc, _} ->
+            {error, ered_not_started}
+    end.
+
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec close(server_ref()) -> ok.
 %%
 %% Stop the client process. Cancel all commands in queue. Take down
 %% connection.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-stop(ServerRef) ->
+close(ServerRef) ->
     gen_server:stop(ServerRef).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -187,7 +207,7 @@ command_async(ServerRef, Command, CallbackFun) ->
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
-init([Host, Port, OptsList]) ->
+init({Host, Port, OptsList, User}) ->
     Opts = lists:foldl(
              fun({connection_opts, Val}, S)   -> S#opts{connection_opts = Val};
                 ({max_waiting, Val}, S)       -> S#opts{max_waiting = Val};
@@ -203,11 +223,12 @@ init([Host, Port, OptsList]) ->
              end,
              #opts{host = Host, port = Port},
              OptsList),
-
+    monitor(process, User),
     process_flag(trap_exit, true),
     Pid = self(),
     ConnectPid = spawn_link(fun() -> connect(Pid, Opts) end),
     {ok, start_node_down_timer(#st{opts = Opts,
+                                   controlling_process = User,
                                    connect_loop_pid = ConnectPid})}.
 
 handle_call({command, Command}, From, State) ->
@@ -277,8 +298,14 @@ handle_info({timeout, TimerRef, node_down}, State) when TimerRef == State#st.nod
 handle_info({timeout, _TimerRef, _Msg}, State) ->
     {noreply, State};
 
+handle_info({'DOWN', _Mon, process, Pid, ExitReason}, State = #st{controlling_process = Pid}) ->
+    {stop, ExitReason, State};
+
 handle_info({'EXIT', _From, Reason}, State) ->
-    {stop, Reason, State}.
+    {stop, Reason, State};
+
+handle_info(_Ignore, State) ->
+    {noreply, State}.
 
 terminate(Reason, State) ->
     exit(State#st.connect_loop_pid, kill),
