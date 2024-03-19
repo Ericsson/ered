@@ -235,6 +235,7 @@ init({Addrs, Opts, ClientSup, User}) ->
                   slots               = create_lookup_table(0, [], <<>>)},
               Opts),
     monitor(process, User),
+    process_flag(trap_exit, true),
     {ok, start_clients(Addrs, State)}.
 
 handle_call({command, Command, Key}, From, State) ->
@@ -479,13 +480,16 @@ handle_info({{'DOWN', Addr}, _Mon, process, Pid, ExitReason}, State)
 handle_info({'DOWN', _Mon, process, Pid, ExitReason}, State = #st{controlling_process = Pid}) ->
     {stop, ExitReason, State};
 
+handle_info({'EXIT', _From, Reason}, State) ->
+    {stop, Reason, State};
+
 handle_info(_Ignore, State) ->
     {noreply, State}.
 
-terminate(_Reason, State) ->
-    [ered_client_sup:stop_client(State#st.client_sup, Pid)
-     || Pid <- maps:values(State#st.nodes)],
-    ok.
+terminate(Reason, State) ->
+    catch [ered_client_sup:stop_client(State#st.client_sup, Pid)
+           || Pid <- maps:values(State#st.nodes)],
+    ered_info_msg:cluster_stopped(State#st.info_pid, Reason).
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.

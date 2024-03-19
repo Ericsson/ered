@@ -318,6 +318,9 @@ Messages about the cluster as a whole:
   mapping. The `response` is either an error or the atom `empty` if the CLUSTER
   SLOTS returned an empty list, which is treated like an error.
 
+* `#{msg_type := cluster_stopped, reason := any()}` when the ered cluster
+  instance is closing down.
+
 Messages about the connection to a specific node are in the following form:
 
 ```Erlang

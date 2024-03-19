@@ -6,7 +6,8 @@
          slot_map_updated/4,
          cluster_slots_error_response/3,
          cluster_ok/1,
-         cluster_nok/2
+         cluster_nok/2,
+         cluster_stopped/2
         ]).
 
 
@@ -54,7 +55,10 @@
         #{msg_type := cluster_ok} |
 
         #{msg_type := cluster_not_ok,
-          reason := master_down | master_queue_full | pending | not_all_slots_covered | too_few_replicas}.
+          reason := master_down | master_queue_full | pending | not_all_slots_covered | too_few_replicas} |
+
+        #{msg_type := cluster_stopped,
+          reason := any()}.
 
 
 -type addr() :: ered_client:addr().
@@ -135,6 +139,14 @@ cluster_nok(Reason, Pids) ->
     send_info(#{msg_type => cluster_not_ok,
                 reason => Reason},
               Pids).
+
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec cluster_stopped([pid()], any()) -> ok.
+%%
+%% The cluster instance is terminating.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+cluster_stopped(Pids, Reason) ->
+    send_info(#{msg_type => cluster_stopped, reason => Reason}, Pids).
 
 %%%===================================================================
 %%% Internal functions
