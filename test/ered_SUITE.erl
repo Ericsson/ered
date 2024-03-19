@@ -9,6 +9,7 @@ all() ->
      t_command_all,
      t_command_client,
      t_command_pipeline,
+     t_cluster_crash,
      t_client_crash,
      t_client_killed,
      t_scan_delete_keys,
@@ -199,6 +200,13 @@ t_command_pipeline(_) ->
     R = start_cluster(),
     Cmds = [[<<"SET">>, <<"{k}1">>, <<"1">>], [<<"SET">>, <<"{k}2">>, <<"2">>]],
     {ok, [<<"OK">>, <<"OK">>]} = ered:command(R, Cmds, <<"k">>),
+    no_more_msgs().
+
+
+t_cluster_crash(_) ->
+    R = start_cluster(),
+    exit(R, crash),
+    ?MSG(#{msg_type := cluster_stopped, reason := crash}),
     no_more_msgs().
 
 
@@ -791,6 +799,7 @@ t_new_cluster_master(_) ->
     %% Verify that the cluster is still ok
     {ok, Data} = ered:command(R, [<<"GET">>, Key], Key),
     ered:close(R),
+    ?MSG(#{msg_type := cluster_stopped, reason := normal}),
     no_more_msgs().
 
 t_ask_redirect(_) ->
