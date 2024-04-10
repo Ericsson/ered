@@ -1,4 +1,4 @@
-name: Redis compatibility testing
+name: DB compatibility testing
 
 on: [push, pull_request]
 
@@ -6,6 +6,32 @@ permissions:
   contents: read
 
 jobs:
+  valkey:
+    name: Valkey ${{ matrix.valkey-version }}
+    runs-on: ubuntu-20.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - valkey-version: 7.2.5
+    steps:
+      - uses: actions/checkout@9bb56186c3b09b4f86b1c65136769dd318469633 # v4.1.2
+      - name: Install redis-cli required by common tests
+        uses: awalsh128/cache-apt-pkgs-action@a6c3917cc929dd0345bfb2d3feaf9101823370ad # v1.4.2
+        with:
+          packages: redis-server
+          version: 1.0
+      - name: Install Erlang/OTP
+        run: |
+          DEB_NAME="esl-erlang_25.2.3-3~ubuntu~focal_amd64.deb"
+          curl -f https://packages.erlang-solutions.com/erlang/debian/pool/$DEB_NAME -o $DEB_NAME
+          sudo dpkg --install $DEB_NAME
+      - name: Build and run common tests
+        env:
+          REDIS_DOCKER_IMAGE: valkey/valkey:${{ matrix.valkey-version }}
+        run: |
+          rebar3 ct
+
   redis:
     name: Redis ${{ matrix.redis-version }}
     runs-on: ubuntu-20.04
