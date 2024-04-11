@@ -39,8 +39,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - redis-version: 7.0.9
-          - redis-version: 6.2.11
+          - redis-version: 7.2.4 # Last open source release
+          - redis-version: 7.0.15
+          - redis-version: 6.2.14
     steps:
       - uses: actions/checkout@9bb56186c3b09b4f86b1c65136769dd318469633 # v4.1.2
       - name: Install redis-cli required by common tests
