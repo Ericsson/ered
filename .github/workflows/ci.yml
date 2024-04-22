@@ -11,13 +11,18 @@ permissions:
 
 jobs:
   fmt:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@9bb56186c3b09b4f86b1c65136769dd318469633 # v4.1.2
       - name: Prepare
         run: |
           sudo apt update
           sudo apt install emacs-nox
+      - name: Install Erlang/OTP
+        uses: erlef/setup-beam@2f0cc07b4b9bea248ae098aba9e1a8a1de5ec24c # v1.17.5
+        with:
+          otp-version: '26.2.4'
+          rebar3-version: '3.23.0'
       - name: erlang-formatter
         run: |
           rebar3 as check fmt
@@ -30,20 +35,22 @@ jobs:
           fi
 
   build:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
-        include: # See https://www.erlang-solutions.com/downloads/
-          - otp-version: 25.0.3
-          - otp-version: 24.3.3
+        include:
+          - otp-version: '27.0-rc3'
+          - otp-version: '26.2.4'
+          - otp-version: '25.3.2.11'
+          - otp-version: '24.3.4.17'
     steps:
       - uses: actions/checkout@9bb56186c3b09b4f86b1c65136769dd318469633 # v4.1.2
       - name: Install Erlang/OTP
-        run: |
-          DEB_NAME="esl-erlang_${{ matrix.otp-version }}-1~ubuntu~focal_amd64.deb"
-          curl -f https://packages.erlang-solutions.com/erlang/debian/pool/$DEB_NAME -o $DEB_NAME
-          sudo dpkg --install $DEB_NAME
+        uses: erlef/setup-beam@2f0cc07b4b9bea248ae098aba9e1a8a1de5ec24c # v1.17.5
+        with:
+          otp-version: ${{ matrix.otp-version }}
+          rebar3-version: '3.23.0'
       - name: Install redis-cli
         # Required by ct
         run: |

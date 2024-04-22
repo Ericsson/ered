@@ -8,7 +8,7 @@ permissions:
 jobs:
   valkey:
     name: Valkey ${{ matrix.valkey-version }}
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
@@ -22,10 +22,10 @@ jobs:
           packages: redis-server
           version: 1.0
       - name: Install Erlang/OTP
-        run: |
-          DEB_NAME="esl-erlang_25.2.3-3~ubuntu~focal_amd64.deb"
-          curl -f https://packages.erlang-solutions.com/erlang/debian/pool/$DEB_NAME -o $DEB_NAME
-          sudo dpkg --install $DEB_NAME
+        uses: erlef/setup-beam@2f0cc07b4b9bea248ae098aba9e1a8a1de5ec24c # v1.17.5
+        with:
+          otp-version: '26.2.4'
+          rebar3-version: '3.23.0'
       - name: Build and run common tests
         env:
           REDIS_DOCKER_IMAGE: valkey/valkey:${{ matrix.valkey-version }}
@@ -34,7 +34,7 @@ jobs:
 
   redis:
     name: Redis ${{ matrix.redis-version }}
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
@@ -50,10 +50,10 @@ jobs:
           packages: redis-server
           version: 1.0
       - name: Install Erlang/OTP
-        run: |
-          DEB_NAME="esl-erlang_25.2.3-3~ubuntu~focal_amd64.deb"
-          curl -f https://packages.erlang-solutions.com/erlang/debian/pool/$DEB_NAME -o $DEB_NAME
-          sudo dpkg --install $DEB_NAME
+        uses: erlef/setup-beam@2f0cc07b4b9bea248ae098aba9e1a8a1de5ec24c # v1.17.5
+        with:
+          otp-version: '26.2.4'
+          rebar3-version: '3.23.0'
       - name: Build and run common tests
         env:
           REDIS_DOCKER_IMAGE: redis:${{ matrix.redis-version }}
