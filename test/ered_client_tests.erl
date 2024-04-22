@@ -359,9 +359,17 @@ auth_fail_t() ->
     {init_error, [<<"WRONGPASS", _/binary>>]} = expect_connection_down(Client),
     no_more_msgs().
 
+-if(?OTP_RELEASE >= 26).
+%% OTP >= 26 uses an empty hostname in the address lookup, which fails. See OTP-18543.
+-define(empty_string_host_reason, nxdomain).
+-else.
+%% OTP < 26 sees an empty hostname as a bad argument.
+-define(empty_string_host_reason, {'EXIT',badarg}).
+-endif.
+
 empty_string_host_t() ->
     {ok,Client} = ered_client:start_link("", 30000, [{info_pid, self()}]),
-    {connect_error, {'EXIT',badarg}} = expect_connection_down(Client),
+    {connect_error, ?empty_string_host_reason} = expect_connection_down(Client),
     no_more_msgs().
 
 bad_host_t() ->
