@@ -26,7 +26,7 @@ Usage by example
 4> ered:command_async(Pid, [<<"GET">>, <<"mykey">>], <<"mykey">>, fun(Reply) -> io:format("Reply: ~p~n", [Reply]) end).
 ok
 Reply: {ok,<<"42">>}
-5> ered:stop(Pid).
+5> ered:close(Pid).
 ok
 ```
 
@@ -54,7 +54,7 @@ For options, see [Options](#options) below.
 ### `close/1`
 
 ```Erlang
-stop(server_ref()) -> ok.
+close(server_ref()) -> ok.
 ```
 
 Stop the main process. This will also stop the cluster handling

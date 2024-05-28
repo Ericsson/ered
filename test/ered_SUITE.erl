@@ -234,7 +234,7 @@ t_client_crash(_) ->
     ?MSG(#{addr := {"127.0.0.1", Port}, master := true, msg_type := client_stopped}),
     ?MSG({'DOWN', _Mon, process, Pid0, crash}),
     ?MSG(#{msg_type := cluster_not_ok, reason := master_down}),
-    %% Command immediately when the client process is dead. The cluster process
+    %% Send command when the client process is dead. The cluster process
     %% starts a new client synchronously, so the command succeeds. There's a
     %% possible race condition here though. The cluster process may receive the
     %% command before it receives the 'DOWN' message from the dead client and
@@ -285,7 +285,7 @@ t_client_killed(_) ->
     %% We don't get 'cluster_not_ok' here, because ered_cluster relies on a
     %% message from ered_client. Using a monitor instead would be more reliable.
 
-    %% Command immediately when the client process is dead. The cluster process
+    %% Send command when the client process is dead. The cluster process
     %% starts a new client synchronously, so the command succeeds. There's a
     %% possible race condition here though. The cluster process may receive the
     %% command before it receives the 'DOWN' message from the dead client and
