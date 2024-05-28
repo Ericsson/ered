@@ -43,7 +43,7 @@ start_link([addr()], [opt()]) -> {ok, server_ref()} | {error, term()}.
 Start the main process. This will also start the cluster handling
 process which will set up clients to the provided addresses and
 fetch the cluster slot map. Once there is a complete slot map and
-all Redis node clients are connected this process is ready to
+all Valkey node clients are connected this process is ready to
 serve requests.
 
 One or more addresses, `addr() :: {inet:socket_address() | inet:hostname(),
@@ -114,7 +114,7 @@ command_client_async(client_ref(), command(), reply_fun()) -> ok.
 
 Send command to a specific client in asynchronous fashion. The
 provided callback function will be called with the reply. Note that
-the callback function will executing in the redis client process and
+the callback function will executing in the client process and
 should not hang or perform any lengthy task.
 
 ### `get_clients/1`
@@ -219,7 +219,7 @@ Options passed to `start_link/2` as the options `{client_opts, [...]}`.
 
 * `{resp_version, 2..3}`
 
-  What RESP (REdis Serialization Protocol) version to use. Default 3.
+  What RESP (the serialization protocol) version to use. Default 3.
 
 * `{node_down_timeout, non_neg_integer()}`
 
