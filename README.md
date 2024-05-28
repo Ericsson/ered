@@ -147,7 +147,7 @@ used.
 Options
 -------
 
-The following options can be passed to `connect/2`:
+The following options can be passed to `connect_cluster/2`:
 
 * `{try_again_delay, non_neg_integer()}`
 
@@ -189,7 +189,7 @@ The following options can be passed to `connect/2`:
 
 ### Client options
 
-Options passed to `connect/2` as the options `{client_opts, [...]}`.
+Options passed to `connect_cluster/2` as the options `{client_opts, [...]}`.
 
 * `{connection_opts, [ered_connection:opt()]}`
 
