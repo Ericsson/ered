@@ -19,7 +19,7 @@ jobs:
           sudo apt update
           sudo apt install emacs-nox
       - name: Install Erlang/OTP
-        uses: erlef/setup-beam@a6e26b22319003294c58386b6f25edbc7336819a # v1.18.0
+        uses: erlef/setup-beam@b9c58b0450cd832ccdb3c17cc156a47065d2114f # v1.18.1
         with:
           otp-version: '26.2.4'
           rebar3-version: '3.23.0'
@@ -47,7 +47,7 @@ jobs:
     steps:
       - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
       - name: Install Erlang/OTP
-        uses: erlef/setup-beam@a6e26b22319003294c58386b6f25edbc7336819a # v1.18.0
+        uses: erlef/setup-beam@b9c58b0450cd832ccdb3c17cc156a47065d2114f # v1.18.1
         with:
           otp-version: ${{ matrix.otp-version }}
           rebar3-version: '3.23.0'
