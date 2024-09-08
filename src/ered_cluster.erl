@@ -31,6 +31,11 @@
              cluster_state = nok :: ok | nok,
              %% Supervisor for our client processes
              client_sup :: pid(),
+             %% The initial configured nodes, used as fallback if no nodes are
+             %% reachable. If the init nodes are hostnames that map to IP
+             %% addresses and all IP addresses of the cluster have changed at
+             %% the same time, then this approach allows the client to recover.
+             initial_nodes = [] :: [addr()],
              %% Mapping from address to client for all known clients
              nodes = #{} :: #{addr() => pid()},
              %% Clients in connected state
@@ -156,7 +161,8 @@ init([Addrs, Opts]) ->
                   ({close_wait, Val}, S)       -> S#st{close_wait = Val};
                   (Other, _)                   -> error({badarg, Other})
               end,
-              #st{client_sup = ClientSup},
+              #st{client_sup = ClientSup,
+                  initial_nodes = Addrs},
               Opts),
     {ok, start_clients(Addrs, State)}.
 
@@ -406,8 +412,11 @@ start_periodic_slot_info_request(PreferredNodes, State) ->
         none ->
             case pick_node(PreferredNodes, State) of
                 none ->
-                    %% try again when a node comes up
-                    State;
+                    %% All nodes are unavailable. Connect to the init nodes to
+                    %% see if they are available. If they are hostnames that map
+                    %% to IP addresses and all IP addresses of the cluster have
+                    %% changed, then this helps us rediscover the cluster.
+                    start_clients(State#state.initial_nodes, State);
                 Node ->
                     send_slot_info_request(Node, State),
                     Tref = erlang:start_timer(
