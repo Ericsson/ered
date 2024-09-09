@@ -416,7 +416,7 @@ start_periodic_slot_info_request(PreferredNodes, State) ->
                     %% see if they are available. If they are hostnames that map
                     %% to IP addresses and all IP addresses of the cluster have
                     %% changed, then this helps us rediscover the cluster.
-                    start_clients(State#state.initial_nodes, State);
+                    start_clients(State#st.initial_nodes, State);
                 Node ->
                     send_slot_info_request(Node, State),
                     Tref = erlang:start_timer(
