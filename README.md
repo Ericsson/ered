@@ -184,7 +184,7 @@ The following options can be passed to `start_link/2`:
   If non-zero, a check that all primary nodes converge and report identical slot
   maps, is performed before the cluster is considered OK and the 'cluster_ok'
   info message is sent. The timeout is how long to wait for replies from all the
-  master nodes. Default 1000. Set to zero to disable this check.
+  primary nodes. Default 1000. Set to zero to disable this check.
 
 * `{convergence_check_delay, timeout()}`
 
