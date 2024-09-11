@@ -1,6 +1,6 @@
 -module(ered_lib).
 
--export([
+-export([slotmap_sort/1,
          slotmap_master_slots/1,
          slotmap_master_nodes/1,
          slotmap_all_nodes/1,
@@ -23,6 +23,17 @@
 %%%===================================================================
 %%% API
 %%%===================================================================
+
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec slotmap_sort(slot_map()) -> slot_map().
+%%
+%% Sort a slotmap to be able to compare two slot maps deterministically. Sorts
+%% the shards by slot range and, within each shard, sorts the replicas by their
+%% network information (IP and port).
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+slotmap_sort(ClusterSlotsReply) ->
+    lists:sort([[Start, End, Primary | lists:sort(Replicas)]
+                || [Start, End, Primary | Replicas] <- ClusterSlotsReply]).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec slotmap_master_slots(slot_map()) -> [{integer(), integer(), addr()}].

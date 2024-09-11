@@ -27,6 +27,14 @@
 %%% Definitions
 %%%===================================================================
 
+%% A check that all nodes return the same CLUSTER SLOTS response.
+-type convergence_check() :: ok | nok |
+                             %% Scheduled: Timer ref to start the check.
+                             {scheduled, reference()} |
+                             %% Ongoing: Nodes still to confirm and timer ref
+                             %% for time limit.
+                             {ongoing, addr_set(), reference()}.
+
 -record(st, {
              cluster_state = nok :: ok | nok,
              %% Supervisor for our client processes
@@ -56,14 +64,16 @@
              slot_map = [],
              slot_map_version = 0,
              slot_timer_ref = none,
+             convergence_check = nok :: convergence_check(),
 
              info_pid = [] :: [pid()],
              update_delay = 1000, % 1s delay between slot map update requests
              client_opts = [],
              update_slot_wait = 500,
              min_replicas = 0,
+             convergence_check_timeout = 1000,
+             convergence_check_delay = 5000,
              close_wait = 10000
-
             }).
 
 
@@ -83,6 +93,13 @@
         %% For each Redis master node, the min number of replicas for the cluster
         %% to be considered OK.
         {min_replicas, non_neg_integer()} |
+        %% If non-zero, a check that all nodes converge and report identical
+        %% slot maps is performed before reporting 'cluster_ok'.
+        {convergence_check_timeout, timeout()} |
+        %% If non-zero, a check that all nodes converge and report identical
+        %% slot maps is performed even when the state is already 'cluster_ok',
+        %% but only after the specified delay.
+        {convergence_check_delay, timeout()} |
         %% How long to delay the closing of clients that are no longer part of
         %% the slot map. The delay is needed so that messages sent to the client
         %% are not lost in transit.
@@ -158,6 +175,10 @@ init([Addrs, Opts]) ->
                   ({update_slot_wait, Val}, S) -> S#st{update_slot_wait = Val};
                   ({client_opts, Val}, S)      -> S#st{client_opts = Val};
                   ({min_replicas, Val}, S)     -> S#st{min_replicas = Val};
+                  ({convergence_check_timeout, Val}, S) ->
+                      S#st{convergence_check_timeout = Val};
+                  ({convergence_check_delay, Val}, S) ->
+                      S#st{convergence_check_delay = Val};
                   ({close_wait, Val}, S)       -> S#st{close_wait = Val};
                   (Other, _)                   -> error({badarg, Other})
               end,
@@ -271,7 +292,7 @@ handle_info({slot_info, Version, Response, FromAddr}, State) ->
             ered_info_msg:cluster_slots_error_response(empty, FromAddr, State#st.info_pid),
             {noreply, State};
         {ok, ClusterSlotsReply} ->
-            NewMap = lists:sort(ClusterSlotsReply),
+            NewMap = ered_lib:slotmap_sort(ClusterSlotsReply),
             case NewMap == State#st.slot_map of
                 true ->
                     {noreply, update_cluster_state(State)};
@@ -299,12 +320,36 @@ handle_info({slot_info, Version, Response, FromAddr}, State) ->
 
                     %% open new clients
                     State1 = start_clients(Nodes, State),
+
+                    cancel_convergence_check(State1),
                     State2 = State1#st{slot_map_version = Version + 1,
                                        slot_map = NewMap,
+                                       convergence_check = nok,
                                        masters = MasterNodes,
                                        closing = NewClosing},
                     {noreply, update_cluster_state(State2)}
             end
+    end;
+
+handle_info({converged, Result, FromAddr, Version},
+            State = #st{convergence_check = {ongoing, Pending, Timeout},
+                        slot_map_version = Version}) ->
+    case Result of
+        true ->
+            Pending1 = sets:del_element(FromAddr, Pending),
+            case sets:is_empty(Pending1) of
+                true ->
+                    cancel_convergence_check(State),
+                    State1 = State#st{convergence_check = ok},
+                    {noreply, update_cluster_state(State1)};
+                false ->
+                    State1 = State#st{convergence_check = {ongoing, Pending1, Timeout}},
+                    {noreply, update_cluster_state(State1)}
+            end;
+        false ->
+            cancel_convergence_check(State),
+            State1 = State#st{convergence_check = nok},
+            {noreply, update_cluster_state(State1)}
     end;
 
 handle_info({timeout, TimerRef, {time_to_update_slots,PreferredNodes}}, State) ->
@@ -318,6 +363,16 @@ handle_info({timeout, TimerRef, {time_to_update_slots,PreferredNodes}}, State) -
             {noreply, State}
     end;
 
+handle_info({timeout, TimerRef, start_convergence_check},
+            State = #st{convergence_check = {scheduled, TimerRef}}) ->
+    {noreply, start_convergence_check(State)};
+
+handle_info({timeout, TimerRef, cancel_convergence_check},
+            State = #st{convergence_check = {scheduled, TimerRef}}) ->
+    cancel_convergence_check(State),
+    State1 = State#st{convergence_check = nok},
+    {noreply, update_cluster_state(State1)};
+
 handle_info({timeout, TimerRef, {close_clients, Remove}}, State) ->
     %% make sure they are still closing and mapped to this Timer
     ToCloseNow = [Addr ||
@@ -329,7 +384,10 @@ handle_info({timeout, TimerRef, {close_clients, Remove}}, State) ->
     %% remove from nodes and closing map
     {noreply, State#st{nodes = maps:without(ToCloseNow, State#st.nodes),
                        up = sets:subtract(State#st.up, new_set(ToCloseNow)),
-                       closing = maps:without(ToCloseNow, State#st.closing)}}.
+                       closing = maps:without(ToCloseNow, State#st.closing)}};
+
+handle_info(_Ignored, State) ->
+    {noreply, State}.
 
 terminate(_Reason, State) ->
     [ered_client_sup:stop_client(State#st.client_sup, Pid)
@@ -383,11 +441,23 @@ update_cluster_state(State) ->
 
 update_cluster_state(ClusterStatus, State) ->
     case {ClusterStatus, State#st.cluster_state} of
-        {ok, nok} ->
+        {ok, nok} when State#st.convergence_check =:= ok ->
             ered_info_msg:cluster_ok(State#st.info_pid),
             State1 = stop_periodic_slot_info_request(State),
             State1#st{cluster_state = ok};
+        {ok, nok} ->
+            State1 = stop_periodic_slot_info_request(State),
+            case State1#st.convergence_check of
+                {ongoing, _, _} ->
+                    State1;
+                _Otherwise ->
+                    start_convergence_check(State1)
+            end;
+        {ok, ok} when State#st.convergence_check =:= nok ->
+            State1 = stop_periodic_slot_info_request(State),
+            schedule_convergence_check(State1);
         {ok, ok} ->
+            %% Convergence check is ok or scheduled or ongoing.
             stop_periodic_slot_info_request(State);
         {pending, _} ->
             State;
@@ -444,6 +514,50 @@ send_slot_info_request(Addr, State) ->
     Pid = self(),
     Cb = fun(Answer) -> Pid ! {slot_info, State#st.slot_map_version, Answer, Addr} end,
     ered_client:command_async(Node, [<<"CLUSTER">>, <<"SLOTS">>], Cb).
+
+%% Schedules a check that all master nodes report identical slot maps. Used
+%% after a slot map change when the cluster state is already 'cluster_ok'.
+schedule_convergence_check(State = #st{convergence_check_delay = 0}) ->
+    %% Scheduling disabled. Mark convergence as being ok.
+    update_cluster_state(State#st{convergence_check = ok});
+schedule_convergence_check(State) ->
+    cancel_convergence_check(State),
+    TimerRef = erlang:start_timer(State#st.convergence_check_delay,
+                                  self(), start_convergence_check),
+    State#st{convergence_check = {scheduled, TimerRef}}.
+
+%% Starts a check that all master nodes report identical slot maps.
+start_convergence_check(State = #st{convergence_check_timeout = 0}) ->
+    %% Check disabled. Mark convergence as being ok.
+    update_cluster_state(State#st{convergence_check = ok});
+start_convergence_check(State) ->
+    cancel_convergence_check(State),
+    AddrSet = State#st.masters,
+    ClusterPid = self(),
+    Cmd = [<<"CLUSTER">>, <<"SLOTS">>],
+    Version = State#st.slot_map_version,
+    Expected = ered_lib:slotmap_master_slots(State#st.slot_map),
+    lists:foreach(fun (Addr) ->
+                          ClientPid = maps:get(Addr, State#st.nodes),
+                          Cb = fun ({ok, Reply}) ->
+                                       IsMatch = ered_lib:slotmap_master_slots(Reply) =:= Expected,
+                                       ClusterPid ! {converged, IsMatch, Addr, Version};
+                                   (_) ->
+                                       ignore
+                               end,
+                          ered_client:command_async(ClientPid, Cmd, Cb)
+                  end,
+                  sets:to_list(AddrSet)),
+    TimerRef = erlang:start_timer(State#st.convergence_check_timeout,
+                                  ClusterPid, cancel_convergence_check),
+    State#st{convergence_check = {ongoing, AddrSet, TimerRef}}.
+
+cancel_convergence_check(#st{convergence_check = {scheduled, TimerRef}}) ->
+    erlang:cancel_timer(TimerRef, [{async, true}]);
+cancel_convergence_check(#st{convergence_check = {ongoing, _, TimerRef}}) ->
+    erlang:cancel_timer(TimerRef, [{async, true}]);
+cancel_convergence_check(_State) ->
+    ok.
 
 %% Pick a random available node, preferring the ones in PreferredNodes if any of
 %% them is available.

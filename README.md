@@ -179,6 +179,21 @@ The following options can be passed to `start_link/2`:
   For each primary node, the min number of replicas for the cluster
   to be considered OK. Default 0.
 
+* `{convergence_check_timeout, timeout()}`
+
+  If non-zero, a check that all primary nodes converge and report identical slot
+  maps, is performed before the cluster is considered OK and the 'cluster_ok'
+  info message is sent. The timeout is how long to wait for replies from all the
+  primary nodes. Default 1000. Set to zero to disable this check.
+
+* `{convergence_check_delay, timeout()}`
+
+  If non-zero, a check that all primary nodes converge and report identical slot
+  maps, is performed after a slot map update when the cluster is already
+  considered OK, but only after the specified delay. Default 5000. Set to zero
+  to disable this check. This option doesn't affect the convergence check
+  performed when the cluster is not yet considered OK.
+
 * `{close_wait, non_neg_integer()}`
 
   How long to delay the closing of clients that are no longer part of the slot
