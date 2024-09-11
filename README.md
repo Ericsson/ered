@@ -181,18 +181,18 @@ The following options can be passed to `start_link/2`:
 
 * `{convergence_check_timeout, timeout()}`
 
-  If non-zero, a check that all master nodes converge and report identical slot
-  maps, is performed before changing status from 'cluster_not_ok' to
-  'cluster_ok'. The timeout is how long to wait for replies from all the master
-  nodes. Default 1000. Set to zero to disable this check.
+  If non-zero, a check that all primary nodes converge and report identical slot
+  maps, is performed before the cluster is considered OK and the 'cluster_ok'
+  info message is sent. The timeout is how long to wait for replies from all the
+  master nodes. Default 1000. Set to zero to disable this check.
 
 * `{convergence_check_delay, timeout()}`
 
-  If non-zero, a check that all master nodes converge and report identical slot
-  maps, is performed even when the status is already 'cluster_ok', but only
-  after the specified delay. Default 5000. Set to zero to disable this check.
-  This option doesn't affect the convergence check when the cluster status is
-  'cluster_not_ok'.
+  If non-zero, a check that all primary nodes converge and report identical slot
+  maps, is performed after a slot map update when the cluster is already
+  considered OK, but only after the specified delay. Default 5000. Set to zero
+  to disable this check. This option doesn't affect the convergence check
+  performed when the cluster is not yet considered OK.
 
 * `{close_wait, non_neg_integer()}`
 
