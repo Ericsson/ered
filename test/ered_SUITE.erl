@@ -26,6 +26,7 @@ all() ->
      t_kill_client,
      t_new_cluster_master,
      t_ask_redirect,
+     t_missing_slot,
      t_client_map
     ].
 
@@ -333,8 +334,8 @@ t_hard_failover(_) ->
     %% new slotmap when old master comes up as replica
     ?MSG(#{msg_type := slot_map_updated}, 10000),
 
-    %% a client is already connected to the node, so cluster is ok immediately
-    ?MSG(#{msg_type := cluster_ok}),
+    %% OK when cluster convergence check is done
+    ?MSG(#{msg_type := cluster_ok}, 5000),
 
     %% Ignore any previous failed reconnect attempts
     ?OPTIONAL_MSG(#{msg_type := connect_error, addr := {"127.0.0.1", Port}, reason := econnrefused}),
@@ -906,6 +907,32 @@ t_ask_redirect(_) ->
 
     %% wait a bit to let the config spread to all nodes
     timer:sleep(5000),
+    ok.
+
+%% Remove a slot. Make sure that we don't get 'cluster_ok' until the slot is
+%% covered again. Redis =< 7 has a bug that gossips back a deleted slot to the
+%% last seen owner of the slot.
+t_missing_slot(_) ->
+    R = start_cluster(),
+    Key = <<"foo">>,
+    Slot = ered_lib:hash(Key),
+    Port = get_master_from_key(R, Key),
+    Addr = {"127.0.0.1", Port},
+    AddrToPid = ered:get_addr_to_client_map(R),
+    Client = maps:get(Addr, AddrToPid),
+
+    cmd_log("redis-cli -p " ++ integer_to_list(Port) ++ " CLUSTER DELSLOTS " ++ integer_to_list(Slot)),
+    ered:update_slots(R, Client),
+    ?MSG(#{msg_type := cluster_not_ok, reason := not_all_slots_covered}),
+    timer:sleep(6000),
+    ?MSG(#{msg_type := slot_map_updated}),
+    ?OPTIONAL_MSG(#{msg_type := slot_map_updated}),
+    ?OPTIONAL_MSG(#{msg_type := slot_map_updated}),
+    no_more_msgs(),
+    cmd_log("redis-cli -p " ++ integer_to_list(Port) ++ " CLUSTER ADDSLOTS " ++ integer_to_list(Slot)),
+    ?MSG(#{msg_type := cluster_ok}, 5000),
+    ?OPTIONAL_MSG(#{msg_type := slot_map_updated}),
+    no_more_msgs(),
     ok.
 
 t_client_map(_) ->

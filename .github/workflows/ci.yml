@@ -13,13 +13,13 @@ jobs:
   fmt:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@a5ac7e51b41094c92402da3b24376905380afc29 # v4.1.6
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
       - name: Prepare
         run: |
           sudo apt update
           sudo apt install emacs-nox
       - name: Install Erlang/OTP
-        uses: erlef/setup-beam@2f0cc07b4b9bea248ae098aba9e1a8a1de5ec24c # v1.17.5
+        uses: erlef/setup-beam@b9c58b0450cd832ccdb3c17cc156a47065d2114f # v1.18.1
         with:
           otp-version: '26.2.4'
           rebar3-version: '3.23.0'
@@ -45,9 +45,9 @@ jobs:
           - otp-version: '25.3.2.11'
           - otp-version: '24.3.4.17'
     steps:
-      - uses: actions/checkout@a5ac7e51b41094c92402da3b24376905380afc29 # v4.1.6
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
       - name: Install Erlang/OTP
-        uses: erlef/setup-beam@2f0cc07b4b9bea248ae098aba9e1a8a1de5ec24c # v1.17.5
+        uses: erlef/setup-beam@b9c58b0450cd832ccdb3c17cc156a47065d2114f # v1.18.1
         with:
           otp-version: ${{ matrix.otp-version }}
           rebar3-version: '3.23.0'

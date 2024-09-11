@@ -1,8 +1,10 @@
 ered
 ====
 
-An Erlang client library for connecting to Redis Cluster
+An Erlang client library for connecting to Valkey Cluster
 aiming to replace [eredis](https://github.com/Nordix/eredis) and [eredis_cluster](https://github.com/Nordix/eredis_cluster).
+
+It also works for open source versions of Redis Cluster, up to 7.2.
 
 Status: Beta.
 
@@ -42,9 +44,9 @@ connect_cluster([addr()], [opt()]) -> {ok, server_ref()} | {error, term()}.
 Start the main process. This will also start the cluster handling
 process which will set up clients to the provided addresses and
 fetch the cluster slot map. Once there is a complete slot map and
-all Redis node clients are connected this process is ready to
-serve requests. The processes are supervised by the `ered` application,
-which needs to be started in advance.
+all clients processes are connected to their respective nodes, this
+process is ready to serve requests. The processes are supervised by
+the `ered` application, which needs to be started in advance.
 
 One or more addresses, `addr() :: {inet:socket_address() | inet:hostname(),
 inet:port_number()}`, are used to discover the rest of the cluster.
@@ -67,10 +69,10 @@ command(server_ref(), command(), key()) -> reply().
 command(server_ref(), command(), key(), timeout()) -> reply().
 ```
 
-Send a command to the Redis cluster. The command will be routed to
-the correct Redis node client based on the provided key.
+Send a command to the cluster. The command will be routed to
+the correct node client based on the provided key.
 If the command is a single command then it is represented as a
-list of binaries where the first binary is the Redis command
+list of binaries where the first binary is the command
 to execute and the rest of the binaries are the arguments.
 If the command is a pipeline, e.g. multiple commands to executed
 then they need to all map to the same slot for things to
@@ -95,7 +97,7 @@ command_all(server_ref(), command()) -> [reply()].
 command_all(server_ref(), command(), timeout()) -> [reply()].
 ```
 
-Send the same command to all connected master Redis nodes.
+Send the same command to all connected primary nodes.
 
 ### `command_client/2,3`
 
@@ -104,7 +106,7 @@ command_client(client_ref(), command()) -> reply().
 command_client(client_ref(), command(), timeout()) -> reply().
 ```
 
-Send the command to a specific Redis client without any client routing.
+Send the command to a specific client without any client routing.
 
 ### `command_client_async/3`
 
@@ -112,9 +114,9 @@ Send the command to a specific Redis client without any client routing.
 command_client_async(client_ref(), command(), reply_fun()) -> ok.
 ```
 
-Send command to a specific Redis client in asynchronous fashion. The
+Send command to a specific client in asynchronous fashion. The
 provided callback function will be called with the reply. Note that
-the callback function will executing in the redis client process and
+the callback function will executing in the client process and
 should not hang or perform any lengthy task.
 
 ### `get_clients/1`
@@ -123,7 +125,7 @@ should not hang or perform any lengthy task.
 get_clients(server_ref()) -> [client_ref()].
 ```
 
-Get all Redis master node clients.
+Get all primary node clients.
 
 ### `get_addr_to_client_map/1`
 
@@ -151,7 +153,7 @@ The following options can be passed to `connect_cluster/2`:
 
 * `{try_again_delay, non_neg_integer()}`
 
-  If there is a TRYAGAIN response from Redis then wait this many milliseconds
+  If there is a TRYAGAIN response from Valkey then wait this many milliseconds
   before re-sending the command. Default 200.
 
 * `{redirect_attempts, non_neg_integer()}`
@@ -166,7 +168,7 @@ The following options can be passed to `connect_cluster/2`:
 
 * `{update_slot_wait, non_neg_integer()}`
 
-  CLUSTER SLOTS command is used to fetch slots from the Redis cluster. This
+  CLUSTER SLOTS command is used to fetch slots from the cluster. This
   value sets how long in milliseconds to wait before trying to send the command
   again. Default 500.
 
@@ -176,8 +178,23 @@ The following options can be passed to `connect_cluster/2`:
 
 * `{min_replicas, non_neg_integer()}`
 
-  For each Redis master node, the min number of replicas for the cluster
+  For each primary node, the min number of replicas for the cluster
   to be considered OK. Default 0.
+
+* `{convergence_check_timeout, timeout()}`
+
+  If non-zero, a check that all primary nodes converge and report identical slot
+  maps, is performed before the cluster is considered OK and the 'cluster_ok'
+  info message is sent. The timeout is how long to wait for replies from all the
+  primary nodes. Default 1000. Set to zero to disable this check.
+
+* `{convergence_check_delay, timeout()}`
+
+  If non-zero, a check that all primary nodes converge and report identical slot
+  maps, is performed after a slot map update when the cluster is already
+  considered OK, but only after the specified delay. Default 5000. Set to zero
+  to disable this check. This option doesn't affect the convergence check
+  performed when the cluster is not yet considered OK.
 
 * `{close_wait, non_neg_integer()}`
 
@@ -219,12 +236,12 @@ Options passed to `connect_cluster/2` as the options `{client_opts, [...]}`.
 
 * `{resp_version, 2..3}`
 
-  What RESP (REdis Serialization Protocol) version to use. Default 3.
+  What RESP (the serialization protocol) version to use. Default 3.
 
 * `{node_down_timeout, non_neg_integer()}`
 
   If there is a connection problem, such as a timeout waiting for a response
-  from Redis, the ered client tries to set up a new connection. If the
+  from Valkey, the ered client tries to set up a new connection. If the
   connection is not recovered within `node_down_timeout`, then the client
   considers the node down and clears it's queue (commands get an error reply)
   and starts rejecting all new commands until the connection is restored.
@@ -239,7 +256,7 @@ Options passed to `connect_cluster/2` as the options `{client_opts, [...]}`.
 
 * `{auth, {Username :: binary(), Password :: binary()}}`
 
-  Username and password for Redis authentication. If a password is configured
+  Username and password for Valkey authentication. If a password is configured
   without a username, use `default` as the username.
 
 ### Connection options
@@ -274,7 +291,7 @@ Options passed to `connect/2` as the options `{client_opts, [{connection_opts, [
 
 * `{response_timeout, non_neg_integer()}`
 
-  Timeout when waiting for a response from Redis in milliseconds. Default 10000.
+  Timeout when waiting for a response from Valkey in milliseconds. Default 10000.
 
   When a timeout happens, the connection is closed and the client attempts to
   set up a new connection. See the client option `node_down_timeout` above.
@@ -294,9 +311,9 @@ Messages about the cluster as a whole:
 * `#{msg_type := cluster_not_ok, reason := Reason}` is sent when something is
   wrong, where Reason is one of the following:
 
-  * `master_down` if one of the master nodes is down or unreachable.
+  * `master_down` if one of the primary nodes (formerly called masters) is down or unreachable.
 
-  * `master_queue_full` if one of the master nodes is so busy that the maximum
+  * `master_queue_full` if one of the primary nodes (formerly called masters) is so busy that the maximum
     number of queued commands for the node is reached and any further command to
     that node would be rejected immediately.
 
@@ -305,7 +322,7 @@ Messages about the cluster as a whole:
   * `not_all_slots_covered` if some cluster slot doesn't belong to any node in
     the cluster.
 
-  * `too_few_replicas` if any of the master nodes has fewer replicas than the
+  * `too_few_replicas` if any of the primary nodes has fewer replicas than the
     minimum number as specified using the option `{min_replicas,
     non_neg_integer()`. See options above.
 
@@ -334,9 +351,9 @@ Messages about the connection to a specific node are in the following form:
 
 The field `msg_type` identifies what kind of event has happened and is described
 below. Reason depends on `msg_type`. Master describes whether the node is a
-master or a replica. Addr is a tuple `{Host, Port}` to the Redis node. Client id
+primary (formerly called master) or a replica. Addr is a tuple `{Host, Port}` to the Valkey node. Client id
 is the pid of the `ered_client` responsible for the connection. Node id is
-assigned by Redis and is used to identify the node within the cluster.
+assigned by Valkey and is used to identify the node within the cluster.
 
 The possible values of the `msg_type` field for connection events are as
 follows:
@@ -348,7 +365,7 @@ follows:
   Reason is as returned by `gen_tcp:connect/4` or `{tls_init, TlsReason}` if
   `ssl:connect/3` fails.
 
-* `init_error` when one of the initial commands sent to Redis has failed, such
+* `init_error` when one of the initial commands sent to Valkey has failed, such
   as the HELLO command. Reason is a list of error reasons.
 
 * `socket_closed` when the connection has been closed, either by the peer or by
@@ -373,10 +390,10 @@ follows:
 * `queue_ok` when the command queue to the node is not full anymore. Reason is
   `none`.
 
-Redis to Erlang Term Representation
+Valkey to Erlang Term Representation
 -----------------------------------
 
-| Redis (RESP3)         | Erlang                                             |
+| Valkey (RESP3)        | Erlang                                             |
 |-----------------------|----------------------------------------------------|
 | Simple string         | `binary()`                                         |
 | Bulk string           | `binary()`                                         |
