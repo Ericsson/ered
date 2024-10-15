@@ -51,11 +51,11 @@ jobs:
         with:
           otp-version: ${{ matrix.otp-version }}
           rebar3-version: '3.23.0'
-      - name: Install redis-cli
-        # Required by ct
-        run: |
-          sudo apt update
-          sudo apt install redis-server
+      - name: Install redis-cli required by common tests
+        uses: awalsh128/cache-apt-pkgs-action@a6c3917cc929dd0345bfb2d3feaf9101823370ad # v1.4.2
+        with:
+          packages: redis-server
+          version: 1.0
       - name: Compile
         run: rebar3 compile
       - name: Run eunit tests
