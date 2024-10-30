@@ -67,7 +67,6 @@
              convergence_check = nok :: convergence_check(),
 
              info_pid = [] :: [pid()],
-             update_delay = 1000, % 1s delay between slot map update requests
              client_opts = [],
              update_slot_wait = 500,
              min_replicas = 0,
@@ -486,19 +485,22 @@ start_periodic_slot_info_request(PreferredNodes, State) ->
                     %% see if they are available. If they are hostnames that map
                     %% to IP addresses and all IP addresses of the cluster have
                     %% changed, then this helps us rediscover the cluster.
-                    start_clients(State#st.initial_nodes, State);
+                    State1 = start_clients(State#st.initial_nodes, State),
+                    start_update_slots_timer([], State1);
                 Node ->
                     send_slot_info_request(Node, State),
-                    Tref = erlang:start_timer(
-                             State#st.update_slot_wait,
-                             self(),
-                             {time_to_update_slots,
-                              lists:delete(Node, PreferredNodes)}),
-                    State#st{slot_timer_ref = Tref}
+                    start_update_slots_timer(lists:delete(Node, PreferredNodes), State)
             end;
         _Else ->
             State
     end.
+
+start_update_slots_timer(PreferredNodes, State) ->
+    Tref = erlang:start_timer(
+             State#st.update_slot_wait,
+             self(),
+             {time_to_update_slots, PreferredNodes}),
+    State#st{slot_timer_ref = Tref}.
 
 stop_periodic_slot_info_request(State) ->
     case State#st.slot_timer_ref of
@@ -664,7 +666,7 @@ start_clients(Addrs, State) ->
                     {State#st.nodes, State#st.closing},
                     Addrs),
 
-    State#st{nodes = maps:merge(State#st.nodes, NewNodes),
+    State#st{nodes = NewNodes,
              pending = sets:union(State#st.pending,
                                   sets:subtract(new_set(maps:keys(NewNodes)),
                                                 State#st.up)),
