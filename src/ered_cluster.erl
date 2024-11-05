@@ -250,6 +250,10 @@ handle_info(Msg = {connection_status, {Pid, Addr, _Id}, Status}, State0) ->
                          false ->
                              NewState
                      end;
+                 {connection_down, node_deactivated} ->
+                     %% A deactivated node is still pending or up, but it might be
+                     %% removed later by the close_wait timer.
+                     State;
                  {connection_down,_} ->
                      State#st{up = sets:del_element(Addr, State#st.up),
                               pending = sets:del_element(Addr, State#st.pending),
@@ -299,6 +303,9 @@ handle_info({slot_info, Version, Response, FromAddr}, State) ->
                     Nodes = ered_lib:slotmap_all_nodes(NewMap),
                     MasterNodes = new_set(ered_lib:slotmap_master_nodes(NewMap)),
 
+                    %% Open new clients or reactivate any not yet stopped.
+                    State1 = start_clients(Nodes, State),
+
                     %% Remove nodes if they are not in the new map.
                     Remove = maps:keys(maps:without(Nodes, State#st.nodes)),
 
@@ -312,13 +319,10 @@ handle_info({slot_info, Version, Response, FromAddr}, State) ->
                     %% reactivate these clients if they're not yet stopped.
                     TimerRef = erlang:start_timer(State#st.close_wait, self(), {close_clients, Remove}),
                     NewClosing = maps:merge(maps:from_list([{Addr, TimerRef} || Addr <- Remove]),
-                                            State#st.closing),
+                                            State1#st.closing),
 
                     ered_info_msg:slot_map_updated(ClusterSlotsReply, Version + 1,
                                                    FromAddr, State#st.info_pid),
-
-                    %% open new clients
-                    State1 = start_clients(Nodes, State),
 
                     cancel_convergence_check(State1),
                     State2 = State1#st{slot_map_version = Version + 1,
@@ -589,7 +593,8 @@ pick_available_node([], _State) ->
 node_is_available(Addr, State) ->
     sets:is_element(Addr, State#st.up) andalso
         not sets:is_element(Addr, State#st.queue_full) andalso
-        not sets:is_element(Addr, State#st.reconnecting).
+        not sets:is_element(Addr, State#st.reconnecting) andalso
+        not maps:is_key(Addr, State#st.closing).
 
 -spec replicas_of_unavailable_masters(#st{}) -> [addr()].
 replicas_of_unavailable_masters(State) ->
