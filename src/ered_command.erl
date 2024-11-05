@@ -99,7 +99,7 @@ get_response_class({redis_command, pipeline, Data}) ->
 -spec resp_class(binary()) -> response_class().
 %%
 %% Given a RESP-formatted command, returns a classification which can
-%% be used to interpret the response(s) from Redis, particularily for
+%% be used to interpret the response(s) from Redis, particularly for
 %% pubsub commands that don't return anything but expect certain push
 %% messages to indicate success.
 %%
