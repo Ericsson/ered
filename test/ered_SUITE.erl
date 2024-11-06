@@ -264,6 +264,7 @@ t_client_killed(_) ->
                        Result = ered:command(R, SleepCommand, <<"k">>),
                        TestPid ! {crashed_command_result, Result}
                end),
+    timer:sleep(200), %% Let the spawned command be sent.
     ered:command_async(R, SleepCommand, <<"k">>,
                        fun (Reply) ->
                                %% We never get this reply. The ered_client
@@ -287,7 +288,7 @@ t_client_killed(_) ->
                        end),
     ?MSG({async_command_when_down, {error, client_down}}),
     %% End of race condition.
-    ?MSG(#{addr := {"127.0.0.1", Port}, master := true, msg_type := connected}),
+    ?MSG(#{addr := {"127.0.0.1", Port}, master := true, msg_type := connected}, 10000),
     AddrToPid1 = ered:get_addr_to_client_map(R),
     Pid1 = maps:get(Addr, AddrToPid1),
     true = (Pid1 =/= Pid0),
@@ -409,7 +410,8 @@ t_manual_failover_then_old_master_down(_) ->
 
     %% We allow a number of info messages during this procedure, but not the
     %% status change events 'cluster_not_ok' and 'cluster_ok'.
-    ?OPTIONAL_MSG(#{addr := {"127.0.0.1", Port}, msg_type := connect_error}),
+    ?OPTIONAL_MSG(#{addr := {"127.0.0.1", Port}, msg_type := connect_error, reason := econnrefused}),
+    ?OPTIONAL_MSG(#{addr := {"127.0.0.1", Port}, msg_type := connect_error, reason := econnrefused}),
     ?OPTIONAL_MSG(#{addr := {"127.0.0.1", Port}, msg_type := node_down_timeout}),
     ?OPTIONAL_MSG(#{addr := {"127.0.0.1", Port}, msg_type := node_deactivated}),
     no_more_msgs().
