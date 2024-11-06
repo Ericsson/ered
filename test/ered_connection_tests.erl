@@ -9,7 +9,7 @@ split_data_test() ->
     <<"OK">> = ered_connection:command(Conn1, [<<"set">>, <<"key1">>, Data]),
     Data = ered_connection:command(Conn1, [<<"get">>, <<"key1">>]).
 
-%% Supress warnings due to expected failures from MalformedCommand.
+%% Suppress warnings due to expected failures from MalformedCommand.
 -dialyzer({[no_fail_call, no_return], trailing_reply_test/0}).
 trailing_reply_test() ->
     Pid = self(),

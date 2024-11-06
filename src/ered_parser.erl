@@ -107,7 +107,7 @@ parse_initial(Token) ->
         <<"*", Rest/binary>> -> aggregate_N(parse_size(Rest), parse_array([]));
         %% RESP3
         <<"_" >>             -> {done, undefined}; % Null
-        <<",inf">>           -> {done, inf}; % float inifinity
+        <<",inf">>           -> {done, inf}; % float infinity
         <<",-inf">>          -> {done, neg_inf}; % negative infinity
         <<",nan">>           -> {done, nan}; % NaN
         <<",-nan">>          -> {done, nan}; % returned by some versions of redis

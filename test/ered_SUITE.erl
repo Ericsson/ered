@@ -418,7 +418,7 @@ t_manual_failover_then_old_master_down(_) ->
 
 t_blackhole(_) ->
     %% Simulate that a Redis node is unreachable, e.g. a network failure. We use
-    %% 'docket pause', similar to sending SIGSTOP to a process, to make one
+    %% 'docker pause', similar to sending SIGSTOP to a process, to make one
     %% Redis node unresponsive. This makes TCP recv() and connect() time out.
     CloseWait = 2000,                           % default is 10000
     NodeDownTimeout = 2000,                     % default is 2000
@@ -472,7 +472,7 @@ t_blackhole(_) ->
 
 t_blackhole_all_nodes(_) ->
     %% Simulate that all nodes are unreachable, e.g. a network failure. We use
-    %% 'docket pause', similar to sending SIGSTOP to a process, to make the
+    %% 'docker pause', similar to sending SIGSTOP to a process, to make the
     %% nodes unresponsive. This makes TCP recv() and connect() time out.
     CloseWait = 2000,                           % default is 10000
     NodeDownTimeout = 2000,                     % default is 2000
@@ -589,7 +589,7 @@ t_empty_initial_slotmap(_) ->
      || Port <- ?PORTS],
     ?MSG(#{msg_type := cluster_ok}, 5000),
 
-    %% Ingore all slotmap updates. There may be multiple of those before all
+    %% Ignore all slotmap updates. There may be multiple of those before all
     %% nodes have discovered each other. There may be incomplete slotmaps as
     %% well before all nodes have discovered each other, so the connections to
     %% some nodes may be temporarily deactivated.
