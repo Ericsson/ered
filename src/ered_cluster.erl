@@ -250,10 +250,6 @@ handle_info(Msg = {connection_status, {Pid, Addr, _Id}, Status}, State0) ->
                          false ->
                              NewState
                      end;
-                 {connection_down, node_deactivated} ->
-                     %% A deactivated node is still pending or up, but it might be
-                     %% removed later by the close_wait timer.
-                     State;
                  {connection_down,_} ->
                      State#st{up = sets:del_element(Addr, State#st.up),
                               pending = sets:del_element(Addr, State#st.pending),
@@ -262,6 +258,10 @@ handle_info(Msg = {connection_status, {Pid, Addr, _Id}, Status}, State0) ->
                      State#st{up = sets:add_element(Addr, State#st.up),
                               pending = sets:del_element(Addr, State#st.pending),
                               reconnecting = sets:del_element(Addr, State#st.reconnecting)};
+                 node_deactivated ->
+                     %% A deactivated node is still pending or up, but it might be
+                     %% removed later by the close_wait timer.
+                     State;
                  queue_full ->
                      State#st{queue_full = sets:add_element(Addr, State#st.queue_full)};
                  queue_ok ->

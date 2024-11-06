@@ -36,6 +36,8 @@
 
         node_info(node_down_timeout, none) |
 
+        node_info(node_deactivated, none) |
+
         node_info(queue_ok, none) |
 
         node_info(queue_full, none) |
@@ -76,6 +78,7 @@ connection_status(ClientInfo, IsMaster, Pids) ->
             connection_up                        -> {connected, none};
             {connection_down, R} when is_atom(R) -> {R, none};
             {connection_down, R}                 -> R;
+            node_deactivated                     -> {node_deactivated, none};
             queue_full                           -> {queue_full, none};
             queue_ok                             -> {queue_ok, none}
         end,

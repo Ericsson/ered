@@ -79,9 +79,10 @@
 -type addr()        :: {host(), inet:port_number()}.
 -type node_id()     :: binary() | undefined.
 -type client_info() :: {pid(), addr(), node_id()}.
--type status()      :: connection_up | {connection_down, down_reason()} | queue_ok | queue_full.
+-type status()      :: connection_up | {connection_down, down_reason()} | node_deactivated |
+                       queue_ok | queue_full.
 -type reason()      :: term(). % ssl reasons are of type any so no point being more specific
--type down_reason() :: node_down_timeout | node_deactivated |
+-type down_reason() :: node_down_timeout |
                        {client_stopped | connect_error | init_error | socket_closed,
                         reason()}.
 -type info_msg()    :: {connection_status, client_info(), status()}.
@@ -226,7 +227,7 @@ handle_cast(Command = {command, _, _}, State) ->
 
 handle_cast(deactivate, State) ->
     State1 = cancel_node_down_timer(State),
-    State2 = report_connection_status({connection_down, node_deactivated}, State1),
+    State2 = report_connection_status(node_deactivated, State1),
     State3 = reply_all({error, node_deactivated}, State2),
     {noreply, process_commands(State3#st{node_status = node_deactivated})};
 
