@@ -46,13 +46,16 @@
              initial_nodes = [] :: [addr()],
              %% Mapping from address to client for all known clients
              nodes = #{} :: #{addr() => pid()},
-             %% Clients in connected state
+             %% Clients in connected state for which we have received a
+             %% connection_up. Includes reconnecting nodes until the
+             %% node_down_timeout, and deactivated nodes pending to be closed
+             %% at the close_wait timeout.
              up = new_set([]) :: addr_set(),
              %% Clients that are currently masters
              masters = new_set([]) :: addr_set(),
              %% Clients with a full queue
              queue_full = new_set([]) :: addr_set(),
-             %% Clients started but not connected yet
+             %% Clients started but not connected yet, i.e. not considered 'up'.
              pending = new_set([]) :: addr_set(),
              %% Clients that lost connection and trying to reconnect, probably a
              %% harmless situation. These are still considered 'up'.
@@ -439,6 +442,8 @@ check_cluster_status(State) ->
 update_cluster_state(State) ->
     update_cluster_state(check_cluster_status(State), State).
 
+%% Update the cluster state and make sure that the periodic slot map is always
+%% scheduled while we're in cluster_not_ok state.
 update_cluster_state(ClusterStatus, State) ->
     case {ClusterStatus, State#st.cluster_state} of
         {ok, nok} when State#st.convergence_check =:= ok ->
