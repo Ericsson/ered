@@ -46,13 +46,16 @@
              initial_nodes = [] :: [addr()],
              %% Mapping from address to client for all known clients
              nodes = #{} :: #{addr() => pid()},
-             %% Clients in connected state
+             %% Clients in connected state for which we have received a
+             %% connection_up. Includes reconnecting nodes until the
+             %% node_down_timeout, and deactivated nodes pending to be closed
+             %% at the close_wait timeout.
              up = new_set([]) :: addr_set(),
              %% Clients that are currently masters
              masters = new_set([]) :: addr_set(),
              %% Clients with a full queue
              queue_full = new_set([]) :: addr_set(),
-             %% Clients started but not connected yet
+             %% Clients started but not connected yet, i.e. not considered 'up'.
              pending = new_set([]) :: addr_set(),
              %% Clients that lost connection and trying to reconnect, probably a
              %% harmless situation. These are still considered 'up'.
@@ -258,6 +261,10 @@ handle_info(Msg = {connection_status, {Pid, Addr, _Id}, Status}, State0) ->
                      State#st{up = sets:add_element(Addr, State#st.up),
                               pending = sets:del_element(Addr, State#st.pending),
                               reconnecting = sets:del_element(Addr, State#st.reconnecting)};
+                 node_deactivated ->
+                     %% A deactivated node is still pending or up, but it might be
+                     %% removed later by the close_wait timer.
+                     State;
                  queue_full ->
                      State#st{queue_full = sets:add_element(Addr, State#st.queue_full)};
                  queue_ok ->
@@ -299,26 +306,26 @@ handle_info({slot_info, Version, Response, FromAddr}, State) ->
                     Nodes = ered_lib:slotmap_all_nodes(NewMap),
                     MasterNodes = new_set(ered_lib:slotmap_master_nodes(NewMap)),
 
+                    %% Open new clients or reactivate any not yet stopped.
+                    State1 = start_clients(Nodes, State),
+
                     %% Remove nodes if they are not in the new map.
-                    Remove = maps:keys(maps:without(Nodes, State#st.nodes)),
+                    Remove = maps:keys(maps:without(Nodes, State1#st.nodes)),
 
                     %% Deactivate the clients, so they can fail queued and new
                     %% commands immediately.
-                    [ered_client:deactivate(maps:get(Addr, State#st.nodes)) || Addr <- Remove],
+                    [ered_client:deactivate(maps:get(Addr, State1#st.nodes)) || Addr <- Remove],
 
                     %% Stopping the clients is delayed to give time to update
                     %% slot map and to handle any messages in transit. If the
                     %% node comes back to the cluster soon enough, we can
                     %% reactivate these clients if they're not yet stopped.
-                    TimerRef = erlang:start_timer(State#st.close_wait, self(), {close_clients, Remove}),
+                    TimerRef = erlang:start_timer(State1#st.close_wait, self(), {close_clients, Remove}),
                     NewClosing = maps:merge(maps:from_list([{Addr, TimerRef} || Addr <- Remove]),
-                                            State#st.closing),
+                                            State1#st.closing),
 
                     ered_info_msg:slot_map_updated(ClusterSlotsReply, Version + 1,
-                                                   FromAddr, State#st.info_pid),
-
-                    %% open new clients
-                    State1 = start_clients(Nodes, State),
+                                                   FromAddr, State1#st.info_pid),
 
                     cancel_convergence_check(State1),
                     State2 = State1#st{slot_map_version = Version + 1,
@@ -435,6 +442,8 @@ check_cluster_status(State) ->
 update_cluster_state(State) ->
     update_cluster_state(check_cluster_status(State), State).
 
+%% Update the cluster state and make sure that the periodic slot map is always
+%% scheduled while we're in cluster_not_ok state.
 update_cluster_state(ClusterStatus, State) ->
     case {ClusterStatus, State#st.cluster_state} of
         {ok, nok} when State#st.convergence_check =:= ok ->
@@ -589,7 +598,8 @@ pick_available_node([], _State) ->
 node_is_available(Addr, State) ->
     sets:is_element(Addr, State#st.up) andalso
         not sets:is_element(Addr, State#st.queue_full) andalso
-        not sets:is_element(Addr, State#st.reconnecting).
+        not sets:is_element(Addr, State#st.reconnecting) andalso
+        not maps:is_key(Addr, State#st.closing).
 
 -spec replicas_of_unavailable_masters(#st{}) -> [addr()].
 replicas_of_unavailable_masters(State) ->
