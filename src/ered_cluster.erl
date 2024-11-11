@@ -310,22 +310,22 @@ handle_info({slot_info, Version, Response, FromAddr}, State) ->
                     State1 = start_clients(Nodes, State),
 
                     %% Remove nodes if they are not in the new map.
-                    Remove = maps:keys(maps:without(Nodes, State#st.nodes)),
+                    Remove = maps:keys(maps:without(Nodes, State1#st.nodes)),
 
                     %% Deactivate the clients, so they can fail queued and new
                     %% commands immediately.
-                    [ered_client:deactivate(maps:get(Addr, State#st.nodes)) || Addr <- Remove],
+                    [ered_client:deactivate(maps:get(Addr, State1#st.nodes)) || Addr <- Remove],
 
                     %% Stopping the clients is delayed to give time to update
                     %% slot map and to handle any messages in transit. If the
                     %% node comes back to the cluster soon enough, we can
                     %% reactivate these clients if they're not yet stopped.
-                    TimerRef = erlang:start_timer(State#st.close_wait, self(), {close_clients, Remove}),
+                    TimerRef = erlang:start_timer(State1#st.close_wait, self(), {close_clients, Remove}),
                     NewClosing = maps:merge(maps:from_list([{Addr, TimerRef} || Addr <- Remove]),
                                             State1#st.closing),
 
                     ered_info_msg:slot_map_updated(ClusterSlotsReply, Version + 1,
-                                                   FromAddr, State#st.info_pid),
+                                                   FromAddr, State1#st.info_pid),
 
                     cancel_convergence_check(State1),
                     State2 = State1#st{slot_map_version = Version + 1,
