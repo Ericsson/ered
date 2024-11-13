@@ -29,7 +29,7 @@ jobs:
           rebar3-version: '3.23.0'
       - name: Build and run common tests
         env:
-          REDIS_DOCKER_IMAGE: valkey/valkey:${{ matrix.valkey-version }}
+          SERVER_DOCKER_IMAGE: valkey/valkey:${{ matrix.valkey-version }}
         run: |
           rebar3 ct
 
@@ -45,10 +45,10 @@ jobs:
           - redis-version: 6.2.14
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Install redis-cli required by common tests
+      - name: Install packages for common tests
         uses: awalsh128/cache-apt-pkgs-action@a6c3917cc929dd0345bfb2d3feaf9101823370ad # v1.4.2
         with:
-          packages: redis-server
+          packages: redis-server faketime
           version: 1.0
       - name: Install Erlang/OTP
         uses: erlef/setup-beam@5304e04ea2b355f03681464e683d92e3b2f18451 # v1.18.2
@@ -57,6 +57,6 @@ jobs:
           rebar3-version: '3.23.0'
       - name: Build and run common tests
         env:
-          REDIS_DOCKER_IMAGE: redis:${{ matrix.redis-version }}
+          SERVER_DOCKER_IMAGE: redis:${{ matrix.redis-version }}
         run: |
           rebar3 ct

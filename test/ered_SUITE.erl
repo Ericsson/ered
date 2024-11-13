@@ -48,11 +48,11 @@ all() ->
 
 -define(PORTS, [30001, 30002, 30003, 30004, 30005, 30006]).
 
--define(DEFAULT_REDIS_DOCKER_IMAGE, "redis:6.2.7").
+-define(DEFAULT_SERVER_DOCKER_IMAGE, "valkey/valkey:8.0.1").
 
 init_per_suite(_Config) ->
     stop_containers(), % just in case there is junk from previous runs
-    Image = os:getenv("REDIS_DOCKER_IMAGE", ?DEFAULT_REDIS_DOCKER_IMAGE),
+    Image = os:getenv("SERVER_DOCKER_IMAGE", ?DEFAULT_SERVER_DOCKER_IMAGE),
     EnableDebugCommand = case Image of
                              "redis:" ++ [N, $. | _] when N >= $1, N < $7 ->
                                  ""; % Option does not exist.
@@ -89,7 +89,7 @@ init_per_testcase(_Testcase, Config) ->
     end.
 
 create_cluster() ->
-    Image = os:getenv("REDIS_DOCKER_IMAGE", ?DEFAULT_REDIS_DOCKER_IMAGE),
+    Image = os:getenv("SERVER_DOCKER_IMAGE", ?DEFAULT_SERVER_DOCKER_IMAGE),
     Hosts = [io_lib:format("127.0.0.1:~p ", [P]) || P <- ?PORTS],
     Cmd = io_lib:format("echo 'yes' | "
                         "docker run --name redis-cluster --rm --net=host -i ~s "
@@ -779,7 +779,7 @@ t_new_cluster_master(_) ->
                        {close_wait, 100}]),
 
     %% Create new master
-    Image = os:getenv("REDIS_DOCKER_IMAGE", ?DEFAULT_REDIS_DOCKER_IMAGE),
+    Image = os:getenv("SERVER_DOCKER_IMAGE", ?DEFAULT_SERVER_DOCKER_IMAGE),
     Pod = cmd_log("docker run --name redis-30007 -d --net=host --restart=on-failure "++Image++" redis-server --cluster-enabled yes --port 30007 --cluster-node-timeout 2000"),
     cmd_until("redis-cli -p 30007 CLUSTER MEET 127.0.0.1 30001", "OK"),
     cmd_until("redis-cli -p 30007 CLUSTER INFO", "cluster_state:ok"),
