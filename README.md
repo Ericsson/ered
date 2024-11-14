@@ -274,10 +274,20 @@ Options passed to `start_link/2` as the options `{client_opts, [{connection_opts
 
   Options passed to `gen_tcp:connect/4`.
 
+* `{tcp_connect_timeout, timeout()}`
+
+  Timeout passed to `gen_tcp:connect/4`. Default infinity.
+  Deprecated. Replaced by `{connect_timeout, timeout()}`.
+
 * `{tls_options, [ssl:tls_client_option()]}`
 
   Options passed to `ssl:connect/4`. If this config parameter is present
   TLS will be used.
+
+* `{tls_connect_timeout, timeout()}`
+
+  Timeout passed to ssl:connect/4. Default infinity.
+  Deprecated. Replaced by `{connect_timeout, timeout()}`.
 
 * `{push_cb, push_cb()}`
 
@@ -289,18 +299,6 @@ Options passed to `start_link/2` as the options `{client_opts, [{connection_opts
 
   When a timeout happens, the connection is closed and the client attempts to
   set up a new connection. See the client option `node_down_timeout` above.
-
-#### Deprecated connection options
-
-* `{tcp_connect_timeout, timeout()}`
-
-  Timeout passed to `gen_tcp:connect/4`. Default infinity.
-  Replaced by `{connect_timeout, timeout()}`.
-
-* `{tls_connect_timeout, timeout()}`
-
-  Timeout passed to ssl:connect/4. Default infinity.
-  Replaced by `{connect_timeout, timeout()}`.
 
 Info messages
 -------------
