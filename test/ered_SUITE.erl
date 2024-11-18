@@ -17,6 +17,7 @@ all() ->
      t_manual_failover_then_old_master_down,
      t_blackhole,
      t_blackhole_all_nodes,
+     t_connect_timeout,
      t_init_timeout,
      t_empty_slotmap,
      t_empty_initial_slotmap,
@@ -525,6 +526,19 @@ t_blackhole_all_nodes(_) ->
     [?MSG(#{msg_type := connected, addr := {"127.0.0.1", Port}}, 10000) || Port <- ?PORTS],
     ?MSG(#{msg_type := cluster_ok}, 10000),
 
+    no_more_msgs().
+
+
+t_connect_timeout(_) ->
+    %% Connect to an unreachable cluster (a blackhole address) using a configured
+    %% connect_timeout.
+    {ok, _P} = ered:start_link([{"192.168.254.254", 30001}],
+                               [{info_pid, [self()]},
+                                {client_opts,
+                                 [{connection_opts, [{connect_timeout, 100}]}]
+                                }]),
+
+    ?MSG(#{msg_type := connect_error, reason := timeout}, 200),
     no_more_msgs().
 
 

@@ -95,44 +95,38 @@ connect(Host, Port, Opts) ->
 %% connect_error message will be sent to the calling process.
 %% When the connection is closed a socket_closed message will be sent.
 %% to the calling process.
+%%
+%% Deprecated options:
+%%   tcp_connect_timeout - replaced by connect_timeout.
+%%   tls_connect_timeout - replaced by connect_timeout.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 connect_async(Addr, Port, Opts) ->
     [error({badarg, BadOpt})
      || BadOpt <- proplists:get_keys(Opts) -- [batch_size, tcp_options, tls_options, push_cb, response_timeout,
-                                               tcp_connect_timeout, tls_connect_timeout]],
+                                               tcp_connect_timeout, tls_connect_timeout, connect_timeout]],
     BatchSize = proplists:get_value(batch_size, Opts, 16),
-    Timeout = proplists:get_value(response_timeout, Opts, 10000),
+    ResponseTimeout = proplists:get_value(response_timeout, Opts, 10000),
     PushCb = proplists:get_value(push_cb, Opts, fun(_) -> ok end),
     TcpOptions = proplists:get_value(tcp_options, Opts, []),
     TlsOptions = proplists:get_value(tls_options, Opts, []),
     TcpTimeout = proplists:get_value(tcp_connect_timeout, Opts, infinity),
     TlsTimeout = proplists:get_value(tls_connect_timeout, Opts, infinity),
-    Transport  = case TlsOptions of
-                     [] ->
-                         gen_tcp;
-                     _ ->
-                         ssl
-                 end,
+    {Transport, Options, Timeout0} = case TlsOptions of
+                                         [] ->
+                                             {gen_tcp, TcpOptions, TcpTimeout};
+                                         _ ->
+                                             {ssl, TlsOptions, TlsTimeout}
+                                     end,
+    Timeout = proplists:get_value(connect_timeout, Opts, Timeout0),
     Master = self(),
     spawn_link(
       fun() ->
               SendPid = self(),
-              Result = case catch gen_tcp:connect(Addr, Port, [{active, false}, binary] ++ TcpOptions, TcpTimeout) of
-                           {ok, TcpSocket} when Transport == ssl ->
-                               case ssl:connect(TcpSocket, TlsOptions, TlsTimeout) of
-                                   {ok, TlsSocket} ->
-                                       {ok, TlsSocket};
-                                   {error, TlsReason} ->
-                                       {error, {tls_init, TlsReason}}
-                               end;
-                           Else ->
-                               Else
-                       end,
-              case Result of
+              case catch Transport:connect(Addr, Port, [{active, false}, binary] ++ Options, Timeout) of
                   {ok, Socket} ->
                       Master ! {connected, SendPid},
                       Pid = spawn_link(fun() ->
-                                               ExitReason = recv_loop(Transport, Socket, PushCb, Timeout),
+                                               ExitReason = recv_loop(Transport, Socket, PushCb, ResponseTimeout),
                                                %% Inform sending process about exit
                                                SendPid ! ExitReason
                                        end),
