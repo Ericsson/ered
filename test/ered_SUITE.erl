@@ -724,12 +724,11 @@ t_queue_full(_) ->
 
     recv({reply, {error, queue_overflow}}, 1000),
     [ct:pal("~s\n", [os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " CLIENT UNPAUSE")]) || Port <- Ports],
-    msg(msg_type, queue_full),
-    #{reason := master_queue_full} = msg(msg_type, cluster_not_ok),
+    ?MSG(#{msg_type := queue_full}),
+    #{reason := master_queue_full} = ?MSG(#{msg_type := cluster_not_ok}),
 
-
-    msg(msg_type, queue_ok),
-    msg(msg_type, cluster_ok),
+    ?MSG(#{msg_type := queue_ok}),
+    ?MSG(#{msg_type := cluster_ok}),
     [recv({reply, {ok, <<"PONG">>}}, 1000) || _ <- lists:seq(1,20)],
     no_more_msgs(),
     ok.
@@ -740,10 +739,10 @@ t_kill_client(_) ->
 
     %% KILL will close the TCP connection to the redis client
     ct:pal("~p\n",[os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " CLIENT KILL TYPE NORMAL")]),
-    #{addr := {_, Port}} = msg(msg_type, socket_closed),
+    #{addr := {_, Port}} = ?MSG(#{msg_type := socket_closed}),
 
     %% connection reestablished
-    #{addr := {_, Port}} = msg(msg_type, connected),
+    #{addr := {_, Port}} = ?MSG(#{msg_type := connected}),
     no_more_msgs().
 
 t_new_cluster_master(_) ->
@@ -978,16 +977,6 @@ start_cluster() ->
     start_cluster([]).
 start_cluster(Opts) ->
     ered_test_utils:start_cluster(?PORTS, Opts).
-
-msg(Key, Val) ->
-    msg(Key, Val, 1000).
-
-msg(Key, Val, Time) ->
-    receive
-        M = #{Key := Val} -> M
-    after Time ->
-            error({timeout, {Key, Val}, erlang:process_info(self(), messages)})
-    end.
 
 recv(Msg, Time) ->
     receive

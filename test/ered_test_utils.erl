@@ -13,17 +13,17 @@ start_cluster(Ports, Opts) ->
 
     {ok, P} = ered:start_link(InitialNodes, [{info_pid, [self()]}] ++ Opts),
 
-    ConnectedInit = [#{msg_type := connected} = msg(addr, {"127.0.0.1", Port})
+    ConnectedInit = [#{msg_type := connected} = ?MSG(#{addr := {"127.0.0.1", Port}})
                      || Port <- [Port1, Port2]],
 
-    #{slot_map := SlotMap} = msg(msg_type, slot_map_updated, 1000),
+    #{slot_map := SlotMap} = ?MSG(#{msg_type := slot_map_updated}, 1000),
 
     IdMap =  maps:from_list(lists:flatmap(
                               fun([_,_|Nodes]) ->
                                       [{Port, Id} || [_Addr, Port, Id |_]<- Nodes]
                               end, SlotMap)),
 
-    ConnectedRest = [#{msg_type := connected} = msg(addr, {"127.0.0.1", Port})
+    ConnectedRest = [#{msg_type := connected} = ?MSG(#{addr := {"127.0.0.1", Port}})
                      || Port <- PortsRest],
 
     ClusterIds = [Id || #{cluster_id := Id} <- ConnectedInit ++ ConnectedRest],
@@ -71,16 +71,6 @@ wait_for_consistent_cluster(Ports, ClientOpts) ->
                     error({timeout_consistent_cluster, SlotMaps})
             end
     end(20).
-
-msg(Key, Val) ->
-    msg(Key, Val, 1000).
-
-msg(Key, Val, Time) ->
-    receive
-        M = #{Key := Val} -> M
-    after Time ->
-            error({timeout, {Key, Val}, erlang:process_info(self(), messages)})
-    end.
 
 no_more_msgs() ->
     {messages,Msgs} = erlang:process_info(self(), messages),

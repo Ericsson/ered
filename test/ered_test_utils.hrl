@@ -1,10 +1,12 @@
 %% Expect to receive a message within timeout.
 -define(MSG(Pattern, Timeout),
-        receive
-            Pattern -> ok
-        after
-            Timeout -> error({timeout, ??Pattern, erlang:process_info(self(), messages)})
-        end).
+        (fun () ->
+                 receive
+                     Pattern = M -> M
+                 after
+                     Timeout -> error({timeout, ??Pattern, erlang:process_info(self(), messages)})
+                 end
+         end)()).
 
 %% Expect to receive a message within a second.
 -define(MSG(Pattern), ?MSG(Pattern, 1000)).
