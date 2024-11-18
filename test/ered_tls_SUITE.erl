@@ -44,7 +44,7 @@ groups() ->
                    {verify,     verify_peer},
                    {server_name_indication, "Server"}]).
 
--define(CONNECTION_OPTS, [{connection_opts, [{tls_options, ?TLS_OPTS}]}]).
+-define(CLIENT_OPTS, [{connection_opts, [{tls_options, ?TLS_OPTS}]}]).
 
 init_per_suite(_Config) ->
     stop_containers(), % just in case there is junk from previous runs
@@ -134,7 +134,7 @@ start_containers() ->
 
     timer:sleep(3000),
     lists:foreach(fun(Port) ->
-                          {ok,Pid} = ered_client:start_link("127.0.0.1", Port, ?CONNECTION_OPTS),
+                          {ok,Pid} = ered_client:start_link("127.0.0.1", Port, ?CLIENT_OPTS),
                           {ok, <<"PONG">>} = ered_client:command(Pid, [<<"ping">>]),
                           ered_client:stop(Pid)
                   end, ?PORTS).
@@ -174,7 +174,7 @@ wait_for_consistent_cluster(Ports) ->
 
 check_consistent_cluster(Ports) ->
     SlotMaps = [fun(Port) ->
-                        {ok,Pid} = ered_client:start_link("127.0.0.1", Port, ?CONNECTION_OPTS),
+                        {ok,Pid} = ered_client:start_link("127.0.0.1", Port, ?CLIENT_OPTS),
                         {ok, SlotMap} = ered_client:command(Pid, [<<"CLUSTER">>, <<"SLOTS">>]),
                         ered_client:stop(Pid),
                         SlotMap
@@ -195,7 +195,7 @@ start_cluster() ->
     InitialNodes = [{"127.0.0.1", Port} || Port <- [Port1, Port2]],
 
     %% wait_for_consistent_cluster(),
-    {ok, P} = ered:start_link(InitialNodes, [{info_pid, [self()]}, {client_opts, ?CONNECTION_OPTS}]),
+    {ok, P} = ered:start_link(InitialNodes, [{info_pid, [self()]}, {client_opts, ?CLIENT_OPTS}]),
 
     ConnectedInit = [#{msg_type := connected} = msg(addr, {"127.0.0.1", Port})
                      || Port <- [Port1, Port2]],
