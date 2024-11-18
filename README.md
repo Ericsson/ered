@@ -266,22 +266,28 @@ Options passed to `start_link/2` as the options `{client_opts, [{connection_opts
   If commands are queued up in the process message queue, this is the maximum
   number of messages that will be received and sent in one call. Default 16.
 
+* `{connect_timeout, timeout()}`
+
+  Timeout passed to `gen_tcp:connect/4` or `ssl:connect/4`. Default infinity.
+
 * `{tcp_options, [gen_tcp:connect_option()]}`
 
   Options passed to `gen_tcp:connect/4`.
 
 * `{tcp_connect_timeout, timeout()}`
 
-  Timeout passed to gen_tcp:connect/4. Default infinity.
+  Timeout passed to `gen_tcp:connect/4`. Default infinity.
+  Deprecated. Replaced by `{connect_timeout, timeout()}`.
 
 * `{tls_options, [ssl:tls_client_option()]}`
 
-  Options passed to `ssl:connect/3`. If this config parameter is present
+  Options passed to `ssl:connect/4`. If this config parameter is present
   TLS will be used.
 
 * `{tls_connect_timeout, timeout()}`
 
-  Timeout passed to ssl:connect/3. Default infinity.
+  Timeout passed to ssl:connect/4. Default infinity.
+  Deprecated. Replaced by `{connect_timeout, timeout()}`.
 
 * `{push_cb, push_cb()}`
 
@@ -357,8 +363,7 @@ follows:
   `none`.
 
 * `connect_error` when connecting to the node fails or the TLS handshake fails.
-  Reason is as returned by `gen_tcp:connect/4` or `{tls_init, TlsReason}` if
-  `ssl:connect/3` fails.
+  Reason is as returned by `gen_tcp:connect/4` or `ssl:connect/4`.
 
 * `init_error` when one of the initial commands sent to Valkey has failed, such
   as the HELLO command. Reason is a list of error reasons.
