@@ -1,5 +1,7 @@
 -module(ered_SUITE).
 
+-include("ered_test_utils.hrl").
+
 -compile([export_all, nowarn_export_all]).
 
 all() ->
@@ -30,22 +32,6 @@ all() ->
      t_missing_slot,
      t_client_map
     ].
-
--define(MSG(Pattern, Timeout),
-        receive
-            Pattern -> ok
-        after
-            Timeout -> error({timeout, ??Pattern, erlang:process_info(self(), messages)})
-        end).
-
--define(MSG(Pattern), ?MSG(Pattern, 1000)).
-
--define(OPTIONAL_MSG(Pattern),
-        receive
-            Pattern -> ok
-        after
-            0 -> ok
-        end).
 
 -define(PORTS, [30001, 30002, 30003, 30004, 30005, 30006]).
 

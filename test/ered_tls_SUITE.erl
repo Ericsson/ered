@@ -1,5 +1,7 @@
 -module(ered_tls_SUITE).
 
+-include("ered_test_utils.hrl").
+
 -compile([export_all, nowarn_export_all]).
 
 all() ->
@@ -17,22 +19,6 @@ groups() ->
        t_expired_cert_tls_1_3
       ]
      }].
-
--define(MSG(Pattern, Timeout),
-        receive
-            Pattern -> ok
-        after
-            Timeout -> error({timeout, ??Pattern, erlang:process_info(self(), messages)})
-        end).
-
--define(MSG(Pattern), ?MSG(Pattern, 1000)).
-
--define(OPTIONAL_MSG(Pattern),
-        receive
-            Pattern -> ok
-        after
-            0 -> ok
-        end).
 
 -define(PORTS, [31001, 31002, 31003, 31004, 31005, 31006]).
 
