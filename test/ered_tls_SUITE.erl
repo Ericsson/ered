@@ -5,20 +5,14 @@
 -compile([export_all, nowarn_export_all]).
 
 all() ->
-    [
-     t_command,
-     {group, require_faketime}
-    ].
+    [t_command,
+     {group, require_faketime}].
 
 groups() ->
-    [
-     %% Tests that require 'faketime' to manipulate the system time.
-     {require_faketime, [sequence],
-      [
-       t_expired_cert_tls_1_2,
-       t_expired_cert_tls_1_3
-      ]
-     }].
+    %% Tests that require 'faketime' to manipulate the system time.
+    [{require_faketime, [sequence],
+      [t_expired_cert_tls_1_2,
+       t_expired_cert_tls_1_3]}].
 
 -define(PORTS, [31001, 31002, 31003, 31004, 31005, 31006]).
 
