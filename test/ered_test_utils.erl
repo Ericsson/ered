@@ -13,7 +13,7 @@ start_cluster(Ports, Opts) ->
 
     {ok, P} = ered:start_link(InitialNodes, [{info_pid, [self()]}] ++ Opts),
 
-    ConnectedInit = [#{msg_type := connected} = ?MSG(#{addr := {"127.0.0.1", Port}})
+    ConnectedInit = [?MSG(#{msg_type := connected, addr := {"127.0.0.1", Port}})
                      || Port <- [Port1, Port2]],
 
     #{slot_map := SlotMap} = ?MSG(#{msg_type := slot_map_updated}, 1000),
