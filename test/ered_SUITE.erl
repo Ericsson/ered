@@ -1,5 +1,7 @@
 -module(ered_SUITE).
 
+-include("ered_test_utils.hrl").
+
 -compile([export_all, nowarn_export_all]).
 
 all() ->
@@ -31,29 +33,13 @@ all() ->
      t_client_map
     ].
 
--define(MSG(Pattern, Timeout),
-        receive
-            Pattern -> ok
-        after
-            Timeout -> error({timeout, ??Pattern, erlang:process_info(self(), messages)})
-        end).
-
--define(MSG(Pattern), ?MSG(Pattern, 1000)).
-
--define(OPTIONAL_MSG(Pattern),
-        receive
-            Pattern -> ok
-        after
-            0 -> ok
-        end).
-
 -define(PORTS, [30001, 30002, 30003, 30004, 30005, 30006]).
 
--define(DEFAULT_REDIS_DOCKER_IMAGE, "redis:6.2.7").
+-define(DEFAULT_SERVER_DOCKER_IMAGE, "valkey/valkey:8.0.1").
 
 init_per_suite(_Config) ->
     stop_containers(), % just in case there is junk from previous runs
-    Image = os:getenv("REDIS_DOCKER_IMAGE", ?DEFAULT_REDIS_DOCKER_IMAGE),
+    Image = os:getenv("SERVER_DOCKER_IMAGE", ?DEFAULT_SERVER_DOCKER_IMAGE),
     EnableDebugCommand = case Image of
                              "redis:" ++ [N, $. | _] when N >= $1, N < $7 ->
                                  ""; % Option does not exist.
@@ -81,7 +67,7 @@ init_per_suite(_Config) ->
 
 init_per_testcase(_Testcase, Config) ->
     %% Quick check that cluster is OK; otherwise restart everything.
-    case catch check_consistent_cluster(?PORTS) of
+    case catch ered_test_utils:check_consistent_cluster(?PORTS, []) of
         ok ->
             [];
         _ ->
@@ -90,7 +76,7 @@ init_per_testcase(_Testcase, Config) ->
     end.
 
 create_cluster() ->
-    Image = os:getenv("REDIS_DOCKER_IMAGE", ?DEFAULT_REDIS_DOCKER_IMAGE),
+    Image = os:getenv("SERVER_DOCKER_IMAGE", ?DEFAULT_SERVER_DOCKER_IMAGE),
     Hosts = [io_lib:format("127.0.0.1:~p ", [P]) || P <- ?PORTS],
     Cmd = io_lib:format("echo 'yes' | "
                         "docker run --name redis-cluster --rm --net=host -i ~s "
@@ -113,35 +99,7 @@ wait_for_consistent_cluster() ->
     wait_for_consistent_cluster(?PORTS).
 
 wait_for_consistent_cluster(Ports) ->
-    fun Loop(N) ->
-            case check_consistent_cluster(Ports) of
-                ok ->
-                    true;
-                {error, _} when N > 0 ->
-                    timer:sleep(500),
-                    Loop(N-1);
-                {error, SlotMaps} ->
-                    error({timeout_consistent_cluster, SlotMaps})
-            end
-    end(20).
-
-check_consistent_cluster(Ports) ->
-    SlotMaps = [fun(Port) ->
-                        {ok, Pid} = ered_client:start_link("127.0.0.1", Port, []),
-                        {ok, SlotMap} = ered_client:command(Pid, [<<"CLUSTER">>, <<"SLOTS">>]),
-                        ered_client:stop(Pid),
-                        SlotMap
-                end(P) || P <- Ports],
-    Consistent = case lists:usort(SlotMaps) of
-                     [SlotMap] ->
-                         Ports =:= [Port || {_Ip, Port} <- ered_lib:slotmap_all_nodes(SlotMap)];
-                     _NotAllIdentical ->
-                         false
-                 end,
-    case Consistent of
-        true -> ok;
-        false -> {error, SlotMaps}
-    end.
+    ered_test_utils:wait_for_consistent_cluster(Ports, []).
 
 end_per_suite(_Config) ->
     stop_containers().
@@ -766,12 +724,11 @@ t_queue_full(_) ->
 
     recv({reply, {error, queue_overflow}}, 1000),
     [ct:pal("~s\n", [os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " CLIENT UNPAUSE")]) || Port <- Ports],
-    msg(msg_type, queue_full),
-    #{reason := master_queue_full} = msg(msg_type, cluster_not_ok),
+    ?MSG(#{msg_type := queue_full}),
+    ?MSG(#{msg_type := cluster_not_ok, reason := master_queue_full}),
 
-
-    msg(msg_type, queue_ok),
-    msg(msg_type, cluster_ok),
+    ?MSG(#{msg_type := queue_ok}),
+    ?MSG(#{msg_type := cluster_ok}),
     [recv({reply, {ok, <<"PONG">>}}, 1000) || _ <- lists:seq(1,20)],
     no_more_msgs(),
     ok.
@@ -782,10 +739,10 @@ t_kill_client(_) ->
 
     %% KILL will close the TCP connection to the redis client
     ct:pal("~p\n",[os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " CLIENT KILL TYPE NORMAL")]),
-    #{addr := {_, Port}} = msg(msg_type, socket_closed),
+    ?MSG(#{msg_type := socket_closed, addr := {_, Port}}),
 
     %% connection reestablished
-    #{addr := {_, Port}} = msg(msg_type, connected),
+    ?MSG(#{msg_type := connected, addr := {_, Port}}),
     no_more_msgs().
 
 t_new_cluster_master(_) ->
@@ -793,7 +750,7 @@ t_new_cluster_master(_) ->
                        {close_wait, 100}]),
 
     %% Create new master
-    Image = os:getenv("REDIS_DOCKER_IMAGE", ?DEFAULT_REDIS_DOCKER_IMAGE),
+    Image = os:getenv("SERVER_DOCKER_IMAGE", ?DEFAULT_SERVER_DOCKER_IMAGE),
     Pod = cmd_log("docker run --name redis-30007 -d --net=host --restart=on-failure "++Image++" redis-server --cluster-enabled yes --port 30007 --cluster-node-timeout 2000"),
     cmd_until("redis-cli -p 30007 CLUSTER MEET 127.0.0.1 30001", "OK"),
     cmd_until("redis-cli -p 30007 CLUSTER INFO", "cluster_state:ok"),
@@ -1019,45 +976,7 @@ move_key(SourcePort, DestPort, Key) ->
 start_cluster() ->
     start_cluster([]).
 start_cluster(Opts) ->
-    [Port1, Port2 | PortsRest] = Ports = ?PORTS,
-    InitialNodes = [{"127.0.0.1", Port} || Port <- [Port1, Port2]],
-
-    wait_for_consistent_cluster(),
-    {ok, P} = ered:start_link(InitialNodes, [{info_pid, [self()]}] ++ Opts),
-
-    ConnectedInit = [#{msg_type := connected} = msg(addr, {"127.0.0.1", Port})
-                     || Port <- [Port1, Port2]],
-
-    #{slot_map := SlotMap} = msg(msg_type, slot_map_updated, 1000),
-
-    IdMap =  maps:from_list(lists:flatmap(
-                              fun([_,_|Nodes]) ->
-                                      [{Port, Id} || [_Addr, Port, Id |_]<- Nodes]
-                              end, SlotMap)),
-
-    ConnectedRest = [#{msg_type := connected} = msg(addr, {"127.0.0.1", Port})
-                     || Port <- PortsRest],
-
-    ClusterIds = [Id || #{cluster_id := Id} <- ConnectedInit ++ ConnectedRest],
-    ClusterIds = [maps:get(Port, IdMap) || Port <- Ports],
-
-    ?MSG(#{msg_type := cluster_ok}),
-
-    %% Clear all old data
-    [{ok, _} = ered:command_client(Client, [<<"FLUSHDB">>]) || Client <- ered:get_clients(P)],
-
-    no_more_msgs(),
-    P.
-
-msg(Key, Val) ->
-    msg(Key, Val, 1000).
-
-msg(Key, Val, Time) ->
-    receive
-        M = #{Key := Val} -> M
-    after Time ->
-            error({timeout, {Key, Val}, erlang:process_info(self(), messages)})
-    end.
+    ered_test_utils:start_cluster(?PORTS, Opts).
 
 recv(Msg, Time) ->
     receive
