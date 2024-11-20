@@ -1,6 +1,6 @@
 {application, ered,
  [{description, "Valkey Cluster client library application"},
-  {vsn, "0.6.0"},
+  {vsn, "0.7.1"},
   {registered, []},
   {applications,
    [kernel,
