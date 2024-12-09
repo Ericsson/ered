@@ -247,7 +247,7 @@ handle_info({{command_reply, Pid}, Reply}, State = #st{pending = Pending, connec
             {noreply, process_commands(State#st{pending = NewPending})}
     end;
 
-handle_info({command_reply, _Pid, _Reply}, State) ->
+handle_info({{command_reply, _Pid}, _Reply}, State) ->
     %% Stray message from a defunct client? ignore!
     {noreply, State};
 
