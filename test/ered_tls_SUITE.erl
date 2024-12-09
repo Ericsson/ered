@@ -112,12 +112,7 @@ start_containers() ->
                            [P, Path, Image, EnableDebugCommand, P])
              || P <- ?PORTS]),
 
-    timer:sleep(3000),
-    lists:foreach(fun(Port) ->
-                          {ok,Pid} = ered_client:start_link("127.0.0.1", Port, ?CLIENT_OPTS),
-                          {ok, <<"PONG">>} = ered_client:command(Pid, [<<"ping">>]),
-                          ered_client:stop(Pid)
-                  end, ?PORTS).
+    ered_test_utils:wait_for_all_nodes_available(?PORTS, ?CLIENT_OPTS).
 
 stop_containers() ->
     cmd_log([io_lib:format("docker stop redis-tls-~p; docker rm redis-tls-~p;", [P, P])

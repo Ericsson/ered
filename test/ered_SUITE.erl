@@ -54,12 +54,7 @@ init_per_suite(_Config) ->
                            [P, Image, EnableDebugCommand, P])
              || P <- ?PORTS]),
 
-    timer:sleep(2000),
-    lists:foreach(fun(Port) ->
-                          {ok,Pid} = ered_client:start_link("127.0.0.1", Port, []),
-                          {ok, <<"PONG">>} = ered_client:command(Pid, [<<"ping">>]),
-                          ered_client:stop(Pid)
-                  end, ?PORTS),
+    ered_test_utils:wait_for_all_nodes_available(?PORTS, []),
 
     create_cluster(),
     wait_for_consistent_cluster(),
