@@ -375,7 +375,7 @@ receive_data(N, Time, Acc) ->
                     Class = ered_command:get_response_class(Commands),
                     RefInfo = {Class, Pid, Ref, []},
                     Acc1 = [{RefInfo, Data} | Acc],
-                    receive_data(N, 0, Acc1)
+                    receive_data(N - 1, 0, Acc1)
             end
     after Time ->
             receive_data(0, 0, Acc)
