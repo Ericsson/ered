@@ -4,7 +4,8 @@
 
 -export([start_cluster/2,
          check_consistent_cluster/2,
-         wait_for_consistent_cluster/2]).
+         wait_for_consistent_cluster/2,
+         wait_for_all_nodes_available/2]).
 
 %% Start a cluster client and wait for cluster_ok.
 start_cluster(Ports, Opts) ->
@@ -71,6 +72,28 @@ wait_for_consistent_cluster(Ports, ClientOpts) ->
                     error({timeout_consistent_cluster, SlotMaps})
             end
     end(20).
+
+%% Wait for all nodes to be available for communication.
+wait_for_all_nodes_available(Ports, ClientOpts) ->
+    Pids = [fun(Port) ->
+                    {ok, Pid} = ered_client:start_link("127.0.0.1", Port, [{info_pid, self()}] ++ ClientOpts),
+                    Pid
+            end(P) || P <- Ports],
+    wait_for_connection_up(Pids),
+    no_more_msgs().
+
+wait_for_connection_up([]) ->
+    ok;
+wait_for_connection_up(Pids) ->
+    {_, {Pid, _, _}, _} = ?MSG({connection_status, _, connection_up}, 4000),
+    {ok, <<"PONG">>} = ered_client:command(Pid, [<<"ping">>]),
+
+    %% Stop client and allow optional connect_error events
+    ered_client:stop(Pid),
+    ?MSG({connection_status, {Pid, _, _}, {connection_down, {client_stopped, _}}}),
+    ?OPTIONAL_MSG({connection_status, {Pid, _, _}, {connection_down, _}}),
+    ?OPTIONAL_MSG({connection_status, {Pid, _, _}, {connection_down, _}}),
+    wait_for_connection_up(lists:delete(Pid, Pids)).
 
 no_more_msgs() ->
     {messages,Msgs} = erlang:process_info(self(), messages),
