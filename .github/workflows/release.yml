@@ -1,0 +1,36 @@
+name: Release
+
+# Only run this workflow on pushed tags.
+on:
+  push:
+    tags:
+      - '*'
+
+permissions:
+  contents: read
+
+jobs:
+  check-version:
+    name: Check ered application version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install Erlang/OTP
+        uses: erlef/setup-beam@5304e04ea2b355f03681464e683d92e3b2f18451 # v1.18.2
+        with:
+          otp-version: '27.1.2'
+          rebar3-version: '3.23.0'
+      - name: Check if vsn matches pushed tag (see src/ered.app.src).
+        run: |
+          rebar3 shell --apps ered --eval "$(cat << EOF
+          Version = "${{ github.ref_name }}",
+          case application:get_key(ered, vsn) of
+              {ok, Version} ->
+                  halt(0,[]);
+              Error ->
+                  io:format(user, "Version check failed, got ~p while pushed tag is ~s~n",
+                            [Error, Version]),
+                  halt(1,[]) %% Version check failed, give exitcode 1.
+          end.
+          EOF
+          )"
