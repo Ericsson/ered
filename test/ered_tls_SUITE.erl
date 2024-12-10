@@ -24,7 +24,8 @@ groups() ->
                    {verify,     verify_peer},
                    {server_name_indication, "Server"}]).
 
--define(CLIENT_OPTS, [{connection_opts, [{tls_options, ?TLS_OPTS}]}]).
+-define(CLIENT_OPTS, [{connection_opts, [{tls_options, ?TLS_OPTS},
+                                         {connect_timeout, 500}]}]).
 
 init_per_suite(_Config) ->
     stop_containers(), % just in case there is junk from previous runs
@@ -112,12 +113,7 @@ start_containers() ->
                            [P, Path, Image, EnableDebugCommand, P])
              || P <- ?PORTS]),
 
-    timer:sleep(3000),
-    lists:foreach(fun(Port) ->
-                          {ok,Pid} = ered_client:start_link("127.0.0.1", Port, ?CLIENT_OPTS),
-                          {ok, <<"PONG">>} = ered_client:command(Pid, [<<"ping">>]),
-                          ered_client:stop(Pid)
-                  end, ?PORTS).
+    ered_test_utils:wait_for_all_nodes_available(?PORTS, ?CLIENT_OPTS).
 
 stop_containers() ->
     cmd_log([io_lib:format("docker stop redis-tls-~p; docker rm redis-tls-~p;", [P, P])

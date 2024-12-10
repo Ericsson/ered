@@ -37,6 +37,8 @@ all() ->
 
 -define(DEFAULT_SERVER_DOCKER_IMAGE, "valkey/valkey:8.0.1").
 
+-define(CLIENT_OPTS, [{connection_opts, [{connect_timeout, 500}]}]).
+
 init_per_suite(_Config) ->
     stop_containers(), % just in case there is junk from previous runs
     Image = os:getenv("SERVER_DOCKER_IMAGE", ?DEFAULT_SERVER_DOCKER_IMAGE),
@@ -54,12 +56,7 @@ init_per_suite(_Config) ->
                            [P, Image, EnableDebugCommand, P])
              || P <- ?PORTS]),
 
-    timer:sleep(2000),
-    lists:foreach(fun(Port) ->
-                          {ok,Pid} = ered_client:start_link("127.0.0.1", Port, []),
-                          {ok, <<"PONG">>} = ered_client:command(Pid, [<<"ping">>]),
-                          ered_client:stop(Pid)
-                  end, ?PORTS),
+    ered_test_utils:wait_for_all_nodes_available(?PORTS, ?CLIENT_OPTS),
 
     create_cluster(),
     wait_for_consistent_cluster(),
@@ -67,7 +64,7 @@ init_per_suite(_Config) ->
 
 init_per_testcase(_Testcase, Config) ->
     %% Quick check that cluster is OK; otherwise restart everything.
-    case catch ered_test_utils:check_consistent_cluster(?PORTS, []) of
+    case catch ered_test_utils:check_consistent_cluster(?PORTS, ?CLIENT_OPTS) of
         ok ->
             [];
         _ ->
@@ -99,7 +96,7 @@ wait_for_consistent_cluster() ->
     wait_for_consistent_cluster(?PORTS).
 
 wait_for_consistent_cluster(Ports) ->
-    ered_test_utils:wait_for_consistent_cluster(Ports, []).
+    ered_test_utils:wait_for_consistent_cluster(Ports, ?CLIENT_OPTS).
 
 end_per_suite(_Config) ->
     stop_containers().
@@ -722,14 +719,14 @@ t_queue_full(_) ->
                    Loop(N-1)
     end(21),
 
-    recv({reply, {error, queue_overflow}}, 1000),
+    ?MSG({reply, {error, queue_overflow}}),
     [ct:pal("~s\n", [os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " CLIENT UNPAUSE")]) || Port <- Ports],
     ?MSG(#{msg_type := queue_full}),
     ?MSG(#{msg_type := cluster_not_ok, reason := master_queue_full}),
 
     ?MSG(#{msg_type := queue_ok}),
     ?MSG(#{msg_type := cluster_ok}),
-    [recv({reply, {ok, <<"PONG">>}}, 1000) || _ <- lists:seq(1,20)],
+    [?MSG({reply, {ok, <<"PONG">>}}) || _ <- lists:seq(1,20)],
     no_more_msgs(),
     ok.
 
@@ -977,13 +974,6 @@ start_cluster() ->
     start_cluster([]).
 start_cluster(Opts) ->
     ered_test_utils:start_cluster(?PORTS, Opts).
-
-recv(Msg, Time) ->
-    receive
-        Msg -> Msg
-    after Time ->
-            error({timeout, Msg, erlang:process_info(self(), messages)})
-    end.
 
 no_more_msgs() ->
     {messages,Msgs} = erlang:process_info(self(), messages),
