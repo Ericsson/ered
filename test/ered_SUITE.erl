@@ -37,6 +37,8 @@ all() ->
 
 -define(DEFAULT_SERVER_DOCKER_IMAGE, "valkey/valkey:8.0.1").
 
+-define(CLIENT_OPTS, [{connection_opts, [{connect_timeout, 500}]}]).
+
 init_per_suite(_Config) ->
     stop_containers(), % just in case there is junk from previous runs
     Image = os:getenv("SERVER_DOCKER_IMAGE", ?DEFAULT_SERVER_DOCKER_IMAGE),
@@ -54,7 +56,7 @@ init_per_suite(_Config) ->
                            [P, Image, EnableDebugCommand, P])
              || P <- ?PORTS]),
 
-    ered_test_utils:wait_for_all_nodes_available(?PORTS, []),
+    ered_test_utils:wait_for_all_nodes_available(?PORTS, ?CLIENT_OPTS),
 
     create_cluster(),
     wait_for_consistent_cluster(),
@@ -62,7 +64,7 @@ init_per_suite(_Config) ->
 
 init_per_testcase(_Testcase, Config) ->
     %% Quick check that cluster is OK; otherwise restart everything.
-    case catch ered_test_utils:check_consistent_cluster(?PORTS, []) of
+    case catch ered_test_utils:check_consistent_cluster(?PORTS, ?CLIENT_OPTS) of
         ok ->
             [];
         _ ->
@@ -94,7 +96,7 @@ wait_for_consistent_cluster() ->
     wait_for_consistent_cluster(?PORTS).
 
 wait_for_consistent_cluster(Ports) ->
-    ered_test_utils:wait_for_consistent_cluster(Ports, []).
+    ered_test_utils:wait_for_consistent_cluster(Ports, ?CLIENT_OPTS).
 
 end_per_suite(_Config) ->
     stop_containers().

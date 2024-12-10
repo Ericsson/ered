@@ -24,7 +24,8 @@ groups() ->
                    {verify,     verify_peer},
                    {server_name_indication, "Server"}]).
 
--define(CLIENT_OPTS, [{connection_opts, [{tls_options, ?TLS_OPTS}]}]).
+-define(CLIENT_OPTS, [{connection_opts, [{tls_options, ?TLS_OPTS},
+                                         {connect_timeout, 500}]}]).
 
 init_per_suite(_Config) ->
     stop_containers(), % just in case there is junk from previous runs

@@ -34,14 +34,16 @@
         %% If commands are queued up in the process message queue this is the max
         %% amount of messages that will be received and sent in one call
         {batch_size, non_neg_integer()} |
+        %% Timeout passed to gen_tcp:connect/4 or ssl:connect/4.
+        {connect_timeout, timeout()} |
         %% Options passed to gen_tcp:connect/4.
         {tcp_options, [gen_tcp:connect_option()]} |
-        %% Timeout passed to gen_tcp:connect/4.
+        %% Timeout passed to gen_tcp:connect/4. DEPRECATED.
         {tcp_connect_timeout, timeout()} |
-        %% Options passed to ssl:connect/3. If this config parameter is present,
+        %% Options passed to ssl:connect/4. If this config parameter is present,
         %% TLS is used.
         {tls_options, [ssl:tls_client_option()]} |
-        %% Timeout passed to ssl:connect/3.
+        %% Timeout passed to ssl:connect/4. DEPRECATED.
         {tls_connect_timeout, timeout()} |
         %% Callback for push notifications
         {push_cb, push_cb()} |
