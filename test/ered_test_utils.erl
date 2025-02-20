@@ -75,25 +75,25 @@ wait_for_consistent_cluster(Ports, ClientOpts) ->
 
 %% Wait for all nodes to be available for communication.
 wait_for_all_nodes_available(Ports, ClientOpts) ->
-    Pids = [fun(Port) ->
-                    {ok, Pid} = ered_client:connect("127.0.0.1", Port, [{info_pid, self()}] ++ ClientOpts),
-                    Pid
+    Clients = [fun(Port) ->
+                    {ok, Client} = ered_client:connect("127.0.0.1", Port, [{info_pid, self()}] ++ ClientOpts),
+                    Client
             end(P) || P <- Ports],
-    wait_for_connection_up(Pids),
+    wait_for_connection_up(Clients),
     no_more_msgs().
 
 wait_for_connection_up([]) ->
     ok;
-wait_for_connection_up(Pids) ->
-    {_, {Pid, _, _}, _} = ?MSG({connection_status, _, connection_up}, 4000),
-    {ok, <<"PONG">>} = ered_client:command(Pid, [<<"ping">>]),
+wait_for_connection_up(Clients) ->
+    #{client_id := Client} = ?MSG(#{msg_type := connected}, 15000),
+    {ok, <<"PONG">>} = ered_client:command(Client, [<<"ping">>]),
 
     %% Stop client and allow optional connect_error events
-    ered_client:close(Pid),
-    ?MSG({connection_status, {Pid, _, _}, {connection_down, {client_stopped, _}}}),
-    ?OPTIONAL_MSG({connection_status, {Pid, _, _}, {connection_down, _}}),
-    ?OPTIONAL_MSG({connection_status, {Pid, _, _}, {connection_down, _}}),
-    wait_for_connection_up(lists:delete(Pid, Pids)).
+    ered_client:close(Client),
+    ?MSG(#{msg_type := client_stopped, client_id := Client}),
+    ?OPTIONAL_MSG(#{msg_type := connect_error, client_id := Client}),
+    ?OPTIONAL_MSG(#{msg_type := connect_error, client_id := Client}),
+    wait_for_connection_up(lists:delete(Client, Clients)).
 
 no_more_msgs() ->
     {messages,Msgs} = erlang:process_info(self(), messages),

@@ -452,6 +452,7 @@ send_info(Status, #st{opts = #opts{info_pid = Pid,
             connection_up                        -> {connected, none};
             {connection_down, R} when is_atom(R) -> {R, none};
             {connection_down, R}                 -> R;
+            node_deactivated                     -> {node_deactivated, none};
             queue_full                           -> {queue_full, none};
             queue_ok                             -> {queue_ok, none}
         end,

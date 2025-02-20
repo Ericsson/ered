@@ -30,6 +30,7 @@ groups() ->
 init_per_suite(_Config) ->
     stop_containers(), % just in case there is junk from previous runs
     generate_tls_certs(),
+    {ok, _} = application:ensure_all_started(ered, temporary),
     start_containers(),
     create_cluster(),
     ered_test_utils:wait_for_consistent_cluster(?PORTS, ?CLIENT_OPTS),
