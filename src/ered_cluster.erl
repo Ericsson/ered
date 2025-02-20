@@ -429,7 +429,7 @@ handle_info({slot_info, Version, Response, FromAddr}, State) ->
                     ered_info_msg:slot_map_updated(ClusterSlotsReply, Version + 1,
                                                    FromAddr, State1#st.info_pid),
 
-                    %% Create the slots (binary slot-to-idx) and clients (tuple idx-to-pid) stuctures
+                    %% Create the slots (binary slot-to-idx) and clients (tuple idx-to-pid) structures.
                     AddrToPid = maps:with(Nodes, State1#st.nodes),
                     MasterAddrToPid = maps:with(MasterNodesList, AddrToPid),
                     %% Create a list of indices, one for each client pid
