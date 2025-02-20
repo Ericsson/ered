@@ -20,41 +20,43 @@ Usage by example
 ----------------
 
 ```Erlang
-1> {ok, Pid} = ered:start_link([{"localhost", 6379}], []).
+1> {ok, _} = application:ensure_all_started(ered, temporary),
+2> {ok, Pid} = ered:connect_cluster([{"localhost", 6379}], []).
 {ok,<0.164.0>}
-2> ered:command(Pid, [<<"SET">>, <<"mykey">>, <<"42">>], <<"mykey">>, 5000).
+3> ered:command(Pid, [<<"SET">>, <<"mykey">>, <<"42">>], <<"mykey">>, 5000).
 {ok,<<"OK">>}
-3> ered:command_async(Pid, [<<"GET">>, <<"mykey">>], <<"mykey">>, fun(Reply) -> io:format("Reply: ~p~n", [Reply]) end).
+4> ered:command_async(Pid, [<<"GET">>, <<"mykey">>], <<"mykey">>, fun(Reply) -> io:format("Reply: ~p~n", [Reply]) end).
 ok
 Reply: {ok,<<"42">>}
-4> ered:stop(Pid).
+5> ered:close(Pid).
 ok
 ```
 
 Functions
 ---------
 
-### `start_link/2`
+### `connect_cluster/2`
 
 ```Erlang
-start_link([addr()], [opt()]) -> {ok, server_ref()} | {error, term()}.
+connect_cluster([addr()], [opt()]) -> {ok, server_ref()} | {error, term()}.
 ```
 
 Start the main process. This will also start the cluster handling
 process which will set up clients to the provided addresses and
 fetch the cluster slot map. Once there is a complete slot map and
-all Valkey node clients are connected this process is ready to
-serve requests.
+all clients processes are connected to their respective nodes, this
+process is ready to serve requests. The processes are supervised by
+the `ered` application, which needs to be started in advance.
 
 One or more addresses, `addr() :: {inet:socket_address() | inet:hostname(),
-inet:port_number()}`, is used to discover the rest of the cluster.
+inet:port_number()}`, are used to discover the rest of the cluster.
 
 For options, see [Options](#options) below.
 
-### `stop/1`
+### `close/1`
 
 ```Erlang
-stop(server_ref()) -> ok.
+close(server_ref()) -> ok.
 ```
 
 Stop the main process. This will also stop the cluster handling
@@ -147,7 +149,7 @@ used.
 Options
 -------
 
-The following options can be passed to `start_link/2`:
+The following options can be passed to `connect_cluster/2`:
 
 * `{try_again_delay, non_neg_integer()}`
 
@@ -204,7 +206,7 @@ The following options can be passed to `start_link/2`:
 
 ### Client options
 
-Options passed to `start_link/2` as the options `{client_opts, [...]}`.
+Options passed to `connect_cluster/2` as the options `{client_opts, [...]}`.
 
 * `{connection_opts, [ered_connection:opt()]}`
 
@@ -259,7 +261,7 @@ Options passed to `start_link/2` as the options `{client_opts, [...]}`.
 
 ### Connection options
 
-Options passed to `start_link/2` as the options `{client_opts, [{connection_opts, [...]}]}`.
+Options passed to `connect/2` as the options `{client_opts, [{connection_opts, [...]}]}`.
 
 * `{batch_size, non_neg_integer()}`
 
@@ -304,7 +306,7 @@ Info messages
 -------------
 
 When one or more pids have been provided as the option `{info_pid, [pid()]}` to
-`start_link/2`, these are the messages ered sends. All messages are maps with at
+`connect/2`, these are the messages ered sends. All messages are maps with at
 least the key `msg_type`.
 
 Messages about the cluster as a whole:
@@ -338,6 +340,9 @@ Messages about the cluster as a whole:
   addr()}` is sent when there was an error updating the cluster slot-to-node
   mapping. The `response` is either an error or the atom `empty` if the CLUSTER
   SLOTS returned an empty list, which is treated like an error.
+
+* `#{msg_type := cluster_stopped, reason := any()}` when the ered cluster
+  instance is closing down.
 
 Messages about the connection to a specific node are in the following form:
 

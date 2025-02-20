@@ -8,7 +8,7 @@
     ssl]},
   {env,[]},
   {modules, []},
-
+  {mod, {ered_app, []}},
   {licenses, ["MIT"]},
   {links, []}
  ]}.

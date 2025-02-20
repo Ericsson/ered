@@ -30,6 +30,7 @@ groups() ->
 init_per_suite(_Config) ->
     stop_containers(), % just in case there is junk from previous runs
     generate_tls_certs(),
+    {ok, _} = application:ensure_all_started(ered, temporary),
     start_containers(),
     create_cluster(),
     ered_test_utils:wait_for_consistent_cluster(?PORTS, ?CLIENT_OPTS),
@@ -162,8 +163,8 @@ t_expired_cert_tls_1_2(_) ->
 
     ClientOpts = [{connection_opts, [{tls_options, ?TLS_OPTS ++ [{versions, ['tlsv1.2']}]}]}],
 
-    {ok, _R} = ered:start_link([{"127.0.0.1", 31001}],
-                               [{info_pid, [self()]}, {client_opts, ClientOpts}]),
+    {ok, _R} = ered:connect_cluster([{"127.0.0.1", 31001}],
+                                    [{info_pid, [self()]}, {client_opts, ClientOpts}]),
 
     ?MSG(#{msg_type := connect_error, addr := {"127.0.0.1", 31001},
            reason := {tls_alert,
@@ -177,8 +178,8 @@ t_expired_cert_tls_1_3(_) ->
 
     ClientOpts = [{connection_opts, [{tls_options, ?TLS_OPTS ++ [{versions, ['tlsv1.3']}]}]}],
 
-    {ok, _R} = ered:start_link([{"127.0.0.1", 31001}],
-                               [{info_pid, [self()]}, {client_opts, ClientOpts}]),
+    {ok, _R} = ered:connect_cluster([{"127.0.0.1", 31001}],
+                                    [{info_pid, [self()]}, {client_opts, ClientOpts}]),
 
     ?MSG(#{msg_type := socket_closed, addr := {"127.0.0.1", 31001},
            reason := {recv_exit,

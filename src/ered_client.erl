@@ -9,8 +9,9 @@
 
 %% API
 
--export([start_link/3,
-         stop/1, deactivate/1, reactivate/1,
+-export([start_link/3, start_link/4,
+         connect/3, close/1,
+         deactivate/1, reactivate/1,
          command/2, command/3,
          command_async/3]).
 
@@ -52,6 +53,7 @@
         {
          connect_loop_pid = none,
          connection_pid = none,
+         controlling_process :: pid(),
          last_status = none,
 
          waiting = q_new() :: command_queue(),
@@ -77,15 +79,30 @@
 
 -type host()        :: ered_connection:host().
 -type addr()        :: {host(), inet:port_number()}.
--type node_id()     :: binary() | undefined.
--type client_info() :: {pid(), addr(), node_id()}.
 -type status()      :: connection_up | {connection_down, down_reason()} | node_deactivated |
                        queue_ok | queue_full.
 -type reason()      :: term(). % ssl reasons are of type any so no point being more specific
 -type down_reason() :: node_down_timeout |
                        {client_stopped | connect_error | init_error | socket_closed,
                         reason()}.
--type info_msg()    :: {connection_status, client_info(), status()}.
+-type info_msg(MsgType, Reason) ::
+        #{msg_type := MsgType,
+          reason := Reason,
+          master => boolean(), % Optional. Added by ered_cluster.
+          addr := addr(),
+          client_id := pid(),
+          cluster_id => binary() % Optional. Used by ered_cluster.
+         }.
+-type info_msg() ::
+        info_msg(connected, none) |
+        info_msg(socket_closed, any()) |
+        info_msg(connect_error, any()) |
+        info_msg(init_error, any()) |
+        info_msg(node_down_timeout, none) |
+        info_msg(node_deactivated, none) |
+        info_msg(queue_ok, none) |
+        info_msg(queue_full, none) |
+        info_msg(client_stopped, any()).
 -type server_ref()  :: pid().
 
 -type opt() ::
@@ -123,20 +140,38 @@
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec start_link(host(), inet:port_number(), [opt()]) ->
           {ok, server_ref()} | {error, term()}.
+-spec start_link(host(), inet:port_number(), [opt()], pid()) ->
+          {ok, server_ref()} | {error, term()}.
 %%
 %% Start the client process. Create a connection towards the provided
-%% address.
+%% address. Typically called by a supervisor. Use connect/3 instead.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 start_link(Host, Port, Opts) ->
-    gen_server:start_link(?MODULE, [Host, Port, Opts], []).
+    start_link(Host, Port, Opts, self()).
+start_link(Host, Port, Opts, User) ->
+    gen_server:start_link(?MODULE, {Host, Port, Opts, User}, []).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec stop(server_ref()) -> ok.
+-spec connect(host(), inet:port_number(), [opt()]) ->
+          {ok, server_ref()} | {error, term()}.
+%%
+%% Create a standalone connection supervised by the ered application.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+connect(Host, Port, Opts) ->
+    try ered_client_sup:start_client(ered_standalone_sup, Host, Port, Opts, self()) of
+        {ok, ClientPid} ->
+            {ok, ClientPid}
+    catch exit:{noproc, _} ->
+            {error, ered_not_started}
+    end.
+
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec close(server_ref()) -> ok.
 %%
 %% Stop the client process. Cancel all commands in queue. Take down
 %% connection.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-stop(ServerRef) ->
+close(ServerRef) ->
     gen_server:stop(ServerRef).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -188,7 +223,7 @@ command_async(ServerRef, Command, CallbackFun) ->
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
-init([Host, Port, OptsList]) ->
+init({Host, Port, OptsList, User}) ->
     Opts = lists:foldl(
              fun({connection_opts, Val}, S)   -> S#opts{connection_opts = Val};
                 ({max_waiting, Val}, S)       -> S#opts{max_waiting = Val};
@@ -204,11 +239,12 @@ init([Host, Port, OptsList]) ->
              end,
              #opts{host = Host, port = Port},
              OptsList),
-
+    monitor(process, User),
     process_flag(trap_exit, true),
     Pid = self(),
     ConnectPid = spawn_link(fun() -> connect(Pid, Opts) end),
     {ok, start_node_down_timer(#st{opts = Opts,
+                                   controlling_process = User,
                                    connect_loop_pid = ConnectPid})}.
 
 handle_call({command, Command}, From, State) ->
@@ -278,8 +314,14 @@ handle_info({timeout, TimerRef, node_down}, State) when TimerRef == State#st.nod
 handle_info({timeout, _TimerRef, _Msg}, State) ->
     {noreply, State};
 
+handle_info({'DOWN', _Mon, process, Pid, ExitReason}, State = #st{controlling_process = Pid}) ->
+    {stop, ExitReason, State};
+
 handle_info({'EXIT', _From, Reason}, State) ->
-    {stop, Reason, State}.
+    {stop, Reason, State};
+
+handle_info(_Ignore, State) ->
+    {noreply, State}.
 
 terminate(Reason, State) ->
     exit(State#st.connect_loop_pid, kill),
@@ -384,13 +426,11 @@ reply_command({command, _, Fun}, Reply) ->
 get_command_payload({command, Command, _Fun}) ->
     Command.
 
+-spec report_connection_status(status(), #st{}) -> #st{}.
 report_connection_status(Status, State = #st{last_status = Status}) ->
     State;
 report_connection_status(Status, State) ->
-    #opts{host = Host, port = Port} = State#st.opts,
-    ClusterId = State#st.cluster_id,
-    Msg = {connection_status, {self(), {Host, Port}, ClusterId}, Status},
-    send_info(Msg, State),
+    send_info(Status, State),
     case Status of
         %% Skip saving the last_status in this to avoid an extra connect_error event.
         %% The usual case is that there is a connect_error and then node_down and then
@@ -402,15 +442,33 @@ report_connection_status(Status, State) ->
     end.
 
 
--spec send_info(info_msg(), #st{}) -> ok.
-send_info(Msg, State) ->
-    Pid = State#st.opts#opts.info_pid,
-    case Pid of
-        none ->
-            ok;
-        _ ->
-            Pid ! Msg
-    end,
+-spec send_info(status(), #st{}) -> ok.
+send_info(Status, #st{opts = #opts{info_pid = Pid,
+                                   host = Host,
+                                   port = Port},
+                      cluster_id = ClusterId}) when is_pid(Pid) ->
+    {MsgType, Reason} =
+        case Status of
+            connection_up                        -> {connected, none};
+            {connection_down, R} when is_atom(R) -> {R, none};
+            {connection_down, R}                 -> R;
+            node_deactivated                     -> {node_deactivated, none};
+            queue_full                           -> {queue_full, none};
+            queue_ok                             -> {queue_ok, none}
+        end,
+    Msg0 = #{msg_type  => MsgType,
+             reason    => Reason,
+             addr      => {Host, Port},
+             client_id => self()},
+    Msg = case ClusterId of
+              undefined ->
+                  Msg0;
+              Id when is_binary(Id) ->
+                  Msg0#{cluster_id => ClusterId}
+          end,
+    Pid ! Msg,
+    ok;
+send_info(_Msg, _State) ->
     ok.
 
 

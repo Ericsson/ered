@@ -11,6 +11,7 @@ all() ->
      t_command_all,
      t_command_client,
      t_command_pipeline,
+     t_cluster_crash,
      t_client_crash,
      t_client_killed,
      t_scan_delete_keys,
@@ -56,8 +57,8 @@ init_per_suite(_Config) ->
                            [P, Image, EnableDebugCommand, P])
              || P <- ?PORTS]),
 
+    {ok, _} = application:ensure_all_started(ered, temporary),
     ered_test_utils:wait_for_all_nodes_available(?PORTS, ?CLIENT_OPTS),
-
     create_cluster(),
     wait_for_consistent_cluster(),
     [].
@@ -83,12 +84,12 @@ create_cluster() ->
 
 reset_cluster() ->
     Pids = [begin
-                {ok, Pid} = ered_client:start_link("127.0.0.1", Port, []),
+                {ok, Pid} = ered_client:connect("127.0.0.1", Port, []),
                 Pid
             end || Port <- ?PORTS],
     [{ok, <<"OK">>} = ered_client:command(Pid, [<<"CLUSTER">>, <<"RESET">>]) || Pid <- Pids],
     [{ok, []} = ered_client:command(Pid, [<<"CLUSTER">>, <<"SLOTS">>]) || Pid <- Pids],
-    lists:foreach(fun ered_client:stop/1, Pids).
+    lists:foreach(fun ered_client:close/1, Pids).
 
 %% Wait until cluster is consistent, i.e all nodes have the same single view
 %% of the slot map and all cluster nodes are included in the slot map.
@@ -159,6 +160,13 @@ t_command_pipeline(_) ->
     no_more_msgs().
 
 
+t_cluster_crash(_) ->
+    R = start_cluster(),
+    exit(R, crash),
+    ?MSG(#{msg_type := cluster_stopped, reason := crash}),
+    no_more_msgs().
+
+
 t_client_crash(_) ->
     R = start_cluster(),
     Port = get_master_from_key(R, <<"k">>),
@@ -183,16 +191,18 @@ t_client_crash(_) ->
     ?MSG(#{addr := {"127.0.0.1", Port}, master := true, msg_type := client_stopped}),
     ?MSG({'DOWN', _Mon, process, Pid0, crash}),
     ?MSG(#{msg_type := cluster_not_ok, reason := master_down}),
-    %% Instant error when client pid is dead. There's a race condition here. The
-    %% new client process can potentially come up fast and return "OK" to the
-    %% following commands.
-    {error, client_down} = ered:command(R, [<<"SET">>, <<"k">>, <<"v">>], <<"k">>),
+    %% Send command when the client process is dead. The cluster process
+    %% starts a new client synchronously, so the command succeeds. There's a
+    %% possible race condition here though. The cluster process may receive the
+    %% command before it receives the 'DOWN' message from the dead client and
+    %% thus it doesn't know the client is dead.
+    {ok, <<"OK">>} = ered:command(R, [<<"SET">>, <<"k">>, <<"v">>], <<"k">>),
     ered:command_async(R, [<<"SET">>, <<"k">>, <<"v">>], <<"k">>,
                        fun (Reply) ->
                                %% This command does get a reply.
                                TestPid ! {async_command_when_down, Reply}
                        end),
-    ?MSG({async_command_when_down, {error, client_down}}),
+    ?MSG({async_command_when_down, {ok, <<"OK">>}}),
     %% End of race condition.
     ?MSG(#{addr := {"127.0.0.1", Port}, master := true, msg_type := connected}, 10000),
     AddrToPid1 = ered:get_addr_to_client_map(R),
@@ -233,16 +243,18 @@ t_client_killed(_) ->
     %% We don't get 'cluster_not_ok' here, because ered_cluster relies on a
     %% message from ered_client. Using a monitor instead would be more reliable.
 
-    %% Instant error when client pid is dead. There's a race condition here. The
-    %% new client process can potentially come up fast and return "OK" to the
-    %% following commands.
-    {error, client_down} = ered:command(R, [<<"SET">>, <<"k">>, <<"v">>], <<"k">>),
+    %% Send command when the client process is dead. The cluster process
+    %% starts a new client synchronously, so the command succeeds. There's a
+    %% possible race condition here though. The cluster process may receive the
+    %% command before it receives the 'DOWN' message from the dead client and
+    %% thus it doesn't know the client is dead.
+    {ok, <<"OK">>} = ered:command(R, [<<"SET">>, <<"k">>, <<"v">>], <<"k">>),
     ered:command_async(R, [<<"SET">>, <<"k">>, <<"v">>], <<"k">>,
                        fun (Reply) ->
                                %% This command does get a reply.
                                TestPid ! {async_command_when_down, Reply}
                        end),
-    ?MSG({async_command_when_down, {error, client_down}}),
+    ?MSG({async_command_when_down, {ok, <<"OK">>}}),
     %% End of race condition.
     ?MSG(#{addr := {"127.0.0.1", Port}, master := true, msg_type := connected}, 10000),
     AddrToPid1 = ered:get_addr_to_client_map(R),
@@ -487,11 +499,11 @@ t_blackhole_all_nodes(_) ->
 t_connect_timeout(_) ->
     %% Connect to an unreachable cluster (a blackhole address) using a configured
     %% connect_timeout.
-    {ok, _P} = ered:start_link([{"192.168.254.254", 30001}],
-                               [{info_pid, [self()]},
-                                {client_opts,
-                                 [{connection_opts, [{connect_timeout, 100}]}]
-                                }]),
+    {ok, _P} = ered:connect_cluster([{"192.168.254.254", 30001}],
+                                    [{info_pid, [self()]},
+                                     {client_opts,
+                                      [{connection_opts, [{connect_timeout, 100}]}]
+                                     }]),
 
     ?MSG(#{msg_type := connect_error, reason := timeout}, 200),
     no_more_msgs().
@@ -504,7 +516,7 @@ t_init_timeout(_) ->
             }
            ],
     ct:pal("~p\n", [os:cmd("redis-cli -p 30001 CLIENT PAUSE 10000")]),
-    {ok, _P} = ered:start_link([{localhost, 30001}], [{info_pid, [self()]}] ++ Opts),
+    {ok, _P} = ered:connect_cluster([{localhost, 30001}], [{info_pid, [self()]}] ++ Opts),
 
     ?MSG(#{msg_type := socket_closed, reason := {recv_exit, timeout}}, 3500),
     ?MSG(#{msg_type := node_down_timeout, addr := {localhost, 30001}}, 2500),
@@ -541,8 +553,8 @@ t_empty_slotmap(_) ->
 
 t_empty_initial_slotmap(_) ->
     reset_cluster(),
-    {ok, R} = ered:start_link([{"127.0.0.1", 30001}],
-                              [{info_pid, [self()]}, {min_replicas, 1}]),
+    {ok, R} = ered:connect_cluster([{"127.0.0.1", 30001}],
+                                   [{info_pid, [self()]}, {min_replicas, 1}]),
     ?MSG(#{msg_type := cluster_slots_error_response,
            response := empty,
            addr := {"127.0.0.1", 30001}}),
@@ -814,7 +826,8 @@ t_new_cluster_master(_) ->
 
     %% Verify that the cluster is still ok
     {ok, Data} = ered:command(R, [<<"GET">>, Key], Key),
-    ered:stop(R),
+    ered:close(R),
+    ?MSG(#{msg_type := cluster_stopped, reason := normal}),
     no_more_msgs().
 
 t_ask_redirect(_) ->
