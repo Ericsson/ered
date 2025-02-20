@@ -76,9 +76,9 @@ wait_for_consistent_cluster(Ports, ClientOpts) ->
 %% Wait for all nodes to be available for communication.
 wait_for_all_nodes_available(Ports, ClientOpts) ->
     Clients = [fun(Port) ->
-                    {ok, Client} = ered_client:connect("127.0.0.1", Port, [{info_pid, self()}] ++ ClientOpts),
-                    Client
-            end(P) || P <- Ports],
+                       {ok, Client} = ered_client:connect("127.0.0.1", Port, [{info_pid, self()}] ++ ClientOpts),
+                       Client
+               end(P) || P <- Ports],
     wait_for_connection_up(Clients),
     no_more_msgs().
 
