@@ -1,10 +1,6 @@
 name: CI
 
-on:
-  pull_request:
-  push:
-    branches:
-      - master
+on: [push, pull_request]
 
 permissions:
   contents: read
@@ -13,7 +9,7 @@ jobs:
   fmt:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@d632683dd7b4114ad314bca15554477dd762a938 # v4.2.0
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Prepare
         run: |
           sudo apt update
@@ -34,28 +30,38 @@ jobs:
              exit 1; \
           fi
 
+  spellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install typos
+        uses: taiki-e/install-action@ad0904967b4c8e3005f6ed2efa1fa74dd9a05f32 # v2.48.13
+        with:
+          tool: typos
+      - name: Run typos
+        run: typos --config=.github/typos.toml
+
   build:
     runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
         include:
-          - otp-version: '27.0-rc3'
-          - otp-version: '26.2.4'
-          - otp-version: '25.3.2.11'
-          - otp-version: '24.3.4.17'
+          - otp-version: '27.1.2'
+          - otp-version: '26.2.5.5'
+          - otp-version: '25.3.2.15'
     steps:
-      - uses: actions/checkout@d632683dd7b4114ad314bca15554477dd762a938 # v4.2.0
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Install Erlang/OTP
         uses: erlef/setup-beam@5304e04ea2b355f03681464e683d92e3b2f18451 # v1.18.2
         with:
           otp-version: ${{ matrix.otp-version }}
           rebar3-version: '3.23.0'
-      - name: Install redis-cli
-        # Required by ct
-        run: |
-          sudo apt update
-          sudo apt install redis-server
+      - name: Install packages for common tests
+        uses: awalsh128/cache-apt-pkgs-action@5902b33ae29014e6ca012c5d8025d4346556bd40 # v1.4.3
+        with:
+          packages: redis-server faketime
+          version: 1.0
       - name: Compile
         run: rebar3 compile
       - name: Run eunit tests

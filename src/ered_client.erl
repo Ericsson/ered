@@ -17,7 +17,7 @@
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-         terminate/2, code_change/3, format_status/2]).
+         terminate/2, code_change/3]).
 
 -export_type([info_msg/0,
               addr/0,
@@ -79,9 +79,10 @@
 
 -type host()        :: ered_connection:host().
 -type addr()        :: {host(), inet:port_number()}.
--type status()      :: connection_up | {connection_down, down_reason()} | queue_ok | queue_full.
+-type status()      :: connection_up | {connection_down, down_reason()} | node_deactivated |
+                       queue_ok | queue_full.
 -type reason()      :: term(). % ssl reasons are of type any so no point being more specific
--type down_reason() :: node_down_timeout | node_deactivated |
+-type down_reason() :: node_down_timeout |
                        {client_stopped | connect_error | init_error | socket_closed,
                         reason()}.
 -type info_msg(MsgType, Reason) ::
@@ -262,7 +263,7 @@ handle_cast(Command = {command, _, _}, State) ->
 
 handle_cast(deactivate, State) ->
     State1 = cancel_node_down_timer(State),
-    State2 = report_connection_status({connection_down, node_deactivated}, State1),
+    State2 = report_connection_status(node_deactivated, State1),
     State3 = reply_all({error, node_deactivated}, State2),
     {noreply, process_commands(State3#st{node_status = node_deactivated})};
 
@@ -282,7 +283,7 @@ handle_info({{command_reply, Pid}, Reply}, State = #st{pending = Pending, connec
             {noreply, process_commands(State#st{pending = NewPending})}
     end;
 
-handle_info({command_reply, _Pid, _Reply}, State) ->
+handle_info({{command_reply, _Pid}, _Reply}, State) ->
     %% Stray message from a defunct client? ignore!
     {noreply, State};
 
@@ -330,9 +331,6 @@ terminate(Reason, State) ->
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
-
-format_status(_Opt, Status) ->
-    Status.
 
 %%%===================================================================
 %%% Internal functions

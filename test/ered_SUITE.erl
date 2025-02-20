@@ -1,5 +1,7 @@
 -module(ered_SUITE).
 
+-include("ered_test_utils.hrl").
+
 -compile([export_all, nowarn_export_all]).
 
 all() ->
@@ -17,6 +19,8 @@ all() ->
      t_manual_failover,
      t_manual_failover_then_old_master_down,
      t_blackhole,
+     t_blackhole_all_nodes,
+     t_connect_timeout,
      t_init_timeout,
      t_empty_slotmap,
      t_empty_initial_slotmap,
@@ -30,29 +34,15 @@ all() ->
      t_client_map
     ].
 
--define(MSG(Pattern, Timeout),
-        receive
-            Pattern -> ok
-        after
-            Timeout -> error({timeout, ??Pattern, erlang:process_info(self(), messages)})
-        end).
-
--define(MSG(Pattern), ?MSG(Pattern, 1000)).
-
--define(OPTIONAL_MSG(Pattern),
-        receive
-            Pattern -> ok
-        after
-            0 -> ok
-        end).
-
 -define(PORTS, [30001, 30002, 30003, 30004, 30005, 30006]).
 
--define(DEFAULT_REDIS_DOCKER_IMAGE, "redis:6.2.7").
+-define(DEFAULT_SERVER_DOCKER_IMAGE, "valkey/valkey:8.0.1").
+
+-define(CLIENT_OPTS, [{connection_opts, [{connect_timeout, 500}]}]).
 
 init_per_suite(_Config) ->
     stop_containers(), % just in case there is junk from previous runs
-    Image = os:getenv("REDIS_DOCKER_IMAGE", ?DEFAULT_REDIS_DOCKER_IMAGE),
+    Image = os:getenv("SERVER_DOCKER_IMAGE", ?DEFAULT_SERVER_DOCKER_IMAGE),
     EnableDebugCommand = case Image of
                              "redis:" ++ [N, $. | _] when N >= $1, N < $7 ->
                                  ""; % Option does not exist.
@@ -67,21 +57,15 @@ init_per_suite(_Config) ->
                            [P, Image, EnableDebugCommand, P])
              || P <- ?PORTS]),
 
-    timer:sleep(2000),
     {ok, _} = application:ensure_all_started(ered, temporary),
-    lists:foreach(fun(Port) ->
-                          {ok,Pid} = ered_client:connect("127.0.0.1", Port, []),
-                          {ok, <<"PONG">>} = ered_client:command(Pid, [<<"ping">>]),
-                          ered_client:close(Pid)
-                  end, ?PORTS),
-
+    ered_test_utils:wait_for_all_nodes_available(?PORTS, ?CLIENT_OPTS),
     create_cluster(),
     wait_for_consistent_cluster(),
     [].
 
 init_per_testcase(_Testcase, Config) ->
     %% Quick check that cluster is OK; otherwise restart everything.
-    case catch check_consistent_cluster(?PORTS) of
+    case catch ered_test_utils:check_consistent_cluster(?PORTS, ?CLIENT_OPTS) of
         ok ->
             [];
         _ ->
@@ -90,7 +74,7 @@ init_per_testcase(_Testcase, Config) ->
     end.
 
 create_cluster() ->
-    Image = os:getenv("REDIS_DOCKER_IMAGE", ?DEFAULT_REDIS_DOCKER_IMAGE),
+    Image = os:getenv("SERVER_DOCKER_IMAGE", ?DEFAULT_SERVER_DOCKER_IMAGE),
     Hosts = [io_lib:format("127.0.0.1:~p ", [P]) || P <- ?PORTS],
     Cmd = io_lib:format("echo 'yes' | "
                         "docker run --name redis-cluster --rm --net=host -i ~s "
@@ -113,35 +97,7 @@ wait_for_consistent_cluster() ->
     wait_for_consistent_cluster(?PORTS).
 
 wait_for_consistent_cluster(Ports) ->
-    fun Loop(N) ->
-            case check_consistent_cluster(Ports) of
-                ok ->
-                    true;
-                {error, _} when N > 0 ->
-                    timer:sleep(500),
-                    Loop(N-1);
-                {error, SlotMaps} ->
-                    error({timeout_consistent_cluster, SlotMaps})
-            end
-    end(20).
-
-check_consistent_cluster(Ports) ->
-    SlotMaps = [fun(Port) ->
-                        {ok, Pid} = ered_client:connect("127.0.0.1", Port, []),
-                        {ok, SlotMap} = ered_client:command(Pid, [<<"CLUSTER">>, <<"SLOTS">>]),
-                        ered_client:close(Pid),
-                        SlotMap
-                end(P) || P <- Ports],
-    Consistent = case lists:usort(SlotMaps) of
-                     [SlotMap] ->
-                         Ports =:= [Port || {_Ip, Port} <- ered_lib:slotmap_all_nodes(SlotMap)];
-                     _NotAllIdentical ->
-                         false
-                 end,
-    case Consistent of
-        true -> ok;
-        false -> {error, SlotMaps}
-    end.
+    ered_test_utils:wait_for_consistent_cluster(Ports, ?CLIENT_OPTS).
 
 end_per_suite(_Config) ->
     stop_containers().
@@ -274,6 +230,7 @@ t_client_killed(_) ->
                        Result = ered:command(R, SleepCommand, <<"k">>),
                        TestPid ! {crashed_command_result, Result}
                end),
+    timer:sleep(200), %% Let the spawned command be sent.
     ered:command_async(R, SleepCommand, <<"k">>,
                        fun (Reply) ->
                                %% We never get this reply. The ered_client
@@ -299,7 +256,7 @@ t_client_killed(_) ->
                        end),
     ?MSG({async_command_when_down, {ok, <<"OK">>}}),
     %% End of race condition.
-    ?MSG(#{addr := {"127.0.0.1", Port}, master := true, msg_type := connected}),
+    ?MSG(#{addr := {"127.0.0.1", Port}, master := true, msg_type := connected}, 10000),
     AddrToPid1 = ered:get_addr_to_client_map(R),
     Pid1 = maps:get(Addr, AddrToPid1),
     true = (Pid1 =/= Pid0),
@@ -421,14 +378,15 @@ t_manual_failover_then_old_master_down(_) ->
 
     %% We allow a number of info messages during this procedure, but not the
     %% status change events 'cluster_not_ok' and 'cluster_ok'.
-    ?OPTIONAL_MSG(#{addr := {"127.0.0.1", Port}, msg_type := connect_error}),
+    ?OPTIONAL_MSG(#{addr := {"127.0.0.1", Port}, msg_type := connect_error, reason := econnrefused}),
+    ?OPTIONAL_MSG(#{addr := {"127.0.0.1", Port}, msg_type := connect_error, reason := econnrefused}),
     ?OPTIONAL_MSG(#{addr := {"127.0.0.1", Port}, msg_type := node_down_timeout}),
     ?OPTIONAL_MSG(#{addr := {"127.0.0.1", Port}, msg_type := node_deactivated}),
     no_more_msgs().
 
 t_blackhole(_) ->
     %% Simulate that a Redis node is unreachable, e.g. a network failure. We use
-    %% 'docket pause', similar to sending SIGSTOP to a process, to make one
+    %% 'docker pause', similar to sending SIGSTOP to a process, to make one
     %% Redis node unresponsive. This makes TCP recv() and connect() time out.
     CloseWait = 2000,                           % default is 10000
     NodeDownTimeout = 2000,                     % default is 2000
@@ -478,6 +436,76 @@ t_blackhole(_) ->
     ?MSG(#{msg_type := slot_map_updated}),
     ?MSG(#{msg_type := connected, addr := {"127.0.0.1", Port}, master := false}),
 
+    no_more_msgs().
+
+t_blackhole_all_nodes(_) ->
+    %% Simulate that all nodes are unreachable, e.g. a network failure. We use
+    %% 'docker pause', similar to sending SIGSTOP to a process, to make the
+    %% nodes unresponsive. This makes TCP recv() and connect() time out.
+    CloseWait = 2000,                           % default is 10000
+    NodeDownTimeout = 2000,                     % default is 2000
+    ResponseTimeout = 10000,                    % default is 10000
+    R = start_cluster([{close_wait, CloseWait},
+                       %% Require replicas for 'cluster OK'.
+                       {min_replicas, 1},
+                       {client_opts,
+                        [{node_down_timeout, NodeDownTimeout},
+                         {connection_opts,
+                          [{response_timeout, ResponseTimeout}]}]}
+                      ]),
+
+    %% Pause all nodes
+    lists:foreach(fun(Port) ->
+                          Pod = get_pod_name_from_port(Port),
+                          ct:pal("Pausing container: " ++ os:cmd("docker pause " ++ Pod))
+                  end, ?PORTS),
+
+    %% Send PING to all nodes and expect closed sockets, error replies for sent requests,
+    %% and a report that the cluster is not ok.
+    TestPid = self(),
+    AddrToPid = ered:get_addr_to_client_map(R),
+    maps:foreach(fun(_ClientAddr, ClientPid) ->
+                         ered:command_client_async(ClientPid, [<<"PING">>],
+                                                   fun(Reply) -> TestPid ! {ping_reply, Reply} end)
+                 end, AddrToPid),
+
+    [?MSG(#{msg_type := socket_closed, reason := {recv_exit, timeout}, addr := {"127.0.0.1", Port}},
+          ResponseTimeout + 1000) || Port <- ?PORTS],
+    ?MSG({ping_reply, {error, _Reason1}}, NodeDownTimeout + 1000),
+    ?MSG({ping_reply, {error, _Reason2}}, NodeDownTimeout + 1000),
+    ?MSG({ping_reply, {error, _Reason3}}, NodeDownTimeout + 1000),
+    ?MSG({ping_reply, {error, _Reason4}}, NodeDownTimeout + 1000),
+    ?MSG({ping_reply, {error, _Reason5}}, NodeDownTimeout + 1000),
+    ?MSG({ping_reply, {error, _Reason6}}, NodeDownTimeout + 1000),
+    [?MSG(#{msg_type := node_down_timeout, addr := {"127.0.0.1", Port}}) || Port <- ?PORTS],
+    ?MSG(#{msg_type := cluster_not_ok, reason := master_down}),
+
+    %% Unpause all nodes
+    lists:foreach(fun(Port) ->
+                          Pod = get_pod_name_from_port(Port),
+                          ct:pal("Unpausing container: " ++ os:cmd("docker unpause " ++ Pod))
+                  end, ?PORTS),
+    timer:sleep(500),
+
+    wait_for_consistent_cluster(),
+
+    %% Expect connects and a cluster ok.
+    [?MSG(#{msg_type := connected, addr := {"127.0.0.1", Port}}, 10000) || Port <- ?PORTS],
+    ?MSG(#{msg_type := cluster_ok}, 10000),
+
+    no_more_msgs().
+
+
+t_connect_timeout(_) ->
+    %% Connect to an unreachable cluster (a blackhole address) using a configured
+    %% connect_timeout.
+    {ok, _P} = ered:connect_cluster([{"192.168.254.254", 30001}],
+                                    [{info_pid, [self()]},
+                                     {client_opts,
+                                      [{connection_opts, [{connect_timeout, 100}]}]
+                                     }]),
+
+    ?MSG(#{msg_type := connect_error, reason := timeout}, 200),
     no_more_msgs().
 
 
@@ -542,7 +570,7 @@ t_empty_initial_slotmap(_) ->
      || Port <- ?PORTS],
     ?MSG(#{msg_type := cluster_ok}, 5000),
 
-    %% Ingore all slotmap updates. There may be multiple of those before all
+    %% Ignore all slotmap updates. There may be multiple of those before all
     %% nodes have discovered each other. There may be incomplete slotmaps as
     %% well before all nodes have discovered each other, so the connections to
     %% some nodes may be temporarily deactivated.
@@ -703,15 +731,14 @@ t_queue_full(_) ->
                    Loop(N-1)
     end(21),
 
-    recv({reply, {error, queue_overflow}}, 1000),
+    ?MSG({reply, {error, queue_overflow}}),
     [ct:pal("~s\n", [os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " CLIENT UNPAUSE")]) || Port <- Ports],
-    msg(msg_type, queue_full),
-    #{reason := master_queue_full} = msg(msg_type, cluster_not_ok),
+    ?MSG(#{msg_type := queue_full}),
+    ?MSG(#{msg_type := cluster_not_ok, reason := master_queue_full}),
 
-
-    msg(msg_type, queue_ok),
-    msg(msg_type, cluster_ok),
-    [recv({reply, {ok, <<"PONG">>}}, 1000) || _ <- lists:seq(1,20)],
+    ?MSG(#{msg_type := queue_ok}),
+    ?MSG(#{msg_type := cluster_ok}),
+    [?MSG({reply, {ok, <<"PONG">>}}) || _ <- lists:seq(1,20)],
     no_more_msgs(),
     ok.
 
@@ -721,10 +748,10 @@ t_kill_client(_) ->
 
     %% KILL will close the TCP connection to the redis client
     ct:pal("~p\n",[os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " CLIENT KILL TYPE NORMAL")]),
-    #{addr := {_, Port}} = msg(msg_type, socket_closed),
+    ?MSG(#{msg_type := socket_closed, addr := {_, Port}}),
 
     %% connection reestablished
-    #{addr := {_, Port}} = msg(msg_type, connected),
+    ?MSG(#{msg_type := connected, addr := {_, Port}}),
     no_more_msgs().
 
 t_new_cluster_master(_) ->
@@ -732,7 +759,7 @@ t_new_cluster_master(_) ->
                        {close_wait, 100}]),
 
     %% Create new master
-    Image = os:getenv("REDIS_DOCKER_IMAGE", ?DEFAULT_REDIS_DOCKER_IMAGE),
+    Image = os:getenv("SERVER_DOCKER_IMAGE", ?DEFAULT_SERVER_DOCKER_IMAGE),
     Pod = cmd_log("docker run --name redis-30007 -d --net=host --restart=on-failure "++Image++" redis-server --cluster-enabled yes --port 30007 --cluster-node-timeout 2000"),
     cmd_until("redis-cli -p 30007 CLUSTER MEET 127.0.0.1 30001", "OK"),
     cmd_until("redis-cli -p 30007 CLUSTER INFO", "cluster_state:ok"),
@@ -959,52 +986,7 @@ move_key(SourcePort, DestPort, Key) ->
 start_cluster() ->
     start_cluster([]).
 start_cluster(Opts) ->
-    [Port1, Port2 | PortsRest] = Ports = ?PORTS,
-    InitialNodes = [{"127.0.0.1", Port} || Port <- [Port1, Port2]],
-
-    wait_for_consistent_cluster(),
-    {ok, P} = ered:connect_cluster(InitialNodes, [{info_pid, [self()]}] ++ Opts),
-
-    ConnectedInit = [#{msg_type := connected} = msg(addr, {"127.0.0.1", Port})
-                     || Port <- [Port1, Port2]],
-
-    #{slot_map := SlotMap} = msg(msg_type, slot_map_updated, 1000),
-
-    IdMap =  maps:from_list(lists:flatmap(
-                              fun([_,_|Nodes]) ->
-                                      [{Port, Id} || [_Addr, Port, Id |_]<- Nodes]
-                              end, SlotMap)),
-
-    ConnectedRest = [#{msg_type := connected} = msg(addr, {"127.0.0.1", Port})
-                     || Port <- PortsRest],
-
-    ClusterIds = [Id || #{cluster_id := Id} <- ConnectedInit ++ ConnectedRest],
-    ClusterIds = [maps:get(Port, IdMap) || Port <- Ports],
-
-    ?MSG(#{msg_type := cluster_ok}),
-
-    %% Clear all old data
-    [{ok, _} = ered:command_client(Client, [<<"FLUSHDB">>]) || Client <- ered:get_clients(P)],
-
-    no_more_msgs(),
-    P.
-
-msg(Key, Val) ->
-    msg(Key, Val, 1000).
-
-msg(Key, Val, Time) ->
-    receive
-        M = #{Key := Val} -> M
-    after Time ->
-            error({timeout, {Key, Val}, erlang:process_info(self(), messages)})
-    end.
-
-recv(Msg, Time) ->
-    receive
-        Msg -> Msg
-    after Time ->
-            error({timeout, Msg, erlang:process_info(self(), messages)})
-    end.
+    ered_test_utils:start_cluster(?PORTS, Opts).
 
 no_more_msgs() ->
     {messages,Msgs} = erlang:process_info(self(), messages),

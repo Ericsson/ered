@@ -1,0 +1,4 @@
+# See https://github.com/crate-ci/typos/blob/master/docs/reference.md to configure typos.
+
+[type.erlang.extend-identifiers]
+ba = "ba" # Used by hash/1 (CRC16)
