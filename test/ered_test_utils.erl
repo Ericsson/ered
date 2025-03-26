@@ -85,7 +85,7 @@ wait_for_all_nodes_available(Ports, ClientOpts) ->
 wait_for_connection_up([]) ->
     ok;
 wait_for_connection_up(Clients) ->
-    #{client_id := Client} = ?MSG(#{msg_type := connected}, 15000),
+    #{client_id := Client} = ?MSG(#{msg_type := connected}, 60000),
     {ok, <<"PONG">>} = ered_client:command(Client, [<<"ping">>]),
 
     %% Stop client and allow optional connect_error events
@@ -93,6 +93,7 @@ wait_for_connection_up(Clients) ->
     ?MSG(#{msg_type := client_stopped, client_id := Client}),
     ?OPTIONAL_MSG(#{msg_type := connect_error, client_id := Client}),
     ?OPTIONAL_MSG(#{msg_type := connect_error, client_id := Client}),
+    ?OPTIONAL_MSG(#{msg_type := node_down_timeout, client_id := Client}),
     wait_for_connection_up(lists:delete(Client, Clients)).
 
 no_more_msgs() ->

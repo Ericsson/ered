@@ -548,6 +548,7 @@ t_empty_slotmap(_) ->
            response := empty,
            addr := {"127.0.0.1", _Port}}),
     create_cluster(),
+    wait_for_consistent_cluster(),
     no_more_msgs().
 
 
@@ -563,6 +564,7 @@ t_empty_initial_slotmap(_) ->
 
     %% Now restore the cluster and check that ered reaches an OK state.
     create_cluster(),
+    wait_for_consistent_cluster(),
 
     %% Ered updates the slotmap repeatedly until all slots are covered and all
     %% masters have a replica. In the end, we're connected to all nodes.
