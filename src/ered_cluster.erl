@@ -351,7 +351,6 @@ handle_info(Msg = #{msg_type := MsgType, client_id := _Pid, addr := Addr}, State
                              NewState
                      end;
                  _ when MsgType =:= node_down_timeout;
-                        MsgType =:= node_deactivated;
                         MsgType =:= init_error;
                         MsgType =:= client_stopped ->
                      %% Client is down.
