@@ -23,7 +23,7 @@ jobs:
           packages: redis-server
           version: 1.0
       - name: Install Erlang/OTP
-        uses: erlef/setup-beam@8aa8a857c6be0daae6e97272bb299d5b942675a4 # v1.19.0
+        uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1.20.4
         with:
           otp-version: '26.2.4'
           rebar3-version: '3.23.0'
@@ -51,7 +51,7 @@ jobs:
           packages: redis-server faketime
           version: 1.0
       - name: Install Erlang/OTP
-        uses: erlef/setup-beam@8aa8a857c6be0daae6e97272bb299d5b942675a4 # v1.19.0
+        uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1.20.4
         with:
           otp-version: '26.2.4'
           rebar3-version: '3.23.0'
