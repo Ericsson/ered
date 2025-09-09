@@ -105,7 +105,7 @@
 -type key()        :: binary().
 
 -type opt() ::
-        %% If there is a TRYAGAIN response from Redis then wait
+        %% If there is a TRYAGAIN response from the server then wait
         %% this many milliseconds before re-sending the command
         {try_again_delay, non_neg_integer()} |
         %% Only do these many retries or re-sends before giving
@@ -114,12 +114,12 @@
         {redirect_attempts, non_neg_integer()} |
         %% List of pids to receive cluster info messages. See ered_info_msg module.
         {info_pid, [pid()]} |
-        %% CLUSTER SLOTS command is used to fetch slots from the Redis cluster.
+        %% CLUSTER SLOTS command is used to fetch slots from the cluster.
         %% This value sets how long to wait before trying to send the command again.
         {update_slot_wait, non_neg_integer()} |
         %% Options passed to the client
         {client_opts, [ered_client:opt()]} |
-        %% For each Redis master node, the min number of replicas for the cluster
+        %% For each primary node, the min number of replicas for the cluster
         %% to be considered OK.
         {min_replicas, non_neg_integer()} |
         %% If non-zero, a check that all nodes converge and report identical
@@ -160,10 +160,10 @@ stop(ServerRef) ->
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec command(server_ref(), command(), key(), timeout()) -> reply().
 %%
-%% Send a command to the Redis cluster. The command will be routed to
-%% the correct Redis node client based on the provided key.
+%% Send a command to the cluster. The command will be routed to
+%% the correct cluster node client based on the provided key.
 %% If the command is a single command then it is represented as a
-%% list of binaries where the first binary is the Redis command
+%% list of binaries where the first binary is the command
 %% to execute and the rest of the binaries are the arguments.
 %% If the command is a pipeline, e.g. multiple commands to executed
 %% then they need to all map to the same slot for things to
@@ -188,7 +188,7 @@ command_async(ServerRef, Command, Key, ReplyFun) when is_function(ReplyFun, 1) -
 -spec command_all(server_ref(), command()) -> [reply()].
 -spec command_all(server_ref(), command(), timeout()) -> [reply()].
 %%
-%% Send the same command to all connected master Redis nodes.
+%% Send the same command to all connected primary nodes.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 command_all(ServerRef, Command) ->
     command_all(ServerRef, Command, infinity).
@@ -202,7 +202,7 @@ command_all(ServerRef, Command, Timeout) ->
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec get_clients(server_ref()) -> [client_ref()].
 %%
-%% Get all Redis master node clients
+%% Get all primary node clients
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 get_clients(ServerRef) ->
     gen_server:call(ServerRef, get_clients).
@@ -218,7 +218,7 @@ get_addr_to_client_map(ServerRef) ->
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec update_slots(server_ref(), non_neg_integer() | any, client_ref() | any) -> ok.
 %%
-%% Trigger a CLUSTER SLOTS command towards the specified Redis node if
+%% Trigger a CLUSTER SLOTS command towards the specified node if
 %% the slot map version provided is the same as the one stored in the
 %% cluster process state. This is used when a cluster state change is
 %% detected with a MOVED redirection. It is also used when triggering

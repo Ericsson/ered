@@ -1,6 +1,6 @@
 -module(ered).
 
-%% External API for using connecting and sending commands to Redis cluster.
+%% External API for using connecting and sending commands.
 
 %% API
 -export([connect_cluster/2, connect_client/3,
@@ -42,11 +42,10 @@
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec connect_cluster([addr()], [opt()]) -> {ok, server_ref()} | {error, term()}.
 %%
-%% Start the cluster handling
-%% process which will set up clients to the provided addresses and
-%% fetch the cluster slot map. Once there is a complete slot map and
-%% all Redis node clients are connected this process is ready to
-%% serve requests.
+%% Connect to a cluster. A cluster handling process manages sets up
+%% client connections to the provided addresses and fetches the
+%% cluster slot map. Once there is a complete slot map and all node
+%% are connected, the cluster client is ready to serve requests.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 connect_cluster(Addrs, Opts) ->
     try ered_cluster_sup:start_child() of
@@ -59,9 +58,17 @@ connect_cluster(Addrs, Opts) ->
     end.
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec connect(host(), inet:port_number(), [opt()]) -> {ok, client_ref()} | {error, term()}.
+%%
+%% Open a single client connection to a node.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+connect(Host, Port, Opts) ->
+    ered_client:connect(Host, Port, Opts).
+
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec connect_client(host(), inet:port_number(), [opt()]) -> {ok, client_ref()} | {error, term()}.
 %%
-%% Open a single client connection to a Redis node.
+%% Open a single client connection to a node. (Alias of connect/3.)
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 connect_client(Host, Port, Opts) ->
     ered_client:connect(Host, Port, Opts).
@@ -79,15 +86,15 @@ close(ServerRef) ->
 -spec command(server_ref(), command(), key()) -> reply().
 -spec command(server_ref(), command(), key(), timeout()) -> reply().
 %%
-%% Send a command to the Redis cluster. The command will be routed to
-%% the correct Redis node client based on the provided key.
+%% Send a command to the cluster. The command will be routed to
+%% the correct node based on the provided key.
 %% If the command is a single command then it is represented as a
-%% list of binaries where the first binary is the Redis command
+%% list of binaries where the first binary is the command name
 %% to execute and the rest of the binaries are the arguments.
 %% If the command is a pipeline, e.g. multiple commands to executed
 %% then they need to all map to the same slot for things to
 %% work as expected.
-%% Command/3 is the same as setting the timeout to infinity.
+%% command/3 is the same as setting the timeout to infinity.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 command(ServerRef, Command, Key) ->
     ered_cluster:command(ServerRef, Command, Key, infinity).
@@ -109,7 +116,7 @@ command_async(ServerRef, Command, Key, ReplyFun) when is_function(ReplyFun, 1) -
 -spec command_all(server_ref(), command()) -> [reply()].
 -spec command_all(server_ref(), command(), timeout()) -> [reply()].
 %%
-%% Send the same command to all connected master Redis nodes.
+%% Send the same command to all primary nodes in the cluster.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 command_all(ServerRef, Command) ->
     ered_cluster:command_all(ServerRef, Command, infinity).
@@ -121,7 +128,7 @@ command_all(ServerRef, Command, Timeout) ->
 -spec command_client(client_ref(), command()) -> reply().
 -spec command_client(client_ref(), command(), timeout()) -> reply().
 %%
-%% Send the command to a specific Redis client without any client routing.
+%% Send the command to a node without any cluster routing.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 command_client(ClientRef, Command) ->
     ered_client:command(ClientRef, Command, infinity).
@@ -132,7 +139,7 @@ command_client(ClientRef, Command, Timeout) ->
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec command_client_async(client_ref(), command(), reply_fun()) -> ok.
 %%
-%% Send command to a specific Redis client in asynchronous fashion. The
+%% Send command to a node in asynchronous fashion. The
 %% provided callback function will be called with the reply. Note that
 %% the callback function will executing in the redis client process and
 %% should not hang or perform any lengthy task.
@@ -143,7 +150,7 @@ command_client_async(ClientRef, Command, CallbackFun) ->
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec get_clients(server_ref()) -> [client_ref()].
 %%
-%% Get all Redis master node clients
+%% Get clients to each of the primary nodes in a cluster
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 get_clients(ServerRef) ->
     ered_cluster:get_clients(ServerRef).

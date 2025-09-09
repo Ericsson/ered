@@ -130,7 +130,7 @@
         %% Set if the CLUSTER ID should be fetched used in info messages.
         %% (not useful if the client is used outside of a cluster)
         {use_cluster_id, boolean()} |
-        %% Username and password for Redis authentication (AUTH or HELLO).
+        %% Username and password for authentication (AUTH or HELLO).
         {auth, {binary(), binary()}}.
 
 %%%===================================================================
@@ -199,7 +199,7 @@ reactivate(ServerRef) ->
 -spec command(server_ref(), ered_command:command()) -> reply().
 -spec command(server_ref(), ered_command:command(), timeout()) -> reply().
 %%
-%% Send a command to the connected Redis node. The argument can be a
+%% Send a command to the connected node. The argument can be a
 %% single command as a list of binaries, a pipeline of command as a
 %% list of commands or a formatted redis_command.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -212,7 +212,7 @@ command(ServerRef, Command, Timeout) ->
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec command_async(server_ref(), ered_command:command(), reply_fun()) -> ok.
 %%
-%% Send a command to the connected Redis node in asynchronous
+%% Send a command to the connected node in asynchronous
 %% fashion. The provided callback function will be called with the
 %% reply. Note that the callback function will executing in the redis
 %% client process and should not hang or perform any lengthy task.
