@@ -96,10 +96,10 @@
             }).
 
 
--type addr() :: ered_client:addr().
--type addr_set() :: sets:set(addr()).
--type server_ref() :: pid().
--type client_ref() :: ered_client:server_ref().
+-type addr()       :: ered:addr().
+-type addr_set()   :: sets:set(addr()).
+-type cluster_ref() :: pid().
+-type client_ref() :: pid().
 -type command()    :: ered_command:command().
 -type reply()      :: ered_client:reply() | {error, unmapped_slot | client_down}.
 -type key()        :: binary().
@@ -140,7 +140,7 @@
 %%%===================================================================
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec start_link([addr()], [opt()], pid(), pid()) -> {ok, server_ref()} | {error, term()}.
+-spec start_link([addr()], [opt()], pid(), pid()) -> {ok, cluster_ref()} | {error, term()}.
 %%
 %% Start the cluster process. Clients will be set up to the provided
 %% addresses and cluster information will be retrieved.
@@ -149,7 +149,7 @@ start_link(Addrs, Opts, ClientSup, User) ->
     gen_server:start_link(?MODULE, {Addrs, Opts, ClientSup, User}, []).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec stop(server_ref()) -> ok.
+-spec stop(cluster_ref()) -> ok.
 %%
 %% Stop the cluster handling process and in turn disconnect and stop
 %% all clients.
@@ -158,7 +158,7 @@ stop(ServerRef) ->
     gen_server:stop(ServerRef).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec command(server_ref(), command(), key(), timeout()) -> reply().
+-spec command(cluster_ref(), command(), key(), timeout()) -> reply().
 %%
 %% Send a command to the cluster. The command will be routed to
 %% the correct cluster node client based on the provided key.
@@ -174,7 +174,7 @@ command(ServerRef, Command, Key, Timeout) ->
     gen_server:call(ServerRef, {command, C, Key}, Timeout).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec command_async(server_ref(), command(), key(), fun((reply()) -> any())) -> ok.
+-spec command_async(cluster_ref(), command(), key(), fun((reply()) -> any())) -> ok.
 %%
 %% Like command/4 but asynchronous. Instead of returning the reply, the reply
 %% function is applied to the reply when it is available. The reply function
@@ -185,8 +185,8 @@ command_async(ServerRef, Command, Key, ReplyFun) when is_function(ReplyFun, 1) -
     gen_server:cast(ServerRef, {command_async, C, Key, ReplyFun}).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec command_all(server_ref(), command()) -> [reply()].
--spec command_all(server_ref(), command(), timeout()) -> [reply()].
+-spec command_all(cluster_ref(), command()) -> [reply()].
+-spec command_all(cluster_ref(), command(), timeout()) -> [reply()].
 %%
 %% Send the same command to all connected primary nodes.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -200,7 +200,7 @@ command_all(ServerRef, Command, Timeout) ->
     [ered_client:command(ClientRef, Cmd, Timeout) || ClientRef <- get_clients(ServerRef)].
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec get_clients(server_ref()) -> [client_ref()].
+-spec get_clients(cluster_ref()) -> [client_ref()].
 %%
 %% Get all primary node clients
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -208,7 +208,7 @@ get_clients(ServerRef) ->
     gen_server:call(ServerRef, get_clients).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec get_addr_to_client_map(server_ref()) -> #{addr() => client_ref()}.
+-spec get_addr_to_client_map(cluster_ref()) -> #{addr() => client_ref()}.
 %%
 %% Get the address to client mapping. This includes all clients.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -216,7 +216,7 @@ get_addr_to_client_map(ServerRef) ->
     gen_server:call(ServerRef, get_addr_to_client_map).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec update_slots(server_ref(), non_neg_integer() | any, client_ref() | any) -> ok.
+-spec update_slots(cluster_ref(), non_neg_integer() | any, client_ref() | any) -> ok.
 %%
 %% Trigger a CLUSTER SLOTS command towards the specified node if
 %% the slot map version provided is the same as the one stored in the
@@ -229,7 +229,7 @@ update_slots(ServerRef, SlotMapVersion, Node) ->
     gen_server:cast(ServerRef, {trigger_map_update, SlotMapVersion, Node}).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec connect_node(server_ref(), addr()) -> client_ref().
+-spec connect_node(cluster_ref(), addr()) -> client_ref().
 %%
 %% Connect a client to the address and return a client reference. If a
 %% client already exists for the address return a reference. This is

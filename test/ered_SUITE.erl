@@ -161,8 +161,8 @@ t_command_pipeline(_) ->
 
 
 t_cluster_crash(_) ->
-    R = start_cluster(),
-    exit(R, crash),
+    {cluster, Pid} = start_cluster(),
+    exit(Pid, crash),
     ?MSG(#{msg_type := cluster_stopped, reason := crash}),
     no_more_msgs().
 
@@ -171,8 +171,8 @@ t_client_crash(_) ->
     R = start_cluster(),
     Port = get_master_from_key(R, <<"k">>),
     Addr = {"127.0.0.1", Port},
-    AddrToPid0 = ered:get_addr_to_client_map(R),
-    Pid0 = maps:get(Addr, AddrToPid0),
+    AddrToClient0 = ered:get_addr_to_client_map(R),
+    {client, Pid0} = maps:get(Addr, AddrToClient0),
     monitor(process, Pid0),
     TestPid = self(),
     SleepCommand = [<<"DEBUG">>, <<"SLEEP">>, <<"1">>],
@@ -205,8 +205,8 @@ t_client_crash(_) ->
     ?MSG({async_command_when_down, {ok, <<"OK">>}}),
     %% End of race condition.
     ?MSG(#{addr := {"127.0.0.1", Port}, master := true, msg_type := connected}, 10000),
-    AddrToPid1 = ered:get_addr_to_client_map(R),
-    Pid1 = maps:get(Addr, AddrToPid1),
+    AddrToClient1 = ered:get_addr_to_client_map(R),
+    {client, Pid1} = maps:get(Addr, AddrToClient1),
     true = (Pid1 =/= Pid0),
     {ok, <<"OK">>} = ered:command(R, [<<"SET">>, <<"k">>, <<"v">>], <<"k">>),
     ?MSG(#{msg_type := cluster_ok}),
@@ -221,8 +221,8 @@ t_client_killed(_) ->
     R = start_cluster(),
     Port = get_master_from_key(R, <<"k">>),
     Addr = {"127.0.0.1", Port},
-    AddrToPid0 = ered:get_addr_to_client_map(R),
-    Pid0 = maps:get(Addr, AddrToPid0),
+    AddrToClient0 = ered:get_addr_to_client_map(R),
+    {client, Pid0} = maps:get(Addr, AddrToClient0),
     monitor(process, Pid0),
     TestPid = self(),
     SleepCommand = [<<"DEBUG">>, <<"SLEEP">>, <<"1">>],
@@ -257,8 +257,8 @@ t_client_killed(_) ->
     ?MSG({async_command_when_down, {ok, <<"OK">>}}),
     %% End of race condition.
     ?MSG(#{addr := {"127.0.0.1", Port}, master := true, msg_type := connected}, 10000),
-    AddrToPid1 = ered:get_addr_to_client_map(R),
-    Pid1 = maps:get(Addr, AddrToPid1),
+    AddrToClient1 = ered:get_addr_to_client_map(R),
+    {client, Pid1} = maps:get(Addr, AddrToClient1),
     true = (Pid1 =/= Pid0),
     {ok, <<"OK">>} = ered:command(R, [<<"SET">>, <<"k">>, <<"v">>], <<"k">>),
     %% We don't get message 'cluster_ok' because we never got 'cluster_not_ok'.
@@ -401,7 +401,7 @@ t_blackhole(_) ->
                       ]),
     Port = get_master_port(R),
     Pod = get_pod_name_from_port(Port),
-    ClientPid = maps:get({"127.0.0.1", Port}, ered:get_addr_to_client_map(R)),
+    ClientRef = maps:get({"127.0.0.1", Port}, ered:get_addr_to_client_map(R)),
     ct:pal("Pausing container: " ++ os:cmd("docker pause " ++ Pod)),
 
     %% Now when a command times out, the ered_connection process is restarted
@@ -409,7 +409,7 @@ t_blackhole(_) ->
     %% is not OK. Failover happens. Ered discovers the new master and reports
     %% that the cluster is OK again.
     TestPid = self(),
-    ered:command_client_async(ClientPid, [<<"PING">>],
+    ered:command_client_async(ClientRef, [<<"PING">>],
                               fun(Reply) -> TestPid ! {ping_reply, Reply} end),
 
     ?MSG(#{msg_type := socket_closed, reason := {recv_exit, timeout}, master := true},
@@ -463,11 +463,11 @@ t_blackhole_all_nodes(_) ->
     %% Send PING to all nodes and expect closed sockets, error replies for sent requests,
     %% and a report that the cluster is not ok.
     TestPid = self(),
-    AddrToPid = ered:get_addr_to_client_map(R),
-    maps:foreach(fun(_ClientAddr, ClientPid) ->
-                         ered:command_client_async(ClientPid, [<<"PING">>],
+    AddrToClient = ered:get_addr_to_client_map(R),
+    maps:foreach(fun(_ClientAddr, ClientRef) ->
+                         ered:command_client_async(ClientRef, [<<"PING">>],
                                                    fun(Reply) -> TestPid ! {ping_reply, Reply} end)
-                 end, AddrToPid),
+                 end, AddrToClient),
 
     [?MSG(#{msg_type := socket_closed, reason := {recv_exit, timeout}, addr := {"127.0.0.1", Port}},
           ResponseTimeout + 1000) || Port <- ?PORTS],
@@ -817,8 +817,8 @@ t_new_cluster_master(_) ->
             %% Update slotmap by picking a specific node to avoid using port 30007.
             %% The node using port 30007 includes itself in the slotmap and dont
             %% accept CLUSTER FORGET. This avoids intermittent missing messages.
-            ClientPid = maps:get({"127.0.0.1", 30001}, ered:get_addr_to_client_map(R)),
-            ered:update_slots(R, ClientPid),
+            ClientRef = maps:get({"127.0.0.1", 30001}, ered:get_addr_to_client_map(R)),
+            ered:update_slots(R, ClientRef),
             ?MSG(#{msg_type := slot_map_updated}),
             ?MSG(#{msg_type := node_deactivated}),
             ?MSG(#{msg_type := client_stopped})
@@ -947,8 +947,8 @@ t_missing_slot(_) ->
     Slot = ered_lib:hash(Key),
     Port = get_master_from_key(R, Key),
     Addr = {"127.0.0.1", Port},
-    AddrToPid = ered:get_addr_to_client_map(R),
-    Client = maps:get(Addr, AddrToPid),
+    AddrToClient = ered:get_addr_to_client_map(R),
+    Client = maps:get(Addr, AddrToClient),
 
     cmd_log("redis-cli -p " ++ integer_to_list(Port) ++ " CLUSTER DELSLOTS " ++ integer_to_list(Slot)),
     ered:update_slots(R, Client),

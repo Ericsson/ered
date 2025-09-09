@@ -57,7 +57,7 @@
          pid(),
          Ref :: any(),
          Acc :: [result()]}. % Acc used to store partial pipeline results
--type host() :: inet:socket_address() | inet:hostname().
+-type host() :: ered:host().
 -type connect_result() :: {ok, connection_ref()} | {error, timeout | inet:posix()}.
 -type connection_ref() :: pid().
 

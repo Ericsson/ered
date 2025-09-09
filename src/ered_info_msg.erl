@@ -38,7 +38,7 @@
           reason := any()}.
 
 
--type addr() :: ered_client:addr().
+-type addr() :: ered:addr().
 
 %%%===================================================================
 %%% API

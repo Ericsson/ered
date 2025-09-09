@@ -21,7 +21,7 @@
 
 -export_type([info_msg/0,
               addr/0,
-              server_ref/0,
+              client_ref/0,
               opt/0,
               reply/0,
               reply_fun/0
@@ -77,8 +77,8 @@
 -type reply()       :: {ok, ered_connection:result()} | {error, command_error()}.
 -type reply_fun()   :: fun((reply()) -> any()).
 
--type host()        :: ered_connection:host().
--type addr()        :: {host(), inet:port_number()}.
+-type host()        :: ered:host().
+-type addr()        :: ered:addr().
 -type status()      :: connection_up | {connection_down, down_reason()} | node_deactivated |
                        queue_ok | queue_full.
 -type reason()      :: term(). % ssl reasons are of type any so no point being more specific
@@ -103,7 +103,7 @@
         info_msg(queue_ok, none) |
         info_msg(queue_full, none) |
         info_msg(client_stopped, any()).
--type server_ref()  :: pid().
+-type client_ref()  :: pid().
 
 -type opt() ::
         %% Options passed to the connection module
@@ -139,9 +139,9 @@
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec start_link(host(), inet:port_number(), [opt()]) ->
-          {ok, server_ref()} | {error, term()}.
+          {ok, pid()} | {error, term()}.
 -spec start_link(host(), inet:port_number(), [opt()], pid()) ->
-          {ok, server_ref()} | {error, term()}.
+          {ok, pid()} | {error, term()}.
 %%
 %% Start the client process. Create a connection towards the provided
 %% address. Typically called by a supervisor. Use connect/3 instead.
@@ -153,7 +153,7 @@ start_link(Host, Port, Opts, User) ->
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec connect(host(), inet:port_number(), [opt()]) ->
-          {ok, server_ref()} | {error, term()}.
+          {ok, pid()} | {error, term()}.
 %%
 %% Create a standalone connection supervised by the ered application.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -166,7 +166,7 @@ connect(Host, Port, Opts) ->
     end.
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec close(server_ref()) -> ok.
+-spec close(pid()) -> ok.
 %%
 %% Stop the client process. Cancel all commands in queue. Take down
 %% connection.
@@ -175,7 +175,7 @@ close(ServerRef) ->
     gen_server:stop(ServerRef).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec deactivate(server_ref()) -> ok.
+-spec deactivate(pid()) -> ok.
 %%
 %% Prepares the client to stop. Cancel all commands in queue and put
 %% the client in a 'node_deactivated' state. The client is still
@@ -186,7 +186,7 @@ deactivate(ServerRef) ->
     gen_server:cast(ServerRef, deactivate).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec reactivate(server_ref()) -> ok.
+-spec reactivate(pid()) -> ok.
 %%
 %% Reactivates a client that has previously been deactivated. This is
 %% done when a node comes back to a cluster before the client for that
@@ -196,8 +196,8 @@ reactivate(ServerRef) ->
     gen_server:cast(ServerRef, reactivate).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec command(server_ref(), ered_command:command()) -> reply().
--spec command(server_ref(), ered_command:command(), timeout()) -> reply().
+-spec command(pid(), ered_command:command()) -> reply().
+-spec command(pid(), ered_command:command(), timeout()) -> reply().
 %%
 %% Send a command to the connected node. The argument can be a
 %% single command as a list of binaries, a pipeline of command as a
@@ -210,7 +210,7 @@ command(ServerRef, Command, Timeout) ->
     gen_server:call(ServerRef, {command, ered_command:convert_to(Command)}, Timeout).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec command_async(server_ref(), ered_command:command(), reply_fun()) -> ok.
+-spec command_async(pid(), ered_command:command(), reply_fun()) -> ok.
 %%
 %% Send a command to the connected node in asynchronous
 %% fashion. The provided callback function will be called with the
