@@ -38,8 +38,7 @@ Overview
 --------
 
 The `ered_ref()` type is either a `cluster_ref()` or a `client_ref()` as
-returned by the `connect_cluster/2` or `connect_client/3` functions
-respectively.
+returned by the `connect_cluster/2` or `connect/3` functions respectively.
 
 A `reply()` is a nested structure on the format described under [Valkey to
 Erlang Term Representation](#valkey-to-erlang-term-representation).
@@ -67,10 +66,10 @@ inet:port_number()}`, are used to discover the rest of the cluster.
 
 For options, see [Options](#options) below.
 
-### `connect_client/3`
+### `connect/3`
 
 ```Erlang
-connect_client(addr(), port(), [client_opt()]) -> {ok, client_ref()} | {error, term()}.
+connect(addr(), port(), [client_opt()]) -> {ok, client_ref()} | {error, term()}.
 ```
 
 Connects to a single node. The process is supervised by the `ered`
@@ -216,7 +215,7 @@ The following options can be passed to `connect_cluster/2`:
 
 ### Client options
 
-Options passed to `connect_client/3`. For `connect_cluster/2`, the client
+Options passed to `connect/3`. For `connect_cluster/2`, the client
 options are wrapped in `{client_opts, [...]}` and included in cluster options.
 
 * `{connection_opts, [ered_connection:opt()]}`

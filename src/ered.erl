@@ -3,7 +3,7 @@
 %% External API for using connecting and sending commands.
 
 %% API
--export([connect_cluster/2, connect_client/3,
+-export([connect/3, connect_cluster/2,
          close/1,
          command/2, command/3, command/4,
          command_async/3, command_async/4,
@@ -61,11 +61,11 @@ connect_cluster(Addrs, Opts) ->
     end.
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec connect_client(host(), inet:port_number(), [client_opt()]) -> {ok, client_ref()} | {error, term()}.
+-spec connect(host(), inet:port_number(), [client_opt()]) -> {ok, client_ref()} | {error, term()}.
 %%
 %% Open a single client connection to a node.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-connect_client(Host, Port, Opts) ->
+connect(Host, Port, Opts) ->
     case ered_client:connect(Host, Port, Opts) of
         {ok, Pid} ->
             {ok, {client, Pid}};
@@ -139,7 +139,7 @@ command_async({client, Pid}, Command, _Key, ReplyFun) when is_function(ReplyFun,
 command_all({cluster, Pid}, Command) ->
     ered_cluster:command_all(Pid, Command, infinity).
 command_all({cluster, Pid}, Command, Timeout) ->
-    [ered_client:command(Pid, Command, Timeout)].
+    ered_cluster:command_all(Pid, Command, Timeout).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec command_client(client_ref(), command()) -> reply().
