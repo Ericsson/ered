@@ -93,6 +93,10 @@ generate_expired_client_cert() ->
 
 start_containers() ->
     Image = os:getenv("SERVER_DOCKER_IMAGE", ?DEFAULT_SERVER_DOCKER_IMAGE),
+    ServerBinary = case Image of
+                       "redis" ++ _ -> "redis-server";
+                       _Other       -> "valkey-server"
+                   end,
     EnableDebugCommand = case Image of
                              "redis:" ++ [N, $. | _] when N >= $1, N < $7 ->
                                  ""; % Option does not exist.
@@ -102,7 +106,7 @@ start_containers() ->
     {ok, Path} = file:get_cwd(),
     cmd_log([io_lib:format("docker run --name redis-tls-~p -d --net=host"
                            " -v ~s/tls:/tls:ro"
-                           " --restart=on-failure ~s redis-server"
+                           " --restart=on-failure ~s ~s"
                            "~s"
                            " --cluster-enabled yes --tls-cluster yes"
                            " --tls-port ~p --port 0"
@@ -111,7 +115,7 @@ start_containers() ->
                            " --tls-key-file /tls/server.key"
                            " --tls-ca-cert-file /tls/ca.crt"
                            " --cluster-node-timeout 2000;",
-                           [P, Path, Image, EnableDebugCommand, P])
+                           [P, Path, Image, ServerBinary, EnableDebugCommand, P])
              || P <- ?PORTS]),
 
     ered_test_utils:wait_for_all_nodes_available(?PORTS, ?CLIENT_OPTS).
@@ -122,13 +126,17 @@ stop_containers() ->
 
 create_cluster() ->
     Image = os:getenv("SERVER_DOCKER_IMAGE", ?DEFAULT_SERVER_DOCKER_IMAGE),
+    Cli = case Image of
+              "redis" ++ _ -> "redis-cli";
+              _Other       -> "valkey-cli"
+          end,
     Hosts = [io_lib:format("127.0.0.1:~p ", [P]) || P <- ?PORTS],
     {ok, Path} = file:get_cwd(),
     Cmd = io_lib:format("echo 'yes' | "
                         "docker run --name redis-tls-cli --rm --net=host -v ~s/tls:/tls:ro -i ~s "
-                        "redis-cli --tls --cacert /tls/ca.crt --cert /tls/server.crt --key /tls/server.key"
+                        "~s --tls --cacert /tls/ca.crt --cert /tls/server.crt --key /tls/server.key"
                         " --cluster-replicas 1 --cluster create ~s",
-                        [Path, Image, Hosts]),
+                        [Path, Image, Cli, Hosts]),
     cmd_log(Cmd).
 
 no_more_msgs() ->
