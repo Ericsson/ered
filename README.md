@@ -1,7 +1,7 @@
 ered
 ====
 
-An Erlang client library for connecting to a Valkey cluster and standalone instances.
+An Erlang client for connecting to Valkey clusters and standalone instances.
 
 This projects is
 aiming to replace [eredis](https://github.com/Nordix/eredis) and [eredis_cluster](https://github.com/Nordix/eredis_cluster).
@@ -40,8 +40,13 @@ Overview
 The `ered_ref()` type is either a `cluster_ref()` or a `client_ref()` as
 returned by the `connect_cluster/2` or `connect/3` functions respectively.
 
-A `reply()` is a nested structure on the format described under [Valkey to
-Erlang Term Representation](#valkey-to-erlang-term-representation).
+A `command()` is a list of the command name and arguments as binaries. A batch
+of pipelined commands can be provided as a list of lists of binaries and then
+the returned reply value is a list of reply values.
+
+A `reply()` is `{ok, Value} | {error, any()}` where `Value` is a nested
+structure on the format described under [Valkey to Erlang Term
+Representation](#valkey-to-erlang-term-representation).
 
 For exact types, see the source code.
 
@@ -129,7 +134,7 @@ Send the same command to all connected primary nodes.
 ### `get_clients/1`
 
 ```Erlang
-get_clients(server_ref()) -> [client_ref()].
+get_clients(cluster_ref()) -> [client_ref()].
 ```
 
 Get all primary node clients.
@@ -137,7 +142,7 @@ Get all primary node clients.
 ### `get_addr_to_client_map/1`
 
 ```Erlang
-get_addr_to_client_map(server_ref()) -> #{addr() => client_ref()}.
+get_addr_to_client_map(cluster_ref()) -> #{addr() => client_ref()}.
 ```
 
 Get the address to client mapping. This includes all clients.
