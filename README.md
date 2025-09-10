@@ -1,10 +1,12 @@
 ered
 ====
 
-An Erlang client library for connecting to Valkey Cluster
+An Erlang client for connecting to Valkey clusters and standalone instances.
+
+This projects is
 aiming to replace [eredis](https://github.com/Nordix/eredis) and [eredis_cluster](https://github.com/Nordix/eredis_cluster).
 
-It also works for open source versions of Redis Cluster, up to 7.2.
+It also works for open source versions of Redis, tested up to version 7.2.
 
 Status: Beta.
 
@@ -12,25 +14,41 @@ Features:
 
 * status events
 * queuing and load shedding (to handle burst traffic)
-* pipelining of commands
-* [RESP3](https://github.com/redis/redis-specifications/blob/master/protocol/RESP3.md) support
-* ASK redirection supporting hash tags
+* automatic pipelining of commands - a single instance can be used simultaneously by multiple Erlang processes using only one connection to each database node
+* [RESP3](https://valkey.io/topics/protocol/) support
+* cluster and standalone mode
 
 Usage by example
 ----------------
 
 ```Erlang
 1> {ok, _} = application:ensure_all_started(ered, temporary),
-2> {ok, Pid} = ered:connect_cluster([{"localhost", 6379}], []).
-{ok,<0.164.0>}
-3> ered:command(Pid, [<<"SET">>, <<"mykey">>, <<"42">>], <<"mykey">>, 5000).
+2> {ok, EredRef} = ered:connect_cluster([{"localhost", 6379}], []).
+{ok,{cluster,<0.164.0>}}
+3> ered:command(EredRef, [<<"SET">>, <<"mykey">>, <<"42">>], <<"mykey">>, 5000).
 {ok,<<"OK">>}
-4> ered:command_async(Pid, [<<"GET">>, <<"mykey">>], <<"mykey">>, fun(Reply) -> io:format("Reply: ~p~n", [Reply]) end).
+4> ered:command_async(EredRef, [<<"GET">>, <<"mykey">>], <<"mykey">>, fun(Reply) -> io:format("Reply: ~p~n", [Reply]) end).
 ok
 Reply: {ok,<<"42">>}
-5> ered:close(Pid).
+5> ered:close(EredRef).
 ok
 ```
+
+Overview
+--------
+
+The `ered_ref()` type is either a `cluster_ref()` or a `client_ref()` as
+returned by the `connect_cluster/2` or `connect/3` functions respectively.
+
+A `command()` is a list of the command name and arguments as binaries. A batch
+of pipelined commands can be provided as a list of lists of binaries and then
+the returned reply value is a list of reply values.
+
+A `reply()` is `{ok, Value} | {error, any()}` where `Value` is a nested
+structure on the format described under [Valkey to Erlang Term
+Representation](#valkey-to-erlang-term-representation).
+
+For exact types, see the source code.
 
 Functions
 ---------
@@ -38,10 +56,10 @@ Functions
 ### `connect_cluster/2`
 
 ```Erlang
-connect_cluster([addr()], [opt()]) -> {ok, server_ref()} | {error, term()}.
+connect_cluster([addr()], [cluster_opt()]) -> {ok, cluster_ref()} | {error, term()}.
 ```
 
-Start the main process. This will also start the cluster handling
+Connects to a cluster. This will also start the cluster handling
 process which will set up clients to the provided addresses and
 fetch the cluster slot map. Once there is a complete slot map and
 all clients processes are connected to their respective nodes, this
@@ -53,76 +71,70 @@ inet:port_number()}`, are used to discover the rest of the cluster.
 
 For options, see [Options](#options) below.
 
+### `connect/3`
+
+```Erlang
+connect(addr(), port(), [client_opt()]) -> {ok, client_ref()} | {error, term()}.
+```
+
+Connects to a single node. The process is supervised by the `ered`
+application, which needs to be started in advance.
+
+For options, see [Client options](#client-options) below.
+
 ### `close/1`
 
 ```Erlang
-close(server_ref()) -> ok.
+close(ered_ref()) -> ok.
 ```
 
 Stop the main process. This will also stop the cluster handling
 process and in turn disconnect and stop all clients.
 
-### `command/3,4`
+### `command/2,3,4`
 
 ```Erlang
-command(server_ref(), command(), key()) -> reply().
-command(server_ref(), command(), key(), timeout()) -> reply().
+command(ered_ref(), command()) -> reply().
+command(ered_ref(), command(), timeout()) -> reply().
+command(ered_ref(), command(), key()) -> reply().
+command(ered_ref(), command(), key(), timeout()) -> reply().
 ```
 
-Send a command to the cluster. The command will be routed to
-the correct node client based on the provided key.
+Send a command. In cluster mode, the command will be routed to
+the correct node based on the provided key.
 If the command is a single command then it is represented as a
-list of binaries where the first binary is the command
+list of binaries where the first binary is the command name
 to execute and the rest of the binaries are the arguments.
 If the command is a pipeline, e.g. multiple commands to executed
 then they need to all map to the same slot for things to
 work as expected.
-
-`command/3` is the same as setting the timeout to infinity.
+For cluster clients, a key must be provided.
+Omitting timeout is the same as setting the timeout to infinity.
 
 ### `command_async/4`
 
 ```Erlang
-command_async(server_ref(), command(), key(), fun((reply()) -> any())) -> ok.
+command_async(ered_ref(), command(), fun((reply()) -> any())) -> ok.
+command_async(ered_ref(), command(), key(), fun((reply()) -> any())) -> ok.
 ```
 
-Like command/3,4 but asynchronous. Instead of returning the reply, the reply
-function is applied to the reply when it is available. The reply function
-runs in an unspecified process.
+Like command/2,3,4 but asynchronous. Instead of returning the reply, the reply
+function is applied to the reply when it is available. The reply function runs
+in an unspecified process and should not hang or perform any lengthy task.
 
 ### `command_all/2,3`
 
 ```Erlang
-command_all(server_ref(), command()) -> [reply()].
-command_all(server_ref(), command(), timeout()) -> [reply()].
+command_all(cluster_ref(), command()) -> [reply()].
+command_all(cluster_ref(), command(), timeout()) -> [reply()].
 ```
 
 Send the same command to all connected primary nodes.
 
-### `command_client/2,3`
-
-```Erlang
-command_client(client_ref(), command()) -> reply().
-command_client(client_ref(), command(), timeout()) -> reply().
-```
-
-Send the command to a specific client without any client routing.
-
-### `command_client_async/3`
-
-```Erlang
-command_client_async(client_ref(), command(), reply_fun()) -> ok.
-```
-
-Send command to a specific client in asynchronous fashion. The
-provided callback function will be called with the reply. Note that
-the callback function will executing in the client process and
-should not hang or perform any lengthy task.
-
 ### `get_clients/1`
 
 ```Erlang
-get_clients(server_ref()) -> [client_ref()].
+get_clients(cluster_ref()) -> [client_ref()].
 ```
 
 Get all primary node clients.
@@ -130,7 +142,7 @@ Get all primary node clients.
 ### `get_addr_to_client_map/1`
 
 ```Erlang
-get_addr_to_client_map(server_ref()) -> #{addr() => client_ref()}.
+get_addr_to_client_map(cluster_ref()) -> #{addr() => client_ref()}.
 ```
 
 Get the address to client mapping. This includes all clients.
@@ -138,8 +150,8 @@ Get the address to client mapping. This includes all clients.
 ### `update_slots/1,2`
 
 ```Erlang
-update_slots(server_ref()) -> ok.
-update_slots(server_ref(), client_ref()) -> ok.
+update_slots(cluster_ref()) -> ok.
+update_slots(cluster_ref(), client_ref()) -> ok.
 ```
 
 Manually trigger a slot mapping update. If a client pid or name is provided and
@@ -148,6 +160,8 @@ used.
 
 Options
 -------
+
+### Cluster options
 
 The following options can be passed to `connect_cluster/2`:
 
@@ -206,7 +220,8 @@ The following options can be passed to `connect_cluster/2`:
 
 ### Client options
 
-Options passed to `connect_cluster/2` as the options `{client_opts, [...]}`.
+Options passed to `connect/3`. For `connect_cluster/2`, the client
+options are wrapped in `{client_opts, [...]}` and included in cluster options.
 
 * `{connection_opts, [ered_connection:opt()]}`
 
