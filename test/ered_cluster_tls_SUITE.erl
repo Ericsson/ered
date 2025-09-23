@@ -1,4 +1,4 @@
--module(ered_tls_SUITE).
+-module(ered_cluster_tls_SUITE).
 
 -include("ered_test_utils.hrl").
 
@@ -160,7 +160,7 @@ t_command(_) ->
     R = ered_test_utils:start_cluster(?PORTS, Opts),
 
     lists:foreach(fun(N) ->
-                          {ok, <<"OK">>} = ered:command(R, [<<"SET">>, N, N], N)
+                          {ok, <<"OK">>} = ered_cluster:command(R, [<<"SET">>, N, N], N)
                   end,
                   [integer_to_binary(N) || N <- lists:seq(1,100)]),
     no_more_msgs().
@@ -171,7 +171,7 @@ t_expired_cert_tls_1_2(_) ->
 
     ClientOpts = [{connection_opts, [{tls_options, ?TLS_OPTS ++ [{versions, ['tlsv1.2']}]}]}],
 
-    {ok, _R} = ered:connect_cluster([{"127.0.0.1", 31001}],
+    {ok, _R} = ered_cluster:connect([{"127.0.0.1", 31001}],
                                     [{info_pid, [self()]}, {client_opts, ClientOpts}]),
 
     ?MSG(#{msg_type := connect_error, addr := {"127.0.0.1", 31001},
@@ -186,7 +186,7 @@ t_expired_cert_tls_1_3(_) ->
 
     ClientOpts = [{connection_opts, [{tls_options, ?TLS_OPTS ++ [{versions, ['tlsv1.3']}]}]}],
 
-    {ok, _R} = ered:connect_cluster([{"127.0.0.1", 31001}],
+    {ok, _R} = ered_cluster:connect([{"127.0.0.1", 31001}],
                                     [{info_pid, [self()]}, {client_opts, ClientOpts}]),
 
     ?MSG(#{msg_type := socket_closed, addr := {"127.0.0.1", 31001},

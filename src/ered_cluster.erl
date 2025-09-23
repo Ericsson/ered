@@ -8,23 +8,30 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/4,
-         stop/1,
-         command/4, command_async/4,
+-export([connect/2, close/1,
+         command/3, command/4, command_async/4,
          command_all/2, command_all/3,
          get_clients/1,
          get_addr_to_client_map/1,
-         update_slots/3,
+         update_slots/1, update_slots/2,
          connect_node/2
         ]).
+
+%% Internal API used by supervisors
+-export([start_link/4]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
 
--export_type([opt/0,
-              addr/0]).
+-export_type([cluster_ref/0,
+              client_ref/0,
+              opt/0,
+              addr/0,
+              command/0,
+              reply/0,
+              key/0]).
 
 %%%===================================================================
 %%% Definitions
@@ -96,13 +103,13 @@
             }).
 
 
--type addr()       :: ered:addr().
--type addr_set()   :: sets:set(addr()).
--type cluster_ref() :: pid().
--type client_ref() :: pid().
--type command()    :: ered_command:command().
--type reply()      :: ered_client:reply() | {error, unmapped_slot | client_down}.
--type key()        :: binary().
+-type addr()        :: ered:addr().
+-type addr_set()    :: sets:set(addr()).
+-type cluster_ref() :: pid() | atom().
+-type client_ref()  :: pid().
+-type command()     :: ered_command:command().
+-type reply()       :: ered_client:reply() | {error, unmapped_slot | client_down}.
+-type key()         :: binary().
 
 -type opt() ::
         %% If there is a TRYAGAIN response from the server then wait
@@ -140,24 +147,33 @@
 %%%===================================================================
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec start_link([addr()], [opt()], pid(), pid()) -> {ok, cluster_ref()} | {error, term()}.
+-spec connect([addr()], [opt()]) -> {ok, pid()} | {error, term()}.
 %%
-%% Start the cluster process. Clients will be set up to the provided
-%% addresses and cluster information will be retrieved.
+%% Connect to a cluster. A cluster handling process manages sets up
+%% client connections to the provided addresses and fetches the
+%% cluster slot map. Once there is a complete slot map and all node
+%% are connected, the cluster client is ready to serve requests.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-start_link(Addrs, Opts, ClientSup, User) ->
-    gen_server:start_link(?MODULE, {Addrs, Opts, ClientSup, User}, []).
+connect(Addrs, Opts) ->
+    try ered_cluster_sup:start_child() of
+        {ok, ClusterSup} ->
+            {ok, ClientSup} = ered_dyn_cluster_sup:start_client_sup(ClusterSup),
+            {ok, Pid} = ered_dyn_cluster_sup:start_cluster_mgr(ClusterSup, Addrs, Opts, ClientSup, self()),
+            {ok, Pid}
+    catch exit:{noproc, _} ->
+            {error, ered_not_started}
+    end.
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec stop(cluster_ref()) -> ok.
+-spec close(cluster_ref()) -> ok.
 %%
-%% Stop the cluster handling process and in turn disconnect and stop
-%% all clients.
+%% Stop the cluster handling process and disconnect all connections.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-stop(ServerRef) ->
-    gen_server:stop(ServerRef).
+close(ClusterRef) ->
+    gen_server:stop(ClusterRef).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec command(cluster_ref(), command(), key()) -> reply().
 -spec command(cluster_ref(), command(), key(), timeout()) -> reply().
 %%
 %% Send a command to the cluster. The command will be routed to
@@ -168,10 +184,14 @@ stop(ServerRef) ->
 %% If the command is a pipeline, e.g. multiple commands to executed
 %% then they need to all map to the same slot for things to
 %% work as expected.
+%% Omitting timeout is the same as setting the timeout to infinity.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-command(ServerRef, Command, Key, Timeout) ->
+command(ClusterRef, Command, Key) ->
+    command(ClusterRef, Command, Key, infinity).
+
+command(ClusterRef, Command, Key, Timeout) when is_binary(Key) ->
     C = ered_command:convert_to(Command),
-    gen_server:call(ServerRef, {command, C, Key}, Timeout).
+    gen_server:call(ClusterRef, {command, C, Key}, Timeout).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec command_async(cluster_ref(), command(), key(), fun((reply()) -> any())) -> ok.
@@ -216,6 +236,19 @@ get_addr_to_client_map(ServerRef) ->
     gen_server:call(ServerRef, get_addr_to_client_map).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec update_slots(cluster_ref()) -> ok.
+-spec update_slots(cluster_ref(), client_ref()) -> ok.
+%%
+%% Trigger a slot-to-node mapping update using the specified client,
+%% if it's already connected. Otherwise, or if no client is provided,
+%% any connected client is used.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+update_slots(ClusterPid) ->
+    update_slots(ClusterPid, any, any).
+update_slots(ClusterPid, ClientPid) ->
+    update_slots(ClusterPid, any, ClientPid).
+
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec update_slots(cluster_ref(), non_neg_integer() | any, client_ref() | any) -> ok.
 %%
 %% Trigger a CLUSTER SLOTS command towards the specified node if
@@ -224,6 +257,8 @@ get_addr_to_client_map(ServerRef) ->
 %% detected with a MOVED redirection. It is also used when triggering
 %% a slot update manually. In this case the node is 'any', meaning
 %% no specific node is preferred.
+%%
+%% This update_slots/3 is internal. Use update_slots/1,2 instead.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 update_slots(ServerRef, SlotMapVersion, Node) ->
     gen_server:cast(ServerRef, {trigger_map_update, SlotMapVersion, Node}).
@@ -238,6 +273,19 @@ update_slots(ServerRef, SlotMapVersion, Node) ->
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 connect_node(ServerRef, Addr) ->
     gen_server:call(ServerRef, {connect_node, Addr}).
+
+%%%===================================================================
+%%% Internal API (used by supervisors)
+%%%===================================================================
+
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec start_link([addr()], [opt()], pid(), pid()) -> {ok, cluster_ref()} | {error, term()}.
+%%
+%% Start the cluster process. Clients will be set up to the provided
+%% addresses and cluster information will be retrieved.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+start_link(Addrs, Opts, ClientSup, User) ->
+    gen_server:start_link(?MODULE, {Addrs, Opts, ClientSup, User}, []).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -560,7 +608,7 @@ terminate(Reason, State) ->
            || Pid <- maps:values(State#st.nodes)],
     ered_info_msg:cluster_stopped(State#st.info_pid, Reason).
 
-code_change(_OldVsn, State, _Extra) ->
+code_change(_OldVsn, State = #st{}, _Extra) ->
     {ok, State}.
 
 %%%===================================================================
