@@ -26,7 +26,7 @@
 -type command()     :: ered_command:command().
 -type reply()       :: ered_client:reply() | {error, unmapped_slot | client_down}.
 -type reply_fun()   :: ered_client:reply_fun().
--type client_ref()  :: pid() | atom().
+-type client_ref()  :: gen_server:server_ref().
 
 %%%===================================================================
 %%% API

@@ -23,22 +23,26 @@ Usage by example
 
 ```Erlang
 1> {ok, _} = application:ensure_all_started(ered, temporary),
-2> {ok, ClusterRef} = ered_cluster:connect([{"localhost", 6379}], []).
+2> {ok, Pid} = ered_cluster:connect([{"localhost", 6379}], []).
 {ok,<0.164.0>}
-3> ered_cluster:command(ClusterRef, [<<"SET">>, <<"mykey">>, <<"42">>], <<"mykey">>, 5000).
+3> ered_cluster:command(Pid, [<<"SET">>, <<"mykey">>, <<"42">>], <<"mykey">>, 5000).
 {ok,<<"OK">>}
-4> ered_cluster:command_async(ClusterRef, [<<"GET">>, <<"mykey">>], <<"mykey">>, fun(Reply) -> io:format("Reply: ~p~n", [Reply]) end).
+4> ered_cluster:command_async(Pid, [<<"GET">>, <<"mykey">>], <<"mykey">>, fun(Reply) -> io:format("Reply: ~p~n", [Reply]) end).
 ok
 Reply: {ok,<<"42">>}
-5> ered:close(ClusterRef).
+5> ered:close(Pid).
 ok
 ```
 
 Overview
 --------
 
-There is an API for standalone mode (single server node) provided by the `ered`
-module, and API for cluster mode provided by the `ered_cluster` module.
+There is an API for a single server (standalone mode) provided by the `ered`
+module, and an API for cluster mode provided by the `ered_cluster` module.
+
+The pid returned by the connect functions can be registered with a name and used
+by multiple processes in parallel. The commands are multiplexed over the same
+connections automatically.
 
 A `command()` is a list of the command name and arguments as binaries. A batch
 of pipelined commands can be provided as a list of lists of binaries and then
@@ -77,8 +81,8 @@ Closes the connection.
 ### `command/2,3,4`
 
 ```Erlang
-command(ered_ref(), command()) -> reply().
-command(ered_ref(), command(), timeout()) -> reply().
+command(client_ref(), command()) -> reply().
+command(client_ref(), command(), timeout()) -> reply().
 ```
 
 Send a command and return the reply.
@@ -94,7 +98,7 @@ Omitting timeout is the same as setting the timeout to infinity.
 ### `command_async/3`
 
 ```Erlang
-command_async(ered_ref(), command(), fun((reply()) -> any())) -> ok.
+command_async(client_ref(), command(), fun((reply()) -> any())) -> ok.
 ```
 
 Like command/2,3 but asynchronous. Instead of returning the reply, the reply
@@ -107,10 +111,10 @@ Cluster mode API (ered_cluster)
 ### `ered_cluster:connect/2`
 
 ```Erlang
-ered_cluster:connect_cluster([addr()], [opt()]) -> {ok, cluster_ref()} | {error, term()}.
+ered_cluster:connect([addr()], [opt()]) -> {ok, pid()} | {error, term()}.
 ```
 
-Connects to a cluster. This will also start the cluster handling
+Connects to a cluster. This will start the cluster handling
 process which will set up clients to the provided addresses and
 fetch the cluster slot map. Once there is a complete slot map and
 all clients processes are connected to their respective nodes, this
@@ -134,8 +138,8 @@ cluster.
 ### `command/3,4`
 
 ```Erlang
-command(ered_ref(), command(), key()) -> reply().
-command(ered_ref(), command(), key(), timeout()) -> reply().
+command(cluster_ref(), command(), key()) -> reply().
+command(cluster_ref(), command(), key(), timeout()) -> reply().
 ```
 
 Send a command. The command is routed to
@@ -151,7 +155,7 @@ Omitting timeout is the same as setting the timeout to infinity.
 ### `command_async/4`
 
 ```Erlang
-command_async(ered_ref(), command(), key(), fun((reply()) -> any())) -> ok.
+command_async(cluster_ref(), command(), key(), fun((reply()) -> any())) -> ok.
 ```
 
 Like command/3,4 but asynchronous. Instead of returning the reply, the reply

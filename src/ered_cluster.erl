@@ -105,7 +105,7 @@
 
 -type addr()        :: ered:addr().
 -type addr_set()    :: sets:set(addr()).
--type cluster_ref() :: pid() | atom().
+-type cluster_ref() :: gen_server:server_ref().
 -type client_ref()  :: pid().
 -type command()     :: ered_command:command().
 -type reply()       :: ered_client:reply() | {error, unmapped_slot | client_down}.
