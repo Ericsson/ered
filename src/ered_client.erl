@@ -38,6 +38,7 @@
          resp_version = 3 :: 2..3,
          use_cluster_id = false :: boolean(),
          auth = none :: {binary(), binary()} | none,
+         select_db = 0 :: non_neg_integer(),
          reconnect_wait = 1000 :: non_neg_integer(),
 
          node_down_timeout = 2000 :: non_neg_integer(),
@@ -129,7 +130,10 @@
         %% (not useful if the client is used outside of a cluster)
         {use_cluster_id, boolean()} |
         %% Username and password for authentication (AUTH or HELLO).
-        {auth, {binary(), binary()}}.
+        {auth, {binary(), binary()}} |
+        %% Select a logical database after a connect.
+        %% The SELECT command is only sent when non-zero.
+        {select_db, non_neg_integer()}.
 
 %%%===================================================================
 %%% API
@@ -233,6 +237,7 @@ init({Host, Port, OptsList, User}) ->
                 ({node_down_timeout, Val}, S) -> S#opts{node_down_timeout = Val};
                 ({use_cluster_id, Val}, S)    -> S#opts{use_cluster_id = Val};
                 ({auth, Auth = {_, _}}, S)    -> S#opts{auth = Auth};
+                ({select_db, Val}, S)         -> S#opts{select_db = Val};
                 (Other, _)                    -> error({badarg, Other})
              end,
              #opts{host = Host, port = Port},
@@ -506,7 +511,9 @@ init(MainPid, ConnectionPid, Opts) ->
                {2, none} ->
                    []
            end,
-    case Cmd1 ++ Cmd2 of
+    Cmd3 = [[<<"SELECT">>, integer_to_binary(Opts#opts.select_db)] ||
+               Opts#opts.select_db > 0],
+    case Cmd1 ++ Cmd2 ++ Cmd3 of
         [] ->
             {ok, undefined};
         Commands ->

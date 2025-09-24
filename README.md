@@ -318,6 +318,11 @@ options are wrapped in `{client_opts, [...]}` and included in cluster options.
   Username and password for Valkey authentication. If a password is configured
   without a username, use `default` as the username.
 
+* `{select_db, non_neg_integer()}`
+
+  Select a logical database after a successful connect.
+  Default 0, i.e. the SELECT command is not sent.
+
 ### Connection options
 
 Connection options are included in the options passed to `ered:connect/3`
