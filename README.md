@@ -54,15 +54,15 @@ Representation](#valkey-to-erlang-term-representation).
 
 For exact types, see the source code.
 
-Standalone mode API (ered)
---------------------------
+Standalone mode API
+-------------------
 
-These functions connect to a single server instance.
+The `ered` module is the client API to a single server instance.
 
-### `connect/3`
+### `ered:connect/3`
 
 ```Erlang
-connect(addr(), port(), [client_opt()]) -> {ok, pid()} | {error, term()}.
+ered:connect(addr(), port(), [opt()]) -> {ok, pid()} | {error, term()}.
 ```
 
 Connects to a single node. The process is supervised by the `ered`
@@ -70,19 +70,19 @@ application, which needs to be started in advance.
 
 For options, see [Client options](#client-options) below.
 
-### `close/1`
+### `ered:close/1`
 
 ```Erlang
-close(client_ref()) -> ok.
+ered:close(client_ref()) -> ok.
 ```
 
 Closes the connection.
 
-### `command/2,3,4`
+### `ered:command/2,3`
 
 ```Erlang
-command(client_ref(), command()) -> reply().
-command(client_ref(), command(), timeout()) -> reply().
+ered:command(client_ref(), command()) -> reply().
+ered:command(client_ref(), command(), timeout()) -> reply().
 ```
 
 Send a command and return the reply.
@@ -95,23 +95,25 @@ work as expected.
 For cluster clients, a key must be provided.
 Omitting timeout is the same as setting the timeout to infinity.
 
-### `command_async/3`
+### `ered:command_async/3`
 
 ```Erlang
-command_async(client_ref(), command(), fun((reply()) -> any())) -> ok.
+ered:command_async(client_ref(), command(), fun((reply()) -> any())) -> ok.
 ```
 
 Like command/2,3 but asynchronous. Instead of returning the reply, the reply
 function is applied to the reply when it is available. The reply function runs
 in an unspecified process and should not hang or perform any lengthy task.
 
-Cluster mode API (ered_cluster)
--------------------------------
+Cluster mode API
+----------------
+
+The `ered_cluster` module is the API to a cluster.
 
 ### `ered_cluster:connect/2`
 
 ```Erlang
-ered_cluster:connect([addr()], [opt()]) -> {ok, pid()} | {error, term()}.
+ered_cluster:connect([addr()], [ered_cluster:opt()]) -> {ok, pid()} | {error, term()}.
 ```
 
 Connects to a cluster. This will start the cluster handling
@@ -124,9 +126,9 @@ the `ered` application, which needs to be started in advance.
 One or more addresses, `addr() :: {inet:socket_address() | inet:hostname(),
 inet:port_number()}`, are used to discover the rest of the cluster.
 
-For options, see [Options](#options) below.
+For options, see [Cluster options](#cluster-options) below.
 
-### `close/1`
+### `ered_cluster:close/1`
 
 ```Erlang
 ered_cluster:close(cluster_ref()) -> ok.
@@ -135,11 +137,11 @@ ered_cluster:close(cluster_ref()) -> ok.
 Stops the ered cluster handling process and closes all connections to the
 cluster.
 
-### `command/3,4`
+### `ered_cluster:command/3,4`
 
 ```Erlang
-command(cluster_ref(), command(), key()) -> reply().
-command(cluster_ref(), command(), key(), timeout()) -> reply().
+ered_cluster:command(cluster_ref(), command(), key()) -> reply().
+ered_cluster:command(cluster_ref(), command(), key(), timeout()) -> reply().
 ```
 
 Send a command. The command is routed to
@@ -152,48 +154,48 @@ then they need to all map to the same slot for things to
 work as expected.
 Omitting timeout is the same as setting the timeout to infinity.
 
-### `command_async/4`
+### `ered_cluster:command_async/4`
 
 ```Erlang
-command_async(cluster_ref(), command(), key(), fun((reply()) -> any())) -> ok.
+ered_cluster:command_async(cluster_ref(), command(), key(), fun((reply()) -> any())) -> ok.
 ```
 
 Like command/3,4 but asynchronous. Instead of returning the reply, the reply
 function is applied to the reply when it is available. The reply function runs
 in an unspecified process and should not hang or perform any lengthy task.
 
-### `command_all/2,3`
+### `ered_cluster:command_all/2,3`
 
 ```Erlang
-command_all(cluster_ref(), command()) -> [reply()].
-command_all(cluster_ref(), command(), timeout()) -> [reply()].
+ered_cluster:command_all(cluster_ref(), command()) -> [reply()].
+ered_cluster:command_all(cluster_ref(), command(), timeout()) -> [reply()].
 ```
 
 Send the same command to all connected primary nodes.
 
-### `get_clients/1`
+### `ered_cluster:get_clients/1`
 
 ```Erlang
-get_clients(cluster_ref()) -> [client_ref()].
+ered_cluster:get_clients(cluster_ref()) -> [client_ref()].
 ```
 
 Get all primary node clients. Use the `ered` module for sending commands to the
 individual instances.
 
-### `get_addr_to_client_map/1`
+### `ered_cluster:get_addr_to_client_map/1`
 
 ```Erlang
-get_addr_to_client_map(cluster_ref()) -> #{addr() => client_ref()}.
+ered_cluster:get_addr_to_client_map(cluster_ref()) -> #{addr() => client_ref()}.
 ```
 
 Get the address to client mapping. This includes all clients. Use the `ered`
 module for sending commands to the individual instances.
 
-### `update_slots/1,2`
+### `ered_cluster:update_slots/1,2`
 
 ```Erlang
-update_slots(cluster_ref()) -> ok.
-update_slots(cluster_ref(), client_ref()) -> ok.
+ered_cluster:update_slots(cluster_ref()) -> ok.
+ered_cluster:update_slots(cluster_ref(), client_ref()) -> ok.
 ```
 
 Manually trigger a slot mapping update. If a client pid or name is provided and
@@ -362,9 +364,11 @@ Options passed to `connect/2` as the options `{client_opts, [{connection_opts, [
 Info messages
 -------------
 
+### Cluster specific messages
+
 When one or more pids have been provided as the option `{info_pid, [pid()]}` to
-`connect/2`, these are the messages ered sends. All messages are maps with at
-least the key `msg_type`.
+`ered_cluster:connect/2`, these are the messages ered sends. All messages are
+maps with at least the key `msg_type`.
 
 Messages about the cluster as a whole:
 
@@ -387,7 +391,7 @@ Messages about the cluster as a whole:
 
   * `too_few_replicas` if any of the primary nodes has fewer replicas than the
     minimum number as specified using the option `{min_replicas,
-    non_neg_integer()`. See options above.
+    non_neg_integer()}`. See options above.
 
 * `#{msg_type := slot_map_updated, slot_map := list(), map_version :=
   non_neg_integer(), addr := addr()}` is sent when the cluster slot-to-node
@@ -401,21 +405,25 @@ Messages about the cluster as a whole:
 * `#{msg_type := cluster_stopped, reason := any()}` when the ered cluster
   instance is closing down.
 
-Messages about the connection to a specific node are in the following form:
+### Messages about a single connection
+
+Messages about the connection to a single node, created using `ered:connect/3`
+or created internally as part of a cluster, are on the following form:
 
 ```Erlang
 #{msg_type := MsgType,
   reason := Reason,
-  master := boolean(),
+  master => boolean(), % Optional. Added by ered_cluster.
   addr := addr(),
   client_id := pid(),
-  node_id := string()}
+  cluster_id => binary() % Optional. Added by ered_cluster.
+ }
 ```
 
 The field `msg_type` identifies what kind of event has happened and is described
 below. Reason depends on `msg_type`. Master describes whether the node is a
 primary (formerly called master) or a replica. Addr is a tuple `{Host, Port}` to the Valkey node. Client id
-is the pid of the `ered_client` responsible for the connection. Node id is
+is the pid of the `ered` client responsible for the connection. Cluster id is
 assigned by Valkey and is used to identify the node within the cluster.
 
 The possible values of the `msg_type` field for connection events are as
