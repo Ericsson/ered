@@ -21,7 +21,6 @@
 
 -export_type([info_msg/0,
               addr/0,
-              client_ref/0,
               opt/0,
               reply/0,
               reply_fun/0
@@ -103,7 +102,6 @@
         info_msg(queue_ok, none) |
         info_msg(queue_full, none) |
         info_msg(client_stopped, any()).
--type client_ref()  :: pid().
 
 -type opt() ::
         %% Options passed to the connection module
@@ -329,7 +327,7 @@ terminate(Reason, State) ->
     report_connection_status({connection_down, {client_stopped, Reason}}, State),
     ok.
 
-code_change(_OldVsn, State, _Extra) ->
+code_change(_OldVsn, State = #st{opts = #opts{}}, _Extra) ->
     {ok, State}.
 
 %%%===================================================================
