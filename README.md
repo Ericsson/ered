@@ -30,7 +30,7 @@ Usage by example
 4> ered_cluster:command_async(Pid, [<<"GET">>, <<"mykey">>], <<"mykey">>, fun(Reply) -> io:format("Reply: ~p~n", [Reply]) end).
 ok
 Reply: {ok,<<"42">>}
-5> ered:close(Pid).
+5> ered_cluster:close(Pid).
 ok
 ```
 
@@ -320,7 +320,11 @@ options are wrapped in `{client_opts, [...]}` and included in cluster options.
 
 ### Connection options
 
-Options passed to `connect/2` as the options `{client_opts, [{connection_opts, [...]}]}`.
+Connection options are included in the options passed to `ered:connect/3`
+wrapped in `{connection_opts, [ered_connection:opt()]}`.
+
+For `ered_cluster:connect/2`, the connection options are included under client
+options, as `{client_opts, [{connection_opts, [...]}]}`.
 
 * `{batch_size, non_neg_integer()}`
 
