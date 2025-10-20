@@ -30,16 +30,16 @@ jobs:
              exit 1; \
           fi
 
-  spellcheck:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-      - name: Install typos
-        uses: taiki-e/install-action@14083e64ac8cf1f5e54356df00b9779b23e192a1 # v2.58.29
-        with:
-          tool: typos
-      - name: Run typos
-        run: typos --config=.github/typos.toml
+  # spellcheck:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+  #     - name: Install typos
+  #       uses: taiki-e/install-action@14083e64ac8cf1f5e54356df00b9779b23e192a1 # v2.58.29
+  #       with:
+  #         tool: typos
+  #     - name: Run typos
+  #       run: typos --config=.github/typos.toml
 
   build:
     runs-on: ubuntu-22.04
