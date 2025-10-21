@@ -83,8 +83,8 @@ connect(Host, Port) ->
 connect(Host, Port, Opts) ->
     Pid = connect_async(Host, Port, Opts),
     receive
-        {connected, Pid} ->
-            {ok, Pid};
+        {connected, Pid, RecvPid, Socket} ->
+            {ok, Pid, RecvPid, Socket};
         {connect_error, Pid, Reason} ->
             {error, Reason}
     end.
@@ -106,7 +106,7 @@ connect_async(Addr, Port, Opts) ->
     [error({badarg, BadOpt})
      || BadOpt <- proplists:get_keys(Opts) -- [batch_size, tcp_options, tls_options, push_cb, response_timeout,
                                                tcp_connect_timeout, tls_connect_timeout, connect_timeout]],
-    BatchSize = proplists:get_value(batch_size, Opts, 16),
+    _BatchSize = proplists:get_value(batch_size, Opts, 16),
     ResponseTimeout = proplists:get_value(response_timeout, Opts, 10000),
     PushCb = proplists:get_value(push_cb, Opts, fun(_) -> ok end),
     TcpOptions = proplists:get_value(tcp_options, Opts, []),
@@ -126,18 +126,21 @@ connect_async(Addr, Port, Opts) ->
               SendPid = self(),
               case catch Transport:connect(Addr, Port, [{active, false}, binary] ++ Options, Timeout) of
                   {ok, Socket} ->
-                      Master ! {connected, SendPid},
                       Pid = spawn_link(fun() ->
                                                ExitReason = recv_loop(Transport, Socket, PushCb, ResponseTimeout),
                                                %% Inform sending process about exit
                                                SendPid ! ExitReason
                                        end),
-                      ExitReason = send_loop(Transport, Socket, Pid, BatchSize),
-                      Master ! {socket_closed, SendPid, ExitReason};
+                      Master ! {connected, SendPid, Pid, {Socket, Transport}};
                   {error, Reason} ->
                       Master ! {connect_error, SendPid, Reason};
                   Other -> % {'EXIT',_}
                       Master ! {connect_error, SendPid, Other}
+              end,
+              %% Handle the exit of the receive_pid
+              receive
+                  {recv_exit, R} ->
+                      Master ! {socket_closed, SendPid, {recv_exit, R}}
               end
       end).
 
@@ -333,52 +336,3 @@ update_waiting(Timeout, State) when State#recv_st.waiting == [] ->
     end;
 update_waiting(_Timeout, State) ->
     State.
-
-%%
-%% Send logic
-%%
-
-send_loop(Transport, Socket, RecvPid, BatchSize) ->
-    case receive_data(BatchSize) of
-        {recv_exit, Reason} ->
-            {recv_exit, Reason};
-        {data, {Refs, Data}} ->
-            Time = erlang:monotonic_time(millisecond),
-            case Transport:send(Socket, Data) of
-                ok ->
-                    %% send to recv proc to fetch the response
-                    RecvPid ! {requests, Refs, Time},
-                    send_loop(Transport, Socket, RecvPid, BatchSize);
-                {error, Reason} ->
-                    %% Give recv_loop time to finish processing
-                    %% This will shut down recv_loop if it is waiting on socket
-                    Transport:shutdown(Socket, read_write),
-                    %% This will shut down recv_loop if it is waiting for a reference
-                    RecvPid ! close_down,
-                    %% Ok, recv done, time to die
-                    receive {recv_exit, _Reason} -> ok end,
-                    {send_exit, Reason}
-            end
-    end.
-
-receive_data(N) ->
-    receive_data(N, infinity, []).
-
-receive_data(0, _Time, Acc) ->
-    {data, lists:unzip(lists:reverse(Acc))};
-receive_data(N, Time, Acc) ->
-    receive
-        Msg ->
-            case Msg of
-                {recv_exit, Reason} ->
-                    {recv_exit, Reason};
-                {send, Pid, Ref, Commands} ->
-                    Data = ered_command:get_data(Commands),
-                    Class = ered_command:get_response_class(Commands),
-                    RefInfo = {Class, Pid, Ref, []},
-                    Acc1 = [{RefInfo, Data} | Acc],
-                    receive_data(N - 1, 0, Acc1)
-            end
-    after Time ->
-            receive_data(0, 0, Acc)
-    end.

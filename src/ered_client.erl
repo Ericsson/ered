@@ -64,6 +64,10 @@
          queue_full_event_sent = false :: boolean(), % set to true when full, false when reaching queue_ok_level
          node_status = up :: up | node_down | node_deactivated,
 
+         transport_socket = none :: gen_tcp:socket() | ssl:sslsocket(),
+         recv_pid = none :: pid(),
+
+
          node_down_timer = none :: none | reference(),
          opts = #opts{}
 
@@ -276,8 +280,7 @@ handle_cast(reactivate, #st{connection_pid = none} = State) ->
 handle_cast(reactivate, State) ->
     {noreply, State#st{node_status = up}}.
 
-
-handle_info({{command_reply, Pid}, Reply}, State = #st{pending = Pending, connection_pid = Pid}) ->
+handle_info({{command_reply, _}, Reply}, State = #st{pending = Pending, connection_pid = _Pid}) ->
     case q_out(Pending) of
         empty ->
             {noreply, State};
@@ -299,15 +302,15 @@ handle_info(Reason = {init_error, _Errors}, State) ->
 handle_info(Reason = {socket_closed, _CloseReason}, State) ->
     {noreply, connection_down(Reason, State)};
 
-handle_info({connected, Pid, ClusterId}, State) ->
+handle_info({connected, ConnectionPid, Socket, RecvPid, ClusterId}, State) ->
     State1 = cancel_node_down_timer(State),
-    State2 = State1#st{connection_pid = Pid, cluster_id = ClusterId,
+    State2 = State1#st{connection_pid = ConnectionPid, cluster_id = ClusterId,
                        node_status = case State1#st.node_status of
                                          node_down -> up;
                                          OldStatus -> OldStatus
                                      end},
     State3 = report_connection_status(connection_up, State2),
-    {noreply, process_commands(State3)};
+    {noreply, process_commands(State3#st{transport_socket = Socket, recv_pid = RecvPid})};
 
 handle_info({timeout, TimerRef, node_down}, State) when TimerRef == State#st.node_down_timer ->
     State1 = report_connection_status({connection_down, node_down_timeout}, State),
@@ -358,7 +361,8 @@ cancel_node_down_timer(#st{node_down_timer = TimerRef} = State) ->
 connection_down(Reason, State) ->
     State1 = State#st{waiting = q_join(State#st.pending, State#st.waiting),
                       pending = q_new(),
-                      connection_pid = none},
+                      connection_pid = none,
+                      transport_socket = none},
     State2 = process_commands(State1),
     State3 = report_connection_status({connection_down, Reason}, State2),
     start_node_down_timer(State3).
@@ -372,7 +376,7 @@ process_commands(State) ->
         (NumWaiting > 0) and (NumPending < State#st.opts#opts.max_pending) and (State#st.connection_pid /= none) ->
             {Command, NewWaiting} = q_out(State#st.waiting),
             Data = get_command_payload(Command),
-            ered_connection:command_async(State#st.connection_pid, Data, {command_reply, State#st.connection_pid}),
+            send(State#st.recv_pid, State#st.transport_socket, Data, {command_reply, State#st.connection_pid}),
             process_commands(State#st{pending = q_in(Command, State#st.pending),
                                       waiting = NewWaiting});
 
@@ -478,28 +482,25 @@ send_info(_Msg, _State) ->
 connect(Pid, Opts) ->
     Result = ered_connection:connect(Opts#opts.host, Opts#opts.port, Opts#opts.connection_opts),
     case Result of
-        {error, Reason} ->
-            Pid ! {connect_error, Reason},
-            timer:sleep(Opts#opts.reconnect_wait);
-
-        {ok, ConnectionPid} ->
-            case init(Pid, ConnectionPid, Opts) of
-                {socket_closed, ConnectionPid, Reason} ->
-                    Pid ! {socket_closed, Reason},
-                    timer:sleep(Opts#opts.reconnect_wait);
+        {ok, ConnectionPid, RecvPid, Socket} ->
+            case init(Pid, RecvPid, Socket, Opts) of
                 {ok, ClusterId}  ->
-                    Pid ! {connected, ConnectionPid, ClusterId},
+                    Pid ! {connected, ConnectionPid, Socket, RecvPid, ClusterId},
                     receive
                         {socket_closed, ConnectionPid, Reason} ->
                             Pid ! {socket_closed, Reason}
-                    end
-            end
-
+                    end;
+                {socket_closed, ConnectionPid, Reason} ->
+                    Pid ! {socket_closed, Reason},
+                    timer:sleep(Opts#opts.reconnect_wait)
+            end;
+        {error, Reason} ->
+            Pid ! {connect_error, Reason},
+            timer:sleep(Opts#opts.reconnect_wait)
     end,
     connect(Pid, Opts).
 
-
-init(MainPid, ConnectionPid, Opts) ->
+init(MainPid, RecvPid, Socket, Opts) ->
     Cmd1 =  [[<<"CLUSTER">>, <<"MYID">>] || Opts#opts.use_cluster_id],
     Cmd2 = case {Opts#opts.resp_version, Opts#opts.auth} of
                {3, {Username, Password}} ->
@@ -517,7 +518,7 @@ init(MainPid, ConnectionPid, Opts) ->
         [] ->
             {ok, undefined};
         Commands ->
-            ered_connection:command_async(ConnectionPid, Commands, init_command_reply),
+            send(RecvPid, Socket, Commands, init_command_reply),
             receive
                 {init_command_reply, Reply} ->
                     case [Reason || {error, Reason} <- Reply] of
@@ -528,9 +529,31 @@ init(MainPid, ConnectionPid, Opts) ->
                         Errors ->
                             MainPid ! {init_error, Errors},
                             timer:sleep(Opts#opts.reconnect_wait),
-                            init(MainPid, ConnectionPid, Opts)
+                            init(MainPid, RecvPid, Socket, Opts)
                     end;
                 Other ->
                     Other
             end
     end.
+
+send(RecvPid, {Socket, Transport}, Commands, Ref) ->
+    Time = erlang:monotonic_time(millisecond),
+    Commands2 = ered_command:convert_to(Commands),
+    Data = ered_command:get_data(Commands2),
+    Class = ered_command:get_response_class(Commands2),
+    RefInfo = {Class, self(), Ref, []},
+    case Transport:send(Socket, Data) of
+        ok ->
+            RecvPid ! {requests, [RefInfo], Time};
+        {error, Reason} ->
+            %% Give recv_loop time to finish processing
+            %% This will shut down recv_loop if it is waiting on socket
+            Transport:shutdown(Socket, read_write),
+            %% This will shut down recv_loop if it is waiting for a reference
+            RecvPid ! close_down,
+            %% Ok, recv done, time to die
+            receive {recv_exit, _Reason} -> ok end,
+            self() ! {socket_closed, Reason}
+    end.
+
+

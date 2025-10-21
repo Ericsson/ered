@@ -4,6 +4,7 @@
 
 run_test_() ->
     [
+     {spawn, fun split_data_t/0},
      {spawn, fun request_t/0},
      {spawn, fun fail_connect_t/0},
      {spawn, fun fail_parse_t/0},
@@ -23,6 +24,15 @@ run_test_() ->
      {spawn, fun empty_string_host_t/0},
      {spawn, fun bad_host_t/0}
     ].
+
+split_data_t() ->
+    {ok, ListenSock} = gen_tcp:listen(0, [binary, {active , false}]),
+    {ok, Port} = inet:port(ListenSock),
+    Client = start_client(Port),
+    Data = iolist_to_binary([<<"A">> || _ <- lists:seq(0,3000)]),
+    ered_client:command(Client, [<<"hello">>, <<"3">>]),
+    <<"OK">> = ered_client:command(Client, [<<"set">>, <<"key1">>, Data]),
+    Data = ered_client:command(Client, [<<"get">>, <<"key1">>]).
 
 request_t() ->
     {ok, ListenSock} = gen_tcp:listen(0, [binary, {active , false}]),
