@@ -46,7 +46,8 @@
          queue_ok_level = 2000 :: non_neg_integer(),
 
          max_waiting = 5000 :: non_neg_integer(),
-         max_pending = 128 :: non_neg_integer()
+         max_pending = 128 :: non_neg_integer(),
+         batch_size = 16 :: non_neg_integer()
         }).
 
 -record(st,
@@ -119,6 +120,8 @@
         %% If the queue has been full then it is considered ok
         %% again when it reaches this level
         {queue_ok_level, non_neg_integer()} |
+        %% Automatic batching when queue is full, turn off batching by setting size to 1.
+        {batch_size, non_neg_integer()} |
         %% How long to wait to reconnect after a failed connect attempt
         {reconnect_wait, non_neg_integer()} |
         %% Pid to send status messages to
@@ -234,6 +237,7 @@ init({Host, Port, OptsList, User}) ->
              fun({connection_opts, Val}, S)   -> S#opts{connection_opts = Val};
                 ({max_waiting, Val}, S)       -> S#opts{max_waiting = Val};
                 ({max_pending, Val}, S)       -> S#opts{max_pending = Val};
+                ({batch_size, Val}, S)        -> S#opts{batch_size = Val};
                 ({queue_ok_level, Val}, S)    -> S#opts{queue_ok_level = Val};
                 ({reconnect_wait, Val}, S)    -> S#opts{reconnect_wait = Val};
                 ({info_pid, Val}, S)          -> S#opts{info_pid = Val};
@@ -374,10 +378,10 @@ process_commands(State) ->
     NumPending = q_len(State#st.pending),
     if
         (NumWaiting > 0) and (NumPending < State#st.opts#opts.max_pending) and (State#st.connection_pid /= none) ->
-            {Command, NewWaiting} = q_out(State#st.waiting),
-            Data = get_command_payload(Command),
-            send(State#st.recv_pid, State#st.transport_socket, Data, {command_reply, State#st.connection_pid}),
-            process_commands(State#st{pending = q_in(Command, State#st.pending),
+            {Commands, NewWaiting} = q_multi_out(State#st.opts#opts.batch_size, State#st.waiting),
+            Data = [get_command_payload(X) || X <- Commands],
+            batch_send(State#st.recv_pid, State#st.transport_socket, Data, {command_reply, State#st.connection_pid}),
+            process_commands(State#st{pending = q_in_multiple(Commands, State#st.pending),
                                       waiting = NewWaiting});
 
         (NumWaiting > State#st.opts#opts.max_waiting) and (State#st.queue_full_event_sent) ->
@@ -409,7 +413,11 @@ q_new() ->
     {0, queue:new()}.
 
 q_in(Item, {Size, Q}) ->
-    {Size+1, queue:in(Item, Q)}.
+    {Size + 1, queue:in(Item, Q)}.
+q_in_multiple([], Q) ->
+    Q;
+q_in_multiple([Item | Items] , {Size, Q}) ->
+    q_in_multiple(Items, {Size + 1, queue:in(Item, Q)}).
 
 q_join({Size1, Q1}, {Size2, Q2}) ->
     {Size1 + Size2, queue:join(Q1, Q2)}.
@@ -417,7 +425,18 @@ q_join({Size1, Q1}, {Size2, Q2}) ->
 q_out({Size, Q}) ->
     case queue:out(Q) of
         {empty, _Q} -> empty;
-        {{value, Val}, NewQ} -> {Val, {Size-1, NewQ}}
+        {{value, Val}, NewQ} -> {Val, {Size - 1, NewQ}}
+    end.
+q_multi_out(Nu, Queue) ->
+    q_multi_out(Nu, Queue, []).
+q_multi_out(0, Q, Acc) ->
+    {lists:reverse(Acc), Q};
+q_multi_out(Nu, {Size, Q}, Acc) ->
+    case queue:out(Q) of
+        {empty, _Q} ->
+            {lists:reverse(Acc), {Size,Q}};
+        {{value, Val}, NewQ} ->
+            q_multi_out(Nu - 1, {Size - 1, NewQ}, [Val | Acc])
     end.
 
 q_to_list({_Size, Q}) ->
@@ -425,7 +444,6 @@ q_to_list({_Size, Q}) ->
 
 q_len({Size, _Q}) ->
     Size.
-
 
 reply_command({command, _, Fun}, Reply) ->
     Fun(Reply).
@@ -556,4 +574,27 @@ send(RecvPid, {Socket, Transport}, Commands, Ref) ->
             self() ! {socket_closed, Reason}
     end.
 
+batch_send(RecvPid, {Socket, Transport}, Commands, Ref) ->
+    To_Data = fun(Command) ->
+                      Command2 = ered_command:convert_to(Command),
+                      Data = ered_command:get_data(Command2),
+                      Class = ered_command:get_response_class(Command2),
+                      RefInfo = {Class, self(), Ref, []},
+                      {Data, RefInfo}
+              end,
+    {Data, Refs} = lists:unzip([To_Data(Command) || Command <- Commands]),
+    Time = erlang:monotonic_time(millisecond),
+    case Transport:send(Socket, Data) of
+        ok ->
+            RecvPid ! {requests, Refs, Time};
+        {error, Reason} ->
+            %% Give recv_loop time to finish processing
+            %% This will shut down recv_loop if it is waiting on socket
+            Transport:shutdown(Socket, read_write),
+            %% This will shut down recv_loop if it is waiting for a reference
+            RecvPid ! close_down,
+            %% Ok, recv done, time to die
+            receive {recv_exit, _Reason} -> ok end,
+            self() ! {socket_closed, Reason}
+    end.
 

@@ -31,9 +31,6 @@
                  }).
 
 -type opt() ::
-        %% If commands are queued up in the process message queue this is the max
-        %% amount of messages that will be received and sent in one call
-        {batch_size, non_neg_integer()} |
         %% Timeout passed to gen_tcp:connect/4 or ssl:connect/4.
         {connect_timeout, timeout()} |
         %% Options passed to gen_tcp:connect/4.
@@ -104,9 +101,8 @@ connect(Host, Port, Opts) ->
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 connect_async(Addr, Port, Opts) ->
     [error({badarg, BadOpt})
-     || BadOpt <- proplists:get_keys(Opts) -- [batch_size, tcp_options, tls_options, push_cb, response_timeout,
+     || BadOpt <- proplists:get_keys(Opts) -- [tcp_options, tls_options, push_cb, response_timeout,
                                                tcp_connect_timeout, tls_connect_timeout, connect_timeout]],
-    _BatchSize = proplists:get_value(batch_size, Opts, 16),
     ResponseTimeout = proplists:get_value(response_timeout, Opts, 10000),
     PushCb = proplists:get_value(push_cb, Opts, fun(_) -> ok end),
     TcpOptions = proplists:get_value(tcp_options, Opts, []),
