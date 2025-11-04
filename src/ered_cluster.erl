@@ -850,10 +850,11 @@ start_convergence_check(State) ->
     Expected = ered_lib:slotmap_master_slots(State#st.slot_map),
     lists:foreach(fun (Addr) ->
                           ClientPid = maps:get(Addr, State#st.nodes),
-                          Cb = fun ({ok, Reply}) ->
+                          Cb = fun ({ok, Reply = [_|_]}) ->
                                        IsMatch = ered_lib:slotmap_master_slots(Reply) =:= Expected,
                                        ClusterPid ! {converged, IsMatch, Addr, Version};
                                    (_) ->
+                                       %% Including {ok, {error, <<"-LOADING", _/binary>>}}
                                        ignore
                                end,
                           ered_client:command_async(ClientPid, Cmd, Cb)
