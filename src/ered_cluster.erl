@@ -33,12 +33,13 @@
               reply/0,
               key/0]).
 
+
 %%%===================================================================
 %%% Definitions
 %%%===================================================================
 
 %% A check that all nodes return the same CLUSTER SLOTS response.
--type convergence_check() :: ok | nok |
+-type convergence_check() :: not_started | ok | failed |
                              %% Scheduled: Timer ref to start the check.
                              {scheduled, reference()} |
                              %% Ongoing: Nodes still to confirm and timer ref
@@ -86,8 +87,9 @@
 
              slot_map = [],
              slot_map_version = 0,
+             slot_map_from = none :: none | addr(),
              slot_timer_ref = none,
-             convergence_check = nok :: convergence_check(),
+             convergence_check = not_started :: convergence_check(),
 
              client_sup :: pid(),
              controlling_process :: pid(),
@@ -418,16 +420,7 @@ handle_info(Msg = #{msg_type := MsgType, client_id := _Pid, addr := Addr}, State
                  queue_ok ->
                      State#st{queue_full = sets:del_element(Addr, State#st.queue_full)}
              end,
-    case check_cluster_status(State1) of
-        ok ->
-            %% Do not set the cluster state to OK yet. Wait for a slot info message.
-            %% The slot info message will set the cluster state to OK if the map and
-            %% connections are OK. This is to avoid to send the cluster OK info message
-            %% too early if there are slot map updates in addition to connection errors.
-            {noreply, State1};
-        ClusterStatus ->
-            {noreply, update_cluster_state(ClusterStatus, State1)}
-    end;
+    {noreply, update_cluster_state(State1)};
 
 handle_info({slot_info, Version, Response, FromAddr}, State) ->
     case Response of
@@ -435,16 +428,18 @@ handle_info({slot_info, Version, Response, FromAddr}, State) ->
             %% got a response for a request triggered for an old version of the slot map, ignore
             {noreply, State};
         {error, _} ->
-            %% client error, i.e queue full or socket error or similar, ignore. New request will be sent periodically
-            {noreply, State};
+            %% Client error, e.g. queue full or socket error or similar, ignore.
+            %% New request will be sent periodically. Clear slot_map_from so
+            %% that we don't prefer the same node next time.
+            {noreply, State#st{slot_map_from = none}};
         {ok, {error, Error}} ->
-            %% error sent from redis
+            %% Error sent from the server, for example -LOADING.
             ered_info_msg:cluster_slots_error_response(Error, FromAddr, State#st.info_pid),
-            {noreply, State};
+            {noreply, State#st{slot_map_from = none}};
         {ok, []} ->
             %% Empty slotmap. Maybe the node has been CLUSTER RESET.
             ered_info_msg:cluster_slots_error_response(empty, FromAddr, State#st.info_pid),
-            {noreply, State};
+            {noreply, State#st{slot_map_from = none}};
         {ok, ClusterSlotsReply} ->
             NewMap = ered_lib:slotmap_sort(ClusterSlotsReply),
             case NewMap == State#st.slot_map of
@@ -491,31 +486,25 @@ handle_info({slot_info, Version, Response, FromAddr}, State) ->
                                        clients = Clients,
                                        slot_map_version = Version + 1,
                                        slot_map = NewMap,
-                                       convergence_check = nok,
+                                       slot_map_from = FromAddr,
+                                       convergence_check = not_started,
                                        masters = MasterNodes,
                                        closing = NewClosing},
                     {noreply, update_cluster_state(State2)}
             end
     end;
 
-handle_info({converged, Result, FromAddr, Version},
+handle_info({converged, FromAddr, Version},
             State = #st{convergence_check = {ongoing, Pending, Timeout},
                         slot_map_version = Version}) ->
-    case Result of
+    Pending1 = sets:del_element(FromAddr, Pending),
+    case sets:is_empty(Pending1) of
         true ->
-            Pending1 = sets:del_element(FromAddr, Pending),
-            case sets:is_empty(Pending1) of
-                true ->
-                    cancel_convergence_check(State),
-                    State1 = State#st{convergence_check = ok},
-                    {noreply, update_cluster_state(State1)};
-                false ->
-                    State1 = State#st{convergence_check = {ongoing, Pending1, Timeout}},
-                    {noreply, update_cluster_state(State1)}
-            end;
-        false ->
             cancel_convergence_check(State),
-            State1 = State#st{convergence_check = nok},
+            State1 = State#st{convergence_check = ok},
+            {noreply, update_cluster_state(State1)};
+        false ->
+            State1 = State#st{convergence_check = {ongoing, Pending1, Timeout}},
             {noreply, update_cluster_state(State1)}
     end;
 
@@ -534,10 +523,10 @@ handle_info({timeout, TimerRef, start_convergence_check},
             State = #st{convergence_check = {scheduled, TimerRef}}) ->
     {noreply, start_convergence_check(State)};
 
-handle_info({timeout, TimerRef, cancel_convergence_check},
-            State = #st{convergence_check = {scheduled, TimerRef}}) ->
+handle_info({timeout, TimerRef, convergence_check_timeout},
+            State = #st{convergence_check = {ongoing, _AddrSet, TimerRef}}) ->
     cancel_convergence_check(State),
-    State1 = State#st{convergence_check = nok},
+    State1 = State#st{convergence_check = failed},
     {noreply, update_cluster_state(State1)};
 
 handle_info({timeout, TimerRef, {close_clients, Remove}}, State) ->
@@ -747,34 +736,45 @@ update_cluster_state(State) ->
 
 %% Update the cluster state and make sure that the periodic slot map is always
 %% scheduled while we're in cluster_not_ok state.
-update_cluster_state(ClusterStatus, State) ->
-    case {ClusterStatus, State#st.cluster_state} of
-        {ok, nok} when State#st.convergence_check =:= ok ->
-            ered_info_msg:cluster_ok(State#st.info_pid),
-            State1 = stop_periodic_slot_info_request(State),
+update_cluster_state(ok, State) ->
+    State1 = stop_periodic_slot_info_request(State),
+    case State1#st.convergence_check of
+        ok when State#st.cluster_state =:= nok ->
+            ered_info_msg:cluster_ok(State1#st.info_pid),
             State1#st{cluster_state = ok};
-        {ok, nok} ->
-            State1 = stop_periodic_slot_info_request(State),
-            case State1#st.convergence_check of
-                {ongoing, _, _} ->
-                    State1;
-                _Otherwise ->
-                    start_convergence_check(State1)
-            end;
-        {ok, ok} when State#st.convergence_check =:= nok ->
-            State1 = stop_periodic_slot_info_request(State),
+        ok when State#st.cluster_state =:= ok ->
+            State1;
+        not_started when State#st.cluster_state =:= nok ->
+            start_convergence_check(State1);
+        not_started when State#st.cluster_state =:= ok ->
+            %% Delay the convergence check to allow time for the cluster to
+            %% converge after a failover or slot migration.
             schedule_convergence_check(State1);
-        {ok, ok} ->
-            %% Convergence check is ok or scheduled or ongoing.
-            stop_periodic_slot_info_request(State);
-        {pending, _} ->
-            State;
-        {_, ok} ->
-            ered_info_msg:cluster_nok(ClusterStatus, State#st.info_pid),
-            State1 = start_periodic_slot_info_request(State),
-            State1#st{cluster_state = nok};
-        {_, nok} ->
-            start_periodic_slot_info_request(State)
+        failed ->
+            %% Nodes have diverging slot mappings. They may converge on a
+            %% mapping different to ours, so let's update the slot mapping
+            %% again before doing another convergence check.
+            State2 = State1#st{convergence_check = not_started},
+            start_periodic_slot_info_request(State2);
+        {ongoing, _, _} ->
+            State1;
+        {scheduled, _} ->
+            State1
+    end;
+update_cluster_state(pending, State) ->
+    %% Waiting for some connections to come up.
+    State;
+update_cluster_state(ClusterStatus, State) ->
+    %% The slot map might be incomplete or incorrect. Fetch the slot map from a
+    %% random node next time, not preferring the same node as last time.
+    State1 = State#st{slot_map_from = none},
+    State2 = start_periodic_slot_info_request(State1),
+    case State2#st.cluster_state of
+        ok ->
+            ered_info_msg:cluster_nok(ClusterStatus, State2#st.info_pid),
+            State2#st{cluster_state = nok};
+        nok ->
+            State2
     end.
 
 start_periodic_slot_info_request(State) ->
@@ -843,24 +843,30 @@ start_convergence_check(State = #st{convergence_check_timeout = 0}) ->
     update_cluster_state(State#st{convergence_check = ok});
 start_convergence_check(State) ->
     cancel_convergence_check(State),
-    AddrSet = State#st.masters,
+    AddrSet = sets:del_element(State#st.slot_map_from, State#st.masters),
     ClusterPid = self(),
     Cmd = [<<"CLUSTER">>, <<"SLOTS">>],
     Version = State#st.slot_map_version,
     Expected = ered_lib:slotmap_master_slots(State#st.slot_map),
     lists:foreach(fun (Addr) ->
                           ClientPid = maps:get(Addr, State#st.nodes),
-                          Cb = fun ({ok, Reply}) ->
-                                       IsMatch = ered_lib:slotmap_master_slots(Reply) =:= Expected,
-                                       ClusterPid ! {converged, IsMatch, Addr, Version};
+                          Cb = fun ({ok, Reply = [_|_]}) ->
+                                       case ered_lib:slotmap_master_slots(Reply) of
+                                           Expected ->
+                                               ClusterPid ! {converged, Addr, Version};
+                                           _Unexpected ->
+                                               %% Let the convergence check time out.
+                                               ignore
+                                       end;
                                    (_) ->
+                                       %% Including {ok, {error, <<"-LOADING", _/binary>>}}
                                        ignore
                                end,
                           ered_client:command_async(ClientPid, Cmd, Cb)
                   end,
                   sets:to_list(AddrSet)),
     TimerRef = erlang:start_timer(State#st.convergence_check_timeout,
-                                  ClusterPid, cancel_convergence_check),
+                                  ClusterPid, convergence_check_timeout),
     State#st{convergence_check = {ongoing, AddrSet, TimerRef}}.
 
 cancel_convergence_check(#st{convergence_check = {scheduled, TimerRef}}) ->
@@ -878,8 +884,16 @@ cancel_convergence_check(_State) ->
 pick_node(PreferredNodes, State) ->
     case pick_available_node(shuffle(PreferredNodes), State) of
         none ->
-            %% No preferred node available. Pick one from the 'up' set.
-            pick_available_node(shuffle(sets:to_list(State#st.up)), State);
+            case node_is_available(State#st.slot_map_from, State) of
+                true ->
+                    %% Use the one we used last time. During a repeated
+                    %% convergence check, we don't want the slot map to change
+                    %% randomly.
+                    State#st.slot_map_from;
+                false ->
+                    %% No preferred node available. Pick one from the 'up' set.
+                    pick_available_node(shuffle(sets:to_list(State#st.up)), State)
+            end;
         Addr ->
             Addr
     end.
