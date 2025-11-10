@@ -157,7 +157,16 @@ t_convergence_init_node_converges(_Config) ->
               ClusterSlotsTime1 = erlang:monotonic_time(millisecond),
               ok = gen_tcp:send(Socket, encode_cluster_slots_reply(SlotsReply1)),
 
-              {error, closed} = gen_tcp:recv(Socket, 0),
+              %% Maybe one more CLUSTER SLOTS, depending on which random node
+              %% ered picked for slot update. If it got LOADING in the slot
+              %% update, it doesn't start a convergence check for that round.
+              case gen_tcp:recv(Socket, 0) of
+                  {error, closed} ->
+                      ok;
+                  {ok, <<"*2\r\n$7\r\nCLUSTER\r\n$5\r\nSLOTS\r\n">>} ->
+                      ok = gen_tcp:send(Socket, encode_cluster_slots_reply(SlotsReply1)),
+                      {error, closed} = gen_tcp:recv(Socket, 0)
+              end,
 
               %% Check that there was some time between each CLUSTER SLOTS.
               ?assert(ClusterSlotsTime1 >= ClusterSlotsTime0 + 100),

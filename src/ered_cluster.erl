@@ -427,24 +427,11 @@ handle_info({slot_info, Version, Response, FromAddr}, State) ->
         _ when Version < State#st.slot_map_version ->
             %% got a response for a request triggered for an old version of the slot map, ignore
             {noreply, State};
-        {error, _} ->
-            %% Client error, e.g. queue full or socket error or similar, ignore.
-            %% New request will be sent periodically. Clear slot_map_from so
-            %% that we don't prefer the same node next time.
-            {noreply, State#st{slot_map_from = none}};
-        {ok, {error, Error}} ->
-            %% Error sent from the server, for example -LOADING.
-            ered_info_msg:cluster_slots_error_response(Error, FromAddr, State#st.info_pid),
-            {noreply, State#st{slot_map_from = none}};
-        {ok, []} ->
-            %% Empty slotmap. Maybe the node has been CLUSTER RESET.
-            ered_info_msg:cluster_slots_error_response(empty, FromAddr, State#st.info_pid),
-            {noreply, State#st{slot_map_from = none}};
-        {ok, ClusterSlotsReply} ->
+        {ok, ClusterSlotsReply = [_|_]} ->
             NewMap = ered_lib:slotmap_sort(ClusterSlotsReply),
             case NewMap == State#st.slot_map of
                 true ->
-                    {noreply, update_cluster_state(State)};
+                    {noreply, update_cluster_state(State#st{slot_map_from = FromAddr})};
                 false ->
                     Nodes = ered_lib:slotmap_all_nodes(NewMap),
                     MasterNodesList = ered_lib:slotmap_master_nodes(NewMap),
@@ -491,7 +478,10 @@ handle_info({slot_info, Version, Response, FromAddr}, State) ->
                                        masters = MasterNodes,
                                        closing = NewClosing},
                     {noreply, update_cluster_state(State2)}
-            end
+            end;
+        Unexpected ->
+            report_unexpected_slots_response(Unexpected, FromAddr, State#st.info_pid),
+            {noreply, State#st{slot_map_from = none}}
     end;
 
 handle_info({converged, FromAddr, Version},
@@ -858,9 +848,8 @@ start_convergence_check(State) ->
                                                %% Let the convergence check time out.
                                                ignore
                                        end;
-                                   (_) ->
-                                       %% Including {ok, {error, <<"-LOADING", _/binary>>}}
-                                       ignore
+                                   (Unexpected) ->
+                                       report_unexpected_slots_response(Unexpected, Addr, State#st.info_pid)
                                end,
                           ered_client:command_async(ClientPid, Cmd, Cb)
                   end,
@@ -884,16 +873,8 @@ cancel_convergence_check(_State) ->
 pick_node(PreferredNodes, State) ->
     case pick_available_node(shuffle(PreferredNodes), State) of
         none ->
-            case node_is_available(State#st.slot_map_from, State) of
-                true ->
-                    %% Use the one we used last time. During a repeated
-                    %% convergence check, we don't want the slot map to change
-                    %% randomly.
-                    State#st.slot_map_from;
-                false ->
-                    %% No preferred node available. Pick one from the 'up' set.
-                    pick_available_node(shuffle(sets:to_list(State#st.up)), State)
-            end;
+            %% No preferred node available. Pick one from the 'up' set.
+            pick_available_node(shuffle(sets:to_list(State#st.up)), State);
         Addr ->
             Addr
     end.
@@ -929,6 +910,18 @@ replicas_of_unavailable_masters(State) ->
         false ->
             ered_lib:slotmap_replicas_of(DownMasters, State#st.slot_map)
     end.
+
+report_unexpected_slots_response({error, _}, _FromAddr, _InfoPid) ->
+    %% Client error, e.g. queue full or socket error or similar, ignore. New
+    %% request will be sent periodically. Clear slot_map_from so that we don't
+    %% prefer the same node next time.
+    ok;
+report_unexpected_slots_response({ok, {error, Error}}, FromAddr, InfoPid) ->
+    %% Error sent from the server, for example -LOADING.
+    ered_info_msg:cluster_slots_error_response(Error, FromAddr, InfoPid);
+report_unexpected_slots_response({ok, []}, FromAddr, InfoPid) ->
+    %% Empty slotmap. Maybe the node has been CLUSTER RESET.
+    ered_info_msg:cluster_slots_error_response(empty, FromAddr, InfoPid).
 
 is_slot_map_ok(State) ->
     case all_slots_covered(State) of
