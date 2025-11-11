@@ -957,11 +957,23 @@ t_missing_slot(_) ->
     ?MSG(#{msg_type := cluster_not_ok, reason := not_all_slots_covered}),
     timer:sleep(6000),
     ?MSG(#{msg_type := slot_map_updated}),
+    %% While the cluster is diverged, we can get multiple slot_map_updated if
+    %% ered picks a random node alternating between the two. If the node with a
+    %% missing slot is picked, a new try is done in 500ms. Otherwise, the
+    %% convergence check fails and is retried in 1 second.
+    ?OPTIONAL_MSG(#{msg_type := slot_map_updated}),
+    ?OPTIONAL_MSG(#{msg_type := slot_map_updated}),
+    ?OPTIONAL_MSG(#{msg_type := slot_map_updated}),
+    ?OPTIONAL_MSG(#{msg_type := slot_map_updated}),
+    ?OPTIONAL_MSG(#{msg_type := slot_map_updated}),
+    ?OPTIONAL_MSG(#{msg_type := slot_map_updated}),
+    ?OPTIONAL_MSG(#{msg_type := slot_map_updated}),
     ?OPTIONAL_MSG(#{msg_type := slot_map_updated}),
     ?OPTIONAL_MSG(#{msg_type := slot_map_updated}),
     no_more_msgs(),
     cmd_log("redis-cli -p " ++ integer_to_list(Port) ++ " CLUSTER ADDSLOTS " ++ integer_to_list(Slot)),
     ?MSG(#{msg_type := cluster_ok}, 5000),
+    ?OPTIONAL_MSG(#{msg_type := slot_map_updated}),
     ?OPTIONAL_MSG(#{msg_type := slot_map_updated}),
     no_more_msgs(),
     ok.
