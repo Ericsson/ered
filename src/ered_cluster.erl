@@ -481,7 +481,7 @@ handle_info({slot_info, Version, Response, FromAddr}, State) ->
             end;
         Unexpected ->
             report_unexpected_slots_response(Unexpected, FromAddr, State#st.info_pid),
-            {noreply, State#st{slot_map_from = none}}
+            {noreply, State}
     end;
 
 handle_info({converged, FromAddr, Version},
@@ -755,16 +755,14 @@ update_cluster_state(pending, State) ->
     %% Waiting for some connections to come up.
     State;
 update_cluster_state(ClusterStatus, State) ->
-    %% The slot map might be incomplete or incorrect. Fetch the slot map from a
-    %% random node next time, not preferring the same node as last time.
-    State1 = State#st{slot_map_from = none},
-    State2 = start_periodic_slot_info_request(State1),
-    case State2#st.cluster_state of
+    %% The slot map might be incomplete or incorrect.
+    State1 = start_periodic_slot_info_request(State),
+    case State1#st.cluster_state of
         ok ->
-            ered_info_msg:cluster_nok(ClusterStatus, State2#st.info_pid),
-            State2#st{cluster_state = nok};
+            ered_info_msg:cluster_nok(ClusterStatus, State1#st.info_pid),
+            State1#st{cluster_state = nok};
         nok ->
-            State2
+            State1
     end.
 
 start_periodic_slot_info_request(State) ->
@@ -912,9 +910,7 @@ replicas_of_unavailable_masters(State) ->
     end.
 
 report_unexpected_slots_response({error, _}, _FromAddr, _InfoPid) ->
-    %% Client error, e.g. queue full or socket error or similar, ignore. New
-    %% request will be sent periodically. Clear slot_map_from so that we don't
-    %% prefer the same node next time.
+    %% Client error, e.g. queue full or socket error.
     ok;
 report_unexpected_slots_response({ok, {error, Error}}, FromAddr, InfoPid) ->
     %% Error sent from the server, for example -LOADING.
