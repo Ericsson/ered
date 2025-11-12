@@ -4,7 +4,7 @@
 
 split_data_test() ->
     Data = iolist_to_binary([<<"A">> || _ <- lists:seq(0,3000)]),
-    {ok, Conn1} = ered_connection:connect("127.0.0.1", 6379),
+    {ok, Conn1,_,_} = ered_connection:connect("127.0.0.1", 6379),
     ered_connection:command(Conn1, [<<"hello">>, <<"3">>]),
     <<"OK">> = ered_connection:command(Conn1, [<<"set">>, <<"key1">>, Data]),
     Data = ered_connection:command(Conn1, [<<"get">>, <<"key1">>]).
@@ -30,8 +30,7 @@ trailing_reply_test() ->
                end),
     {port, Port} = receive_msg(),
     %% increase receive buffer to fit the whole nasty data package
-    {ok, Conn1} = ered_connection:connect("127.0.0.1", Port, [{batch_size, 1},
-                                                              {tcp_options, [{recbuf, 524288}]}]),
+    {ok, Conn1,_,_} = ered_connection:connect("127.0.0.1", Port, [{tcp_options, [{recbuf, 524288}]}]),
     ?debugFmt("~w", [Conn1]),
     ered_connection:command_async(Conn1, [<<"ping">>], ping1),
     receive sent_big_nasty -> ok end,

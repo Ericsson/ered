@@ -192,8 +192,7 @@ command(ClusterRef, Command, Key) ->
     command(ClusterRef, Command, Key, infinity).
 
 command(ClusterRef, Command, Key, Timeout) when is_binary(Key) ->
-    C = ered_command:convert_to(Command),
-    gen_server:call(ClusterRef, {command, C, Key}, Timeout).
+    gen_server:call(ClusterRef, {command, Command, Key}, Timeout).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec command_async(cluster_ref(), command(), key(), fun((reply()) -> any())) -> ok.
@@ -203,8 +202,7 @@ command(ClusterRef, Command, Key, Timeout) when is_binary(Key) ->
 %% runs in an unspecified process.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 command_async(ServerRef, Command, Key, ReplyFun) when is_function(ReplyFun, 1) ->
-    C = ered_command:convert_to(Command),
-    gen_server:cast(ServerRef, {command_async, C, Key, ReplyFun}).
+    gen_server:cast(ServerRef, {command_async, Command, Key, ReplyFun}).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec command_all(cluster_ref(), command()) -> [reply()].
@@ -642,7 +640,7 @@ create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft) ->
                     update_slots(Pid, SlotMapVersion, Client),
                     gen_server:cast(Pid, {forward_command, Command, Slot, From, Addr, AttemptsLeft-1});
                 {ask, Addr} ->
-                    gen_server:cast(Pid, {forward_command_asking, Command, Slot, From, Addr, AttemptsLeft-1, Reply});
+                    gen_server:cast(Pid, {forward_command_asking, ered_command:convert_to(Command), Slot, From, Addr, AttemptsLeft-1, Reply});
                 try_again ->
                     erlang:send_after(TryAgainDelay, Pid, {command_try_again, Command, Slot, From, AttemptsLeft-1});
                 cluster_down ->
