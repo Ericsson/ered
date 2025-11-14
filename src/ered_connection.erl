@@ -368,17 +368,17 @@ receive_data(0, _Time, Acc) ->
     {data, lists:unzip(lists:reverse(Acc))};
 receive_data(N, Time, Acc) ->
     receive
-        Msg ->
-            case Msg of
-                {recv_exit, Reason} ->
-                    {recv_exit, Reason};
-                {send, Pid, Ref, Commands} ->
-                    Data = ered_command:get_data(Commands),
-                    Class = ered_command:get_response_class(Commands),
-                    RefInfo = {Class, Pid, Ref, []},
-                    Acc1 = [{RefInfo, Data} | Acc],
-                    receive_data(N - 1, 0, Acc1)
-            end
+        {recv_exit, Reason} ->
+            {recv_exit, Reason};
+        {send, Pid, Ref, Commands} ->
+            Data = ered_command:get_data(Commands),
+            Class = ered_command:get_response_class(Commands),
+            RefInfo = {Class, Pid, Ref, []},
+            Acc1 = [{RefInfo, Data} | Acc],
+            receive_data(N - 1, 0, Acc1);
+        _Ignore ->
+            %% Mitigate OTP TLS 1.3 bug #10273 leaking a message {Ref, ok}.
+            receive_data(N, 0, Acc)
     after Time ->
             receive_data(0, 0, Acc)
     end.
