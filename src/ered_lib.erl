@@ -38,7 +38,8 @@ slotmap_sort(ClusterSlotsReply) ->
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec slotmap_master_slots(slot_map()) -> [{integer(), integer(), addr()}].
 %%
-%% Get slot range and master node addresses
+%% Get slot range and master node addresses, skipping unknown
+%% addresses (port 0).
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 slotmap_master_slots(ClusterSlotsReply) ->
 
@@ -60,37 +61,44 @@ slotmap_master_slots(ClusterSlotsReply) ->
 
     %% TODO: Maybe wrap this in a try catch if we get garbage?
     SlotMap = [{SlotStart, SlotEnd, node_info(Master)}
-               || [SlotStart, SlotEnd, Master | _] <- ClusterSlotsReply],
+               || [SlotStart, SlotEnd, Master = [_Ip, Port | _] | _] <- ClusterSlotsReply,
+                  Port > 0],
     lists:sort(SlotMap).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec slotmap_master_nodes(slot_map()) -> [addr()].
 %%
-%% Get master node addresses
+%% Get master node addresses, skipping unknown addresses (port 0).
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 slotmap_master_nodes(ClusterSlotsReply) ->
-    Nodes = [node_info(Master) || [_SlotStart, _SlotEnd, Master | _] <- ClusterSlotsReply],
+    Nodes = [node_info(Master) || [_Start, _End, Master = [_Ip, Port | _] | _] <- ClusterSlotsReply,
+                                  Port > 0],
     lists:usort(Nodes).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec slotmap_all_nodes(slot_map()) -> [addr()].
 %%
-%% Get all node addresses
+%% Get all node addresses, skipping unknown addresses (port 0).
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 slotmap_all_nodes(ClusterSlotsReply) ->
-    AllNodes = [lists:map(fun node_info/1, Nodes) || [_SlotStart, _SlotEnd | Nodes] <- ClusterSlotsReply],
-    lists:usort(lists:append(AllNodes)).
+    AllNodes = [node_info(Node) || [_Start, _End | Nodes] <- ClusterSlotsReply,
+                                   Node = [_Ip, Port | _] <- Nodes,
+                                   Port > 0],
+    lists:usort(AllNodes).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec slotmap_replicas_of(sets:set(addr()), slot_map()) -> [addr()].
 %%
-%% Get node addresses of all replicas of the given masters
+%% Get node addresses of all replicas of the given masters, skipping
+%% unknown addresses (port 0).
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 slotmap_replicas_of(Masters, ClusterSlotsReply) ->
-    AllReplicas = [lists:map(fun node_info/1, Replicas)
+    AllReplicas = [node_info(Replica)
                    || [_Start, _End, Master | Replicas] <- ClusterSlotsReply,
-                      sets:is_element(node_info(Master), Masters)],
-    lists:usort(lists:append(AllReplicas)).
+                      sets:is_element(node_info(Master), Masters),
+                      Replica = [_Ip, Port | _] <- Replicas,
+                      Port > 0],
+    lists:usort(AllReplicas).
 
 node_info([Ip, Port |_])  ->
     if
