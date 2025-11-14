@@ -300,33 +300,41 @@ t_hard_failover(_) ->
     no_more_msgs().
 
 do_manual_failover(R) ->
-    [Client|_] = ered_cluster:get_clients(R),
-    {ok, SlotMap} = ered:command(Client, [<<"CLUSTER">>, <<"SLOTS">>]),
-
-    ct:pal("~p\n", [SlotMap]),
-    %% Get the port of a replica node
-    [[_SlotStart, _SlotEnd, [_, OldMasterPort |_], [_Ip, Port |_] | _] | _] = SlotMap,
-
     %% sometimes the manual failover is not successful so loop until it is
     fun Loop() ->
-            "OK\n" = os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " CLUSTER FAILOVER"),
-            %% Wait for failover to start, otherwise the commands might be sent
-            %% too early to detect it.
-            fun Wait(0) ->
-                    Loop();
-                Wait(N) ->
-                    timer:sleep(500),
-                    Role = os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " ROLE"),
-                    ct:pal("~p\n", [Role]),
-                    case lists:prefix("master", Role) of
-                        true ->
-                            true;
-                        false ->
-                            Wait(N-1)
-                    end
-            end(10)
-    end(),
-    {OldMasterPort, Port}.
+            [Client|_] = ered_cluster:get_clients(R),
+            {ok, SlotMap} = ered:command(Client, [<<"CLUSTER">>, <<"SLOTS">>]),
+            ct:pal("~p\n", [SlotMap]),
+
+            %% Get the port of a replica node
+            [[_SlotStart, _SlotEnd, [_, OldMasterPort |_], [_Ip, Port |_] | _] | _] = SlotMap,
+
+            case os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " CLUSTER FAILOVER") of
+                "OK\n" ->
+                    %% Wait for failover to start, otherwise the commands might be sent
+                    %% too early to detect it.
+                    fun Wait(0) ->
+                            Loop();
+                        Wait(N) ->
+                            timer:sleep(500),
+                            Role = os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " ROLE"),
+                            ct:pal("~p\n", [Role]),
+                            case lists:prefix("master", Role) of
+                                true ->
+                                    %% Success
+                                    {OldMasterPort, Port};
+                                false ->
+                                    Wait(N-1)
+                            end
+                    end(10);
+                "ERR You should send CLUSTER FAILOVER to" ++ _ ->
+                    %% ... "to a replica". It means the node we thought was a
+                    %% replica is actually a primary. Wait some time, fetch the
+                    %% slot map again and retry.
+                    timer:sleep(1000),
+                    Loop()
+            end
+    end().
 
 t_manual_failover(_) ->
     R = start_cluster(),
