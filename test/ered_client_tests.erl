@@ -1,6 +1,7 @@
 -module(ered_client_tests).
 
 -include_lib("eunit/include/eunit.hrl").
+-include("ered_test_utils.hrl").
 
 run_test_() ->
     [
@@ -356,8 +357,8 @@ auth_fail_t() ->
     {ok,Client} = ered_client:start_link("127.0.0.1", Port, [{info_pid, self()},
                                                              {resp_version, 2},
                                                              {auth, {<<"ali">>, <<"sesame">>}}]),
-    {init_error, [<<"WRONGPASS", _/binary>>]} = expect_connection_down(Client),
-    no_more_msgs().
+    ?MSG(#{msg_type := init_error, reason := [<<"WRONGPASS", _/binary>>], client_id := Client},
+         10000).
 
 -if(?OTP_RELEASE >= 26).
 %% OTP >= 26 uses an empty hostname in the address lookup, which fails. See OTP-18543.
@@ -369,13 +370,13 @@ auth_fail_t() ->
 
 empty_string_host_t() ->
     {ok,Client} = ered_client:start_link("", 30000, [{info_pid, self()}]),
-    {connect_error, ?empty_string_host_reason} = expect_connection_down(Client),
-    no_more_msgs().
+    ?MSG(#{msg_type := connect_error, reason := ?empty_string_host_reason, client_id := Client},
+         20000).
 
 bad_host_t() ->
     {ok,Client} = ered_client:start_link(undefined, 30000, [{info_pid, self()}]),
-    {connect_error, nxdomain} = expect_connection_down(Client),
-    no_more_msgs().
+    ?MSG(#{msg_type := connect_error, reason := nxdomain, client_id := Client},
+         20000).
 
 expect_connection_up(Client) ->
     expect_connection_up(Client, infinity).

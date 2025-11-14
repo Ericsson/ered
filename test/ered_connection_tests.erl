@@ -3,8 +3,31 @@
 -include_lib("eunit/include/eunit.hrl").
 
 split_data_test() ->
-    Data = iolist_to_binary([<<"A">> || _ <- lists:seq(0,3000)]),
-    {ok, Conn1} = ered_connection:connect("127.0.0.1", 6379),
+    Data = << <<"A">> || _ <- lists:seq(1, 3000) >>,
+    {ok, ListenSock} = gen_tcp:listen(0, [binary, {active , false}]),
+    {ok, Port} = inet:port(ListenSock),
+    spawn_link(fun() ->
+                       {ok, Sock} = gen_tcp:accept(ListenSock),
+                       {ok, <<"*2\r\n$5\r\nhello\r\n$1\r\n3\r\n">>} = gen_tcp:recv(Sock, 0),
+                       HelloReply = <<"%7\r\n",
+                                      "$6\r\nserver\r\n", "$6\r\nvalkey\r\n",
+                                      "$7\r\nversion\r\n", "$5\r\n9.0.0\r\n",
+                                      "$5\r\nproto\r\n", ":3\r\n"
+                                      "$2\r\nid\r\n", ":2\r\n",
+                                      "$4\r\nmode\r\n", "$10\r\nstandalone\r\n"
+                                      "$4\r\nrole\r\n", "$6\r\nmaster\r\n"
+                                      "$7\r\nmodules\r\n", "*0\r\n">>,
+                       ok = gen_tcp:send(Sock, HelloReply),
+                       SetCommand = <<"*3\r\n$3\r\nset\r\n$4\r\nkey1\r\n$3000\r\n", Data/binary, "\r\n">>,
+                       {ok, SetCommand} = gen_tcp:recv(Sock, size(SetCommand)),
+                       ok = gen_tcp:send(Sock, <<"+OK\r\n">>),
+                       {ok, <<"*2\r\n$3\r\nget\r\n$4\r\nkey1\r\n">>} = gen_tcp:recv(Sock, 0),
+                       ok = gen_tcp:send(Sock, <<"$3000\r\n", Data/binary, "\r\n">>),
+                       {error, closed} = gen_tcp:recv(Sock, 0),
+                       %% ok = gen_tcp:shutdown(Sock, write),
+                       ok
+               end),
+    {ok, Conn1} = ered_connection:connect("127.0.0.1", Port),
     ered_connection:command(Conn1, [<<"hello">>, <<"3">>]),
     <<"OK">> = ered_connection:command(Conn1, [<<"set">>, <<"key1">>, Data]),
     Data = ered_connection:command(Conn1, [<<"get">>, <<"key1">>]).
