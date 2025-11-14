@@ -934,10 +934,10 @@ is_slot_map_ok(State) ->
 
 all_slots_covered(State) ->
     %% check so that the slot map covers all slots. the slot map is sorted so it
-    %% should be a continuous range
-    R = lists:foldl(fun([Start, Stop| _Rest], Expect) ->
+    %% should be a continuous range. Skip nodes without a valid port.
+    R = lists:foldl(fun([Start, Stop, [_Ip, Port | _] | _Replicas], Expect) ->
                             case Start of
-                                Expect ->
+                                Expect when Port > 0 ->
                                     Stop+1;
                                 _Else ->
                                     false
