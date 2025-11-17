@@ -106,10 +106,12 @@ get_response_class({redis_command, pipeline, Data}) ->
 %% If the command name ends in "subscribe", returns a tuple
 %% {CommandName, NumChannels}. Returns 'normal' otherwise.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-resp_class(<<"*", _, "\r\n$", X, Y, "\r\n", _/binary>>)
-  when Y =:= $\r, X =/= $9;                     % Shorter than "subscribe"
-       Y =/= $\r, X > $1 orelse Y > $2 ->       % Longer than "punsubscribe"
+resp_class(<<"*", _, "\r\n$", X, "\r\n", _/binary>>)
+  when X =/= $9 ->                              % Shorter than "subscribe"
     normal;                                     % Quick path for most commands.
+resp_class(<<"*", _, "\r\n$", X, Y, "\r\n", _/binary>>)
+  when X > $1; Y > $2 ->                        % Longer than "punsubscribe"
+    normal;                                     % Quick path.
 resp_class(<<"*", N, "\r\n$9\r\n", _/binary>> = Subj) ->
     resp_class_helper(Subj, 8, 9, N - $0);
 resp_class(<<"*", N, "\r\n$1", X, "\r\n", _/binary>> = Subj)
