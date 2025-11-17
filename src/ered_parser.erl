@@ -7,7 +7,8 @@
          continue/2]).
 
 -export_type([parse_return/0,
-              parse_result/0
+              parse_result/0,
+              state/0
              ]).
 
 %%%===================================================================
@@ -27,7 +28,7 @@
                         float() | true | false | #{parse_result() => parse_result()} | sets:set(parse_result()) |
                         {attribute, parse_result(), parse_result()} | {push | parse_result()}.
 
-
+-opaque state() :: #parser_state{}.
 -type parse_return() :: {done, parse_result(), #parser_state{}} | {need_more, bytes_needed(), #parser_state{}}.
 
 -if(?OTP_RELEASE >= 24).

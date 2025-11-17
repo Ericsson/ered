@@ -34,7 +34,15 @@
         {
          host :: host(),
          port :: inet:port_number(),
-         connection_opts = [] :: [ered_connection:opt()],
+
+         %% From "connection opts"
+         batch_size = 16 :: non_neg_integer(),
+         transport = gen_tcp :: gen_tcp | ssl,
+         transport_opts = [] :: list(),
+         connect_timeout = infinity :: timeout(),
+         push_cb = fun(_) -> ok end :: push_cb(),
+         timeout = 10000 :: timeout(), % Response timeout
+
          resp_version = 3 :: 2..3,
          use_cluster_id = false :: boolean(),
          auth = none :: {binary(), binary()} | none,
@@ -51,10 +59,11 @@
 
 -record(st,
         {
-         connect_loop_pid = none,
-         connection_pid = none,
+         connection_loop_pid = none,
+         socket = none,
          controlling_process :: pid(),
          last_status = none,
+         parser_state = none :: none | ered_parser:state(),
 
          waiting = q_new() :: command_queue(),
          pending = q_new() :: command_queue(),
@@ -62,19 +71,20 @@
          cluster_id = undefined :: undefined | binary(),
 
          queue_full_event_sent = false :: boolean(), % set to true when full, false when reaching queue_ok_level
-         node_status = up :: up | node_down | node_deactivated,
-
+         status :: init | up | node_down | node_deactivated,
          node_down_timer = none :: none | reference(),
+         connected_at = none :: none | integer(), % erlang:monotonic_time(millisecond)
          opts = #opts{}
 
         }).
-
 
 -type command_error()          :: queue_overflow | node_down | node_deactivated | {client_stopped, reason()}.
 -type command_item()           :: {command, ered_command:redis_command(), reply_fun()}.
 -type command_queue()          :: {Size :: non_neg_integer(), queue:queue(command_item())}.
 
--type reply()       :: {ok, ered_connection:result()} | {error, command_error()}.
+-type result()      :: ered_parser:parse_result().
+-type push_cb()     :: fun((result()) -> any()).
+-type reply()       :: {ok, result()} | {error, command_error()}.
 -type reply_fun()   :: fun((reply()) -> any()).
 
 -type host()        :: ered:host().
@@ -106,7 +116,7 @@
 
 -type opt() ::
         %% Options passed to the connection module
-        {connection_opts, [ered_connection:opt()]} |
+        {connection_opts, [connection_opt()]} |
         %% Max number of commands allowed to wait in queue.
         {max_waiting, non_neg_integer()} |
         %% Max number of commands to be pending, i.e. sent to client
@@ -134,6 +144,61 @@
         %% Select a logical database after a connect.
         %% The SELECT command is only sent when non-zero.
         {select_db, non_neg_integer()}.
+
+-type connection_opt() ::
+        %% If commands are queued up in the process message queue this is the max
+        %% amount of messages that will be received and sent in one call
+        {batch_size, non_neg_integer()} |
+        %% Timeout passed to gen_tcp:connect/4 or ssl:connect/4.
+        {connect_timeout, timeout()} |
+        %% Options passed to gen_tcp:connect/4.
+        {tcp_options, [gen_tcp:connect_option()]} |
+        %% Timeout passed to gen_tcp:connect/4. DEPRECATED.
+        {tcp_connect_timeout, timeout()} |
+        %% Options passed to ssl:connect/4. If this config parameter is present,
+        %% TLS is used.
+        {tls_options, [ssl:tls_client_option()]} |
+        %% Timeout passed to ssl:connect/4. DEPRECATED.
+        {tls_connect_timeout, timeout()} |
+        %% Callback for push notifications
+        {push_cb, push_cb()} |
+        %% Timeout when waiting for a response from Redis        %% If commands are queued up in the process message queue this is the max
+        %% amount of messages that will be received and sent in one call
+        {batch_size, non_neg_integer()} |
+        %% Timeout passed to gen_tcp:connect/4 or ssl:connect/4.
+        {connect_timeout, timeout()} |
+        %% Options passed to gen_tcp:connect/4.
+        {tcp_options, [gen_tcp:connect_option()]} |
+        %% Timeout passed to gen_tcp:connect/4. DEPRECATED.
+        {tcp_connect_timeout, timeout()} |
+        %% Options passed to ssl:connect/4. If this config parameter is present,
+        %% TLS is used.
+        {tls_options, [ssl:tls_client_option()]} |
+        %% Timeout passed to ssl:connect/4. DEPRECATED.
+        {tls_connect_timeout, timeout()} |
+        %% Callback for push notifications
+        {push_cb, push_cb()} |
+        %% Timeout when waiting for a response from Redis. milliseconds
+        {response_timeout, non_neg_integer()}.
+
+%% Command in the waiting queue.
+-record(command, {data, replyto}).
+
+%% Pending request, in flight, sent to server, waiting for reply/ies.
+-record(pending_req,
+        {
+         command :: #command{},
+         response_class :: ered_command:response_class() |
+                           [ered_command:response_class()],
+         reply_acc = []
+        }).
+
+%% Queue macro, can be used in guards.
+-define(q_is_empty(Q), (element(1, Q) =:= 0)).
+
+%% Commands like SUBSCRIBE and UNSUBSCRIBE don't return anything, so we use this
+%% return value.
+-define(pubsub_reply, undefined).
 
 %%%===================================================================
 %%% API
@@ -220,14 +285,15 @@ command(ServerRef, Command, Timeout) ->
 %% client process and should not hang or perform any lengthy task.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 command_async(ServerRef, Command, CallbackFun) ->
-    gen_server:cast(ServerRef, {command, ered_command:convert_to(Command), CallbackFun}).
+    gen_server:cast(ServerRef, #command{data = ered_command:convert_to(Command),
+                                        replyto = CallbackFun}).
 
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
 init({Host, Port, OptsList, User}) ->
     Opts = lists:foldl(
-             fun({connection_opts, Val}, S)   -> S#opts{connection_opts = Val};
+             fun({connection_opts, Val}, S)   -> handle_connection_opts(S, Val);
                 ({max_waiting, Val}, S)       -> S#opts{max_waiting = Val};
                 ({max_pending, Val}, S)       -> S#opts{max_pending = Val};
                 ({queue_ok_level, Val}, S)    -> S#opts{queue_ok_level = Val};
@@ -244,21 +310,53 @@ init({Host, Port, OptsList, User}) ->
              OptsList),
     monitor(process, User),
     process_flag(trap_exit, true),
-    Pid = self(),
-    ConnectPid = spawn_link(fun() -> connect(Pid, Opts) end),
-    {ok, start_node_down_timer(#st{opts = Opts,
-                                   controlling_process = User,
-                                   connect_loop_pid = ConnectPid})}.
+    State0 = #st{opts = Opts,
+                 controlling_process = User,
+                 parser_state = ered_parser:init(),
+                 status = init},
+    State1 = start_connect_loop(now, State0),
+    {ok, start_node_down_timer(State1)}.
+
+%% "Connection opts" is second layer of options.
+%%
+%% TODO: Remove this layering and put them directly as client options. It's an
+%% API change so we'll do it in an appropriate version.
+handle_connection_opts(OptsRecord, Opts) ->
+    Valid = [batch_size, tcp_options, tls_options, push_cb, response_timeout,
+             tcp_connect_timeout, tls_connect_timeout, connect_timeout],
+    [error({badarg, BadOpt})
+     || BadOpt <- proplists:get_keys(Opts) -- Valid],
+    BatchSize = proplists:get_value(batch_size, Opts, 16),
+    ResponseTimeout = proplists:get_value(response_timeout, Opts, 10000),
+    PushCb = proplists:get_value(push_cb, Opts, fun(_) -> ok end),
+    TcpOptions = proplists:get_value(tcp_options, Opts, []),
+    TlsOptions = proplists:get_value(tls_options, Opts, []),
+    TcpTimeout = proplists:get_value(tcp_connect_timeout, Opts, infinity),
+    TlsTimeout = proplists:get_value(tls_connect_timeout, Opts, infinity),
+    {Transport, Options, Timeout0} = case TlsOptions of
+                                         [] ->
+                                             {gen_tcp, TcpOptions, TcpTimeout};
+                                         _ ->
+                                             {ssl, TlsOptions, TlsTimeout}
+                                     end,
+    ConnectTimeout = proplists:get_value(connect_timeout, Opts, Timeout0),
+    OptsRecord#opts{batch_size = BatchSize,
+                    transport = Transport, transport_opts = Options,
+                    connect_timeout = ConnectTimeout,
+                    timeout = ResponseTimeout,
+                    push_cb = PushCb}.
 
 handle_call({command, Command}, From, State) ->
     Fun = fun(Reply) -> gen_server:reply(From, Reply) end,
-    handle_cast({command, Command, Fun}, State).
+    handle_cast(#command{data = Command, replyto = Fun}, State).
 
 
-handle_cast(Command = {command, _, _}, State) ->
-    case State#st.node_status of
-        up ->
-            {noreply, process_commands(State#st{waiting = q_in(Command, State#st.waiting)})};
+handle_cast(Command = #command{}, State) ->
+    case State#st.status of
+        Up when Up =:= up; Up =:= init ->
+            State1 = State#st{waiting = q_in(Command, State#st.waiting)},
+            State2 = process_commands(State1),
+            {noreply, State2, response_timeout(State2)};
         NodeProblem when NodeProblem =:= node_down; NodeProblem =:= node_deactivated ->
             reply_command(Command, {error, NodeProblem}),
             {noreply, State}
@@ -268,78 +366,251 @@ handle_cast(deactivate, State) ->
     State1 = cancel_node_down_timer(State),
     State2 = report_connection_status(node_deactivated, State1),
     State3 = reply_all({error, node_deactivated}, State2),
-    {noreply, process_commands(State3#st{node_status = node_deactivated})};
+    {noreply, process_commands(State3#st{status = node_deactivated})};
 
-handle_cast(reactivate, #st{connection_pid = none} = State) ->
+handle_cast(reactivate, #st{socket = none} = State) ->
     {noreply, start_node_down_timer(State)};
 
 handle_cast(reactivate, State) ->
-    {noreply, State#st{node_status = up}}.
+    {noreply, State#st{status = up}}.
 
+handle_info({Type, Socket, Data}, #st{socket = Socket} = State)
+  when Type =:= tcp; Type =:= ssl ->
+    %% Receive data from current socket.
+    State1 = handle_data(Data, State),
+    State2 = process_commands(State1),
+    {noreply, State2, response_timeout(State2)};
 
-handle_info({{command_reply, Pid}, Reply}, State = #st{pending = Pending, connection_pid = Pid}) ->
-    case q_out(Pending) of
-        empty ->
-            {noreply, State};
-        {Command, NewPending} ->
-            reply_command(Command, {ok, Reply}),
-            {noreply, process_commands(State#st{pending = NewPending})}
+handle_info({Passive, Socket}, #st{socket = Socket} = State)
+  when Passive =:= tcp_passive; Passive =:= ssl_passive ->
+    %% Socket switched to passive mode due to {active, N}.
+    %% TODO: Add config for N.
+    N = 100,
+    case setopts(State, [{active, N}]) of
+        ok ->
+            {noreply, State, response_timeout(State)};
+        {error, Reason} ->
+            Transport = State#st.opts#opts.transport,
+            Transport:close(Socket),
+            {noreply, connection_down({socket_closed, Reason}, State#st{socket = undefined})}
     end;
 
-handle_info({{command_reply, _Pid}, _Reply}, State) ->
-    %% Stray message from a defunct client? ignore!
-    {noreply, State};
+handle_info({Error, Socket, Reason}, #st{socket = Socket} = State)
+  when Error =:= tcp_error; Error =:= ssl_error ->
+    %% Socket errors. If the network or peer is down, the error is not
+    %% always followed by a tcp_closed.
+    %%
+    %% TLS 1.3: Called after a connect when the client certificate has expired
+    Transport = State#st.opts#opts.transport,
+    Transport:close(Socket),
+    {noreply, connection_down({socket_closed, Reason}, State#st{socket = none})};
 
-handle_info(Reason = {connect_error, _ErrorReason}, State) ->
-    {noreply, connection_down(Reason, State)};
+handle_info({Closed, Socket}, #st{socket = Socket} = State)
+  when Closed =:= tcp_closed; Closed =:= ssl_closed ->
+    %% Socket got closed by the server.
+    {noreply, connection_down({socket_closed, Closed}, State#st{socket = none})};
 
-handle_info(Reason = {init_error, _Errors}, State) ->
-    {noreply, connection_down(Reason, State)};
+handle_info(ConnectError = {connect_error, _Reason}, State) ->
+    %% Message from the connect loop process. It will retry.
+    {noreply, connection_down(ConnectError, State)};
 
-handle_info(Reason = {socket_closed, _CloseReason}, State) ->
-    {noreply, connection_down(Reason, State)};
+handle_info({connected, Socket}, State) ->
+    %% Sent from connect loop process when just before it exits.
+    State1 = abort_pending_commands(State),
+    State2 = State1#st{socket = Socket,
+                       connected_at = erlang:monotonic_time(millisecond),
+                       status = init},
+    State3 = init_connection(State2),
+    {noreply, State3, response_timeout(State3)};
 
-handle_info({connected, Pid, ClusterId}, State) ->
-    State1 = cancel_node_down_timer(State),
-    State2 = State1#st{connection_pid = Pid, cluster_id = ClusterId,
-                       node_status = case State1#st.node_status of
-                                         node_down -> up;
-                                         OldStatus -> OldStatus
-                                     end},
-    State3 = report_connection_status(connection_up, State2),
-    {noreply, process_commands(State3)};
+handle_info({init_command_reply, {ok, Replies}}, State) ->
+    case [Reason || {error, Reason} <- Replies] of
+        [] ->
+            %% No errors
+            ClusterId = case State#st.opts#opts.use_cluster_id of
+                            true ->
+                                hd(Replies);
+                            false ->
+                                undefined
+                        end,
+            State1 = cancel_node_down_timer(State),
+            NodeStatus = case State1#st.status of
+                             node_down -> up;
+                             init      -> up;
+                             OldStatus -> OldStatus
+                         end,
+            State2 = State1#st{status = NodeStatus, cluster_id = ClusterId},
+            State3 = report_connection_status(connection_up, State2),
+            {noreply, process_commands(State3), response_timeout(State3)};
+        Errors ->
+            {noreply, connection_down({init_error, Errors}, State)}
+    end;
+handle_info({init_command_reply, {error, Reason}}, State) ->
+    {noreply, connection_down({init_error, Reason}, State)};
 
 handle_info({timeout, TimerRef, node_down}, State) when TimerRef == State#st.node_down_timer ->
+    %% Node down timeout
     State1 = report_connection_status({connection_down, node_down_timeout}, State),
     State2 = reply_all({error, node_down}, State1),
-    {noreply, process_commands(State2#st{node_status = node_down})};
+    {noreply, process_commands(State2#st{status = node_down})};
 
-handle_info({timeout, _TimerRef, _Msg}, State) ->
-    {noreply, State};
+handle_info(timeout, #st{socket = Socket} = State) when Socket =/= none ->
+    %% Request timeout
+    Transport = State#st.opts#opts.transport,
+    Transport:close(Socket),
+    {noreply, connection_down({socket_closed, timeout}, State#st{socket = none})};
 
 handle_info({'DOWN', _Mon, process, Pid, ExitReason}, State = #st{controlling_process = Pid}) ->
     {stop, ExitReason, State};
 
+handle_info({'EXIT', Pid, normal}, #st{connection_loop_pid = Pid} = State) ->
+    State1 = State#st{connection_loop_pid = none},
+    State2 = case State1#st.socket of
+                 none ->
+                     %% Corner case. The new connection was lost before this
+                     %% exit signal arrived. Start reconnect loop again.
+                     start_connect_loop(now, State1);
+                 _Socket ->
+                     State1
+             end,
+    {noreply, State2, response_timeout(State2)};
+
 handle_info({'EXIT', _From, Reason}, State) ->
+    %% Supervisor exited.
     {stop, Reason, State};
 
 handle_info(_Ignore, State) ->
-    {noreply, State}.
+    {noreply, State, response_timeout(State)}.
 
 terminate(Reason, State) ->
-    exit(State#st.connect_loop_pid, kill),
     reply_all({error, {client_stopped, Reason}}, State),
     report_connection_status({connection_down, {client_stopped, Reason}}, State),
     ok.
 
 code_change(_OldVsn, State = #st{opts = #opts{}}, _Extra) ->
-    {ok, State}.
+    {ok, State, response_timeout(State)}.
 
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+setopts(#st{opts = #opts{transport = gen_tcp}, socket = Socket}, Opts) ->
+    inet:setopts(Socket, Opts);
+setopts(#st{opts = #opts{transport = ssl}, socket = Socket}, Opts) ->
+    ssl:setopts(Socket, Opts).
+
+%% Data received from the server
+handle_data(Data, #st{parser_state = ParserState0} = State0) ->
+    handle_parser_result(ered_parser:continue(Data, ParserState0), State0).
+
+handle_parser_result({need_more, _BytesNeeded, ParserState}, State) ->
+    State#st{parser_state = ParserState};
+handle_parser_result({done, Value, ParserState}, State0) ->
+    State1 = handle_result(Value, State0),
+    handle_parser_result(ered_parser:next(ParserState), State1).
+
+handle_result({push, Value = [Type|_]}, State) ->
+    %% Pub/sub in RESP3 is a bit quirky. The push is supposed to be out of band
+    %% data not connected to any request but for subscribe and unsubscribe
+    %% requests, a successful command is signalled as one or more push messages.
+    PushCB = State#st.opts#opts.push_cb,
+    PushCB(Value),
+    State1 = case is_subscribe_push(Type) of
+                 true ->
+                     handle_subscribe_push(Value, State);
+                 false ->
+                     State
+             end,
+    State1;
+handle_result(Value, #st{pending = PendingQueue} = State)
+  when not ?q_is_empty(PendingQueue) ->
+    {PendingReq, PendingQueue1} = q_out(PendingQueue),
+    #pending_req{command = Command,
+                 response_class = RespClass,
+                 reply_acc = Acc} = PendingReq,
+    %% Check how many replies expected (list = pipeline)
+    case RespClass of
+        Single when not is_list(Single) ->
+            reply_command(Command, {ok, Value}),
+            State#st{pending = PendingQueue1};
+        [_] ->
+            %% Last one, send the reply
+            reply_command(Command, {ok, lists:reverse([Value | Acc])}),
+            State#st{pending = PendingQueue1};
+        [_ | TailClasses] ->
+            %% Need more replies. Save the reply and keep going.
+            PendingReq1 = PendingReq#pending_req{response_class = TailClasses,
+                                                 reply_acc = [Value | Acc]},
+            PendingQueue2 = q_in_r(PendingReq1, PendingQueue1),
+            State#st{pending = PendingQueue2}
+    end;
+handle_result(_Value, #st{pending = PendingQueue})
+  when ?q_is_empty(PendingQueue) ->
+    error(unexpected_reply).
+
+is_subscribe_push(<<"subscribe">>) ->
+    true;
+is_subscribe_push(<<X, "subscribe">>) when X >= $a, X =< $z ->
+    true;
+is_subscribe_push(<<"unsubscribe">>) ->
+    true;
+is_subscribe_push(<<X, "unsubscribe">>) when X >= $a, X =< $z ->
+    true;
+is_subscribe_push(_) ->
+    false.
+
+handle_subscribe_push(PushMessage, #st{pending = PendingQueue} = State) ->
+    case q_out(PendingQueue) of
+        {PendingReq, PendingQueue1} ->
+            State1 = State#st{pending = PendingQueue1},
+            handle_subscribed_popped_pending(PushMessage, PendingReq, State1);
+        empty ->
+            %% No commands pending. It's may be a server initiated unsubscribe.
+            State
+    end.
+
+handle_subscribed_popped_pending(Push,
+                                 #pending_req{command = Command,
+                                              response_class = ExpectClass,
+                                              reply_acc = Acc} = Req,
+                                 State) ->
+    case {ExpectClass, hd(Push)} of
+        {{Type, N}, Type}                       % simple command
+          when N =:= 0;                         % unsubscribing from all channels
+               N =:= 1 ->                       % or subscribed to all channels
+            reply_command(Command, {ok, ?pubsub_reply}),
+            State;
+        {{Type, N}, Type}                       % simple command
+          when N > 1 ->                         % not yet subscribed all channels
+            Req1 = Req#pending_req{response_class = {Type, N - 1}},
+            pending_in_r(Req1, State);
+        {[{Type, N}], Type}                     % last command in pipeline
+          when N =:= 0;                         % unsubscribing from all channels
+               N =:= 1 ->                       % or subscribed to all channels
+            reply_command(Command, {ok, lists:reverse([?pubsub_reply | Acc])}),
+            State;
+        {[{Type, N} | Classes], Type}           % pipeline, not the last command
+          when N =:= 0;                         % unsubscribing from all channels
+               N =:= 1 ->                       % or subscribed to all channels
+            Req1 = Req#pending_req{response_class = Classes,
+                                   reply_acc = [?pubsub_reply | Acc]},
+            pending_in_r(Req1, State);
+        {[{Type, N} | Classes], Type}           % pipeline
+          when N > 1 ->                         % not yet subscribed all channels
+            Req1 = Req#pending_req{response_class = [{Type, N - 1} | Classes]},
+            pending_in_r(Req1, State);
+        _Otherwise ->
+            %% Not expecting this particular push message for Req. Put it back in queue.
+            pending_in_r(Req, State)
+    end.
+
+%% Add in the front of the pending queue (like queue:in_r).
+pending_in_r(ReplyInfo, #st{pending = Pending0} = State) ->
+    Pending1 = q_in_r(ReplyInfo, Pending0),
+    State#st{pending = Pending1}.
+
 reply_all(Reply, State) ->
-    [reply_command(Command, Reply) || Command <- q_to_list(State#st.pending)],
+    [reply_command(Req#pending_req.command, Reply) || Req <- q_to_list(State#st.pending)],
     [reply_command(Command, Reply) || Command <- q_to_list(State#st.waiting)],
     State#st{waiting = q_new(), pending = q_new()}.
 
@@ -355,40 +626,82 @@ cancel_node_down_timer(#st{node_down_timer = TimerRef} = State) ->
     erlang:cancel_timer(TimerRef),
     State#st{node_down_timer = none}.
 
+%% Move pending commands back to the waiting queue. Discard partial replies.
+%%
+%% This is risky behavior. If some of the commands sent are not idempotent, we
+%% can't just reconnect and send them again. We may just want to return an error
+%% instead.
+abort_pending_commands(State) ->
+    PendingReqs = [Req#pending_req.command || Req <- q_to_list(State#st.pending)],
+    State#st{waiting = q_join(q_from_list(PendingReqs), State#st.waiting),
+             pending = q_new(),
+             parser_state = ered_parser:init()}.
+
 connection_down(Reason, State) ->
-    State1 = State#st{waiting = q_join(State#st.pending, State#st.waiting),
-                      pending = q_new(),
-                      connection_pid = none},
+    State1 = abort_pending_commands(State),
     State2 = process_commands(State1),
     State3 = report_connection_status({connection_down, Reason}, State2),
-    start_node_down_timer(State3).
+    State4 = start_connect_loop(now, State3),
+    start_node_down_timer(State4).
 
-
-%%%%%%
+-spec process_commands(#st{}) -> #st{}.
 process_commands(State) ->
     NumWaiting = q_len(State#st.waiting),
     NumPending = q_len(State#st.pending),
     if
-        (NumWaiting > 0) and (NumPending < State#st.opts#opts.max_pending) and (State#st.connection_pid /= none) ->
+        State#st.status =:= up, State#st.socket =/= none,
+        NumWaiting > 0, NumPending < State#st.opts#opts.max_pending ->
+            %% TODO: Pop multiple from queue and send them in a batch. Use the batch_size option.
+            %% Use q_split, q_join and q_to_list.
+            %% TODO: Add request timeout timestamp to PendingReq.
             {Command, NewWaiting} = q_out(State#st.waiting),
-            Data = get_command_payload(Command),
-            ered_connection:command_async(State#st.connection_pid, Data, {command_reply, State#st.connection_pid}),
-            process_commands(State#st{pending = q_in(Command, State#st.pending),
-                                      waiting = NewWaiting});
+            RespCommand = Command#command.data,
+            Data = ered_command:get_data(RespCommand),
+            Class = ered_command:get_response_class(RespCommand),
+            Transport = State#st.opts#opts.transport,
+            case Transport:send(State#st.socket, Data) of
+                ok ->
+                    PendingReq = #pending_req{command = Command,
+                                              response_class = Class},
+                    State1 = State#st{pending = q_in(PendingReq, State#st.pending),
+                                      waiting = NewWaiting},
+                    process_commands(State1);
+                {error, _Reason} ->
+                    %% Send FIN and handle replies in fligh before reconnecting.
+                    Transport:shutdown(State#st.socket, read_write),
+                    start_connect_loop(now, State#st{status = init})
+            end;
 
-        (NumWaiting > State#st.opts#opts.max_waiting) and (State#st.queue_full_event_sent) ->
+        NumWaiting > State#st.opts#opts.max_waiting, State#st.queue_full_event_sent ->
             drop_commands(State);
 
         NumWaiting > State#st.opts#opts.max_waiting ->
             drop_commands(
               report_connection_status(queue_full, State#st{queue_full_event_sent = true}));
 
-        (NumWaiting < State#st.opts#opts.queue_ok_level) and (State#st.queue_full_event_sent) ->
+        NumWaiting < State#st.opts#opts.queue_ok_level, State#st.queue_full_event_sent ->
             report_connection_status(queue_ok, State#st{queue_full_event_sent = false});
 
         true ->
             State
     end.
+
+start_connect_loop(_When, State) when is_pid(State#st.connection_loop_pid) ->
+    State;
+start_connect_loop(When0, State) ->
+    Self = self(),
+    Now = erlang:monotonic_time(millisecond),
+    ConnectedAt = State#st.connected_at,
+    %% Don't reconnect immediately if the last connect was too recently.
+    When = if
+                is_integer(ConnectedAt),
+                Now - ConnectedAt < State#st.opts#opts.reconnect_wait ->
+                    wait;
+                true ->
+                    When0
+            end,
+    ConnectPid = spawn_link(fun () -> connect_loop(When, Self, State#st.opts) end),
+    State#st{connection_loop_pid = ConnectPid}.    
 
 drop_commands(State) ->
     case q_len(State#st.waiting) > State#st.opts#opts.max_waiting of
@@ -407,6 +720,9 @@ q_new() ->
 q_in(Item, {Size, Q}) ->
     {Size+1, queue:in(Item, Q)}.
 
+q_in_r(Item, {Size, Q}) ->
+    {Size + 1, queue:in_r(Item, Q)}.
+
 q_join({Size1, Q1}, {Size2, Q2}) ->
     {Size1 + Size2, queue:join(Q1, Q2)}.
 
@@ -416,21 +732,33 @@ q_out({Size, Q}) ->
         {{value, Val}, NewQ} -> {Val, {Size-1, NewQ}}
     end.
 
+%% q_split(N, {Size, Q}) when N =< Size ->
+%%     {A, B} = queue:split(N, Q),
+%%     {{N, A}, {Size - N, B}}.
+
 q_to_list({_Size, Q}) ->
     queue:to_list(Q).
+
+q_from_list(List) ->
+    {length(List), queue:from_list(List)}.
 
 q_len({Size, _Q}) ->
     Size.
 
+response_timeout(State) when not ?q_is_empty(State#st.pending) ->
+    %% FIXME: Store req timeout in each pending item
+    State#st.opts#opts.timeout;
+response_timeout(_State) ->
+    infinity.
 
-reply_command({command, _, Fun}, Reply) ->
+reply_command(#command{replyto = Fun} = _Command, Reply) ->
     Fun(Reply).
-
-get_command_payload({command, Command, _Fun}) ->
-    Command.
 
 -spec report_connection_status(status(), #st{}) -> #st{}.
 report_connection_status(Status, State = #st{last_status = Status}) ->
+    State;
+report_connection_status({connection_down, {init_error, _}}, State) ->
+    %% Init error is an internal status. Don't report it.
     State;
 report_connection_status(Status, State) ->
     send_info(Status, State),
@@ -474,32 +802,30 @@ send_info(Status, #st{opts = #opts{info_pid = Pid,
 send_info(_Msg, _State) ->
     ok.
 
-
-connect(Pid, Opts) ->
-    Result = ered_connection:connect(Opts#opts.host, Opts#opts.port, Opts#opts.connection_opts),
-    case Result of
+%% Connect-wait-retry loop, to run in a separate spawned process. When
+%% connected, transfers the socket to the OwnerPid, sends a message `{connected,
+%% Socket}` and exits. On connect error, a message `{connect_error, Reason}` is
+%% sent and connecting is retried periodically.
+connect_loop(now, OwnerPid,
+             #opts{host = Host, port = Port, transport = Transport,
+                   transport_opts = TransportOpts0,
+                   connect_timeout = Timeout} = Opts) ->
+    TranportOpts = [{active, 100}, binary] ++ TransportOpts0,
+    case Transport:connect(Host, Port, TranportOpts, Timeout) of
+        {ok, Socket} ->
+            ok = Transport:controlling_process(Socket, OwnerPid),
+            OwnerPid ! {connected, Socket};
         {error, Reason} ->
-            Pid ! {connect_error, Reason},
-            timer:sleep(Opts#opts.reconnect_wait);
+            OwnerPid ! {connect_error, Reason},
+            connect_loop(wait, OwnerPid, Opts)
+    end;
+connect_loop(wait, OwnerPid, Opts) ->
+    timer:sleep(Opts#opts.reconnect_wait),
+    connect_loop(now, OwnerPid, Opts).
 
-        {ok, ConnectionPid} ->
-            case init(Pid, ConnectionPid, Opts) of
-                {socket_closed, ConnectionPid, Reason} ->
-                    Pid ! {socket_closed, Reason},
-                    timer:sleep(Opts#opts.reconnect_wait);
-                {ok, ClusterId}  ->
-                    Pid ! {connected, ConnectionPid, ClusterId},
-                    receive
-                        {socket_closed, ConnectionPid, Reason} ->
-                            Pid ! {socket_closed, Reason}
-                    end
-            end
-
-    end,
-    connect(Pid, Opts).
-
-
-init(MainPid, ConnectionPid, Opts) ->
+init_connection(State) ->
+    #st{opts = #opts{transport = Transport} = Opts,
+        socket = Socket} = State,
     Cmd1 =  [[<<"CLUSTER">>, <<"MYID">>] || Opts#opts.use_cluster_id],
     Cmd2 = case {Opts#opts.resp_version, Opts#opts.auth} of
                {3, {Username, Password}} ->
@@ -515,22 +841,29 @@ init(MainPid, ConnectionPid, Opts) ->
                Opts#opts.select_db > 0],
     case Cmd1 ++ Cmd2 ++ Cmd3 of
         [] ->
-            {ok, undefined};
-        Commands ->
-            ered_connection:command_async(ConnectionPid, Commands, init_command_reply),
-            receive
-                {init_command_reply, Reply} ->
-                    case [Reason || {error, Reason} <- Reply] of
-                        [] when Opts#opts.use_cluster_id ->
-                            {ok, hd(Reply)};
-                        []  ->
-                            {ok, undefined};
-                        Errors ->
-                            MainPid ! {init_error, Errors},
-                            timer:sleep(Opts#opts.reconnect_wait),
-                            init(MainPid, ConnectionPid, Opts)
-                    end;
-                Other ->
-                    Other
+            self() ! {init_command_reply, {ok, []}},
+            State;
+        Pipeline ->
+            %% Add to pending queue and send like any other commands.
+            ReplyFun = fun (Reply) ->
+                               self() ! {init_command_reply, Reply}
+                       end,
+            RespCommand = ered_command:convert_to(Pipeline),
+            Data = ered_command:get_data(RespCommand),
+            Command = #command{data = RespCommand, replyto = ReplyFun},
+            Class = ered_command:get_response_class(RespCommand),
+            PendingReq = #pending_req{command = Command, response_class = Class},
+            Transport = State#st.opts#opts.transport,
+            case Transport:send(State#st.socket, Data) of
+                ok ->
+                    State1 = State#st{pending = q_in(PendingReq, State#st.pending),
+                                      status = init},
+                    %% Send commands immediately or wait for init reply first?
+                    %% process_commands(State1);
+                    State1;
+                {error, _Reason} ->
+                    %% Send FIN and handle replies in flight before reconnecting.
+                    Transport:shutdown(Socket, read_write),
+                    start_connect_loop(wait, State)
             end
     end.
