@@ -353,9 +353,8 @@ handle_info({converged, Result, FromAddr, Version},
                     {noreply, update_cluster_state(State1)}
             end;
         false ->
-            cancel_convergence_check(State),
-            State1 = State#st{convergence_check = nok},
-            {noreply, update_cluster_state(State1)}
+            %% Ignore and let the convergence check time out.
+            {noreply, State}
     end;
 
 handle_info({timeout, TimerRef, {time_to_update_slots,PreferredNodes}}, State) ->
@@ -374,7 +373,7 @@ handle_info({timeout, TimerRef, start_convergence_check},
     {noreply, start_convergence_check(State)};
 
 handle_info({timeout, TimerRef, cancel_convergence_check},
-            State = #st{convergence_check = {scheduled, TimerRef}}) ->
+            State = #st{convergence_check = {ongoing, _, TimerRef}}) ->
     cancel_convergence_check(State),
     State1 = State#st{convergence_check = nok},
     {noreply, update_cluster_state(State1)};
@@ -547,7 +546,7 @@ start_convergence_check(State) ->
     Expected = ered_lib:slotmap_master_slots(State#st.slot_map),
     lists:foreach(fun (Addr) ->
                           ClientPid = maps:get(Addr, State#st.nodes),
-                          Cb = fun ({ok, Reply}) ->
+                          Cb = fun ({ok, Reply = [_|_]}) ->
                                        IsMatch = ered_lib:slotmap_master_slots(Reply) =:= Expected,
                                        ClusterPid ! {converged, IsMatch, Addr, Version};
                                    (_) ->
