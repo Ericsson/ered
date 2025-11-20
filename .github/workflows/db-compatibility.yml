@@ -27,8 +27,8 @@ jobs:
       - name: Install Erlang/OTP
         uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1.20.4
         with:
-          otp-version: '26.2.4'
-          rebar3-version: '3.23.0'
+          otp-version: '28.1.1'
+          rebar3-version: '3.25.1'
       - name: Build and run common tests
         env:
           SERVER_DOCKER_IMAGE: valkey/valkey:${{ matrix.valkey-version }}
@@ -55,8 +55,8 @@ jobs:
       - name: Install Erlang/OTP
         uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1.20.4
         with:
-          otp-version: '26.2.4'
-          rebar3-version: '3.23.0'
+          otp-version: '28.1.1'
+          rebar3-version: '3.25.1'
       - name: Build and run common tests
         env:
           SERVER_DOCKER_IMAGE: redis:${{ matrix.redis-version }}
