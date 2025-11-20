@@ -13,8 +13,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - valkey-version: 8.0.1
-          - valkey-version: 7.2.5
+          - valkey-version: 9.0.0
+          - valkey-version: 8.1.4
+          - valkey-version: 8.0.6
+          - valkey-version: 7.2.11
     steps:
       - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
       - name: Install redis-cli required by common tests
