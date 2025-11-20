@@ -22,10 +22,14 @@ jobs:
           rebar3-version: '3.25.1'
       - name: Check if vsn matches pushed tag (see src/ered.app.src).
         run: |
-          rebar3 shell --apps ered --eval "$(cat << EOF
+          rebar3 compile
+          erl -noshell -pa _build/default/lib/*/ebin -eval "$(cat <<'EOF'
           Version = "${{ github.ref_name }}",
+          application:start(ered),
           case application:get_key(ered, vsn) of
               {ok, Version} ->
+                  io:format(user, "Version check ok, vsn and pushed tag is ~p~n",
+                            [Version]),
                   halt(0,[]);
               Error ->
                   io:format(user, "Version check failed, got ~p while pushed tag is ~s~n",
