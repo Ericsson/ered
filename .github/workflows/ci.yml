@@ -68,4 +68,11 @@ jobs:
       - name: Run common tests
         run: rebar3 ct
       - name: Run dialyzer
-        run: rebar3 as test dialyzer
+        run: |
+          # Remove remnants from "rebar3 ct" that creates problems for the dialyzer.
+          # rebar3 might add ct_hooks that are not found by the dialyzer and will
+          # create warnings if not rebuilt. Example of a warning:
+          #   test/ered_cluster_SUITE.erl
+          #   Line 72 Column 13: Unknown function cthr:pal/1
+          rebar3 as test clean
+          rebar3 as test dialyzer
