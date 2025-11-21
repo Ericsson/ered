@@ -7,9 +7,9 @@ permissions:
 
 jobs:
   fmt:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
       - name: Prepare
         run: |
           sudo apt update
@@ -17,8 +17,8 @@ jobs:
       - name: Install Erlang/OTP
         uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1.20.4
         with:
-          otp-version: '26.2.4'
-          rebar3-version: '3.23.0'
+          otp-version: '28.1.1'
+          rebar3-version: '3.25.1'
       - name: erlang-formatter
         run: |
           rebar3 as check fmt
@@ -33,7 +33,7 @@ jobs:
   spellcheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
       - name: Install typos
         uses: taiki-e/install-action@14083e64ac8cf1f5e54356df00b9779b23e192a1 # v2.58.29
         with:
@@ -42,23 +42,22 @@ jobs:
         run: typos --config=.github/typos.toml
 
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         include:
-          - otp-version: '27.1.2'
-          - otp-version: '26.2.5.5'
-          - otp-version: '25.3.2.15'
+          - otp-version: '28.1.1'
+          - otp-version: '27.3.4.6'
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
       - name: Install Erlang/OTP
         uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1.20.4
         with:
           otp-version: ${{ matrix.otp-version }}
-          rebar3-version: '3.23.0'
+          rebar3-version: '3.25.1'
       - name: Install packages for common tests
-        uses: awalsh128/cache-apt-pkgs-action@2c09a5e66da6c8016428a2172bd76e5e4f14bb17 # v1.5.3
+        uses: awalsh128/cache-apt-pkgs-action@acb598e5ddbc6f68a970c5da0688d2f3a9f04d05 # v1.6.0
         with:
           packages: redis-server faketime
           version: 1.0
@@ -69,4 +68,11 @@ jobs:
       - name: Run common tests
         run: rebar3 ct
       - name: Run dialyzer
-        run: rebar3 as test dialyzer
+        run: |
+          # Remove remnants from "rebar3 ct" that creates problems for the dialyzer.
+          # rebar3 might add ct_hooks that are not found by the dialyzer and will
+          # create warnings if not rebuilt. Example of a warning:
+          #   test/ered_cluster_SUITE.erl
+          #   Line 72 Column 13: Unknown function cthr:pal/1
+          rebar3 as test clean
+          rebar3 as test dialyzer

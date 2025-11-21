@@ -14,18 +14,22 @@ jobs:
     name: Check ered application version
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
       - name: Install Erlang/OTP
         uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1.20.4
         with:
-          otp-version: '27.1.2'
-          rebar3-version: '3.23.0'
+          otp-version: '28.1.1'
+          rebar3-version: '3.25.1'
       - name: Check if vsn matches pushed tag (see src/ered.app.src).
         run: |
-          rebar3 shell --apps ered --eval "$(cat << EOF
+          rebar3 compile
+          erl -noshell -pa _build/default/lib/*/ebin -eval "$(cat <<'EOF'
           Version = "${{ github.ref_name }}",
+          application:start(ered),
           case application:get_key(ered, vsn) of
               {ok, Version} ->
+                  io:format(user, "Version check ok, vsn and pushed tag is ~p~n",
+                            [Version]),
                   halt(0,[]);
               Error ->
                   io:format(user, "Version check failed, got ~p while pushed tag is ~s~n",
