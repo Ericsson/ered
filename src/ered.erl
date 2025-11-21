@@ -11,6 +11,7 @@
 
 -export_type([opt/0,
               addr/0,
+              host/0,
               command/0,
               reply/0,
               reply_fun/0,
