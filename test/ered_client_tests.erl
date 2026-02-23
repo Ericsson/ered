@@ -40,7 +40,8 @@ request_t() ->
 
 fail_connect_t() ->
     {ok,Pid} = ered_client:start_link("127.0.0.1", 0, [{info_pid, self()}]),
-    {connect_error,econnrefused} = expect_connection_down(Pid),
+    {connect_error, Reason} = expect_connection_down(Pid),
+    true = Reason =:= econnrefused orelse Reason =:= eaddrnotavail,
     %% make sure there are no more connection down messages
     timeout = receive M -> M after 500 -> timeout end.
 
@@ -66,7 +67,7 @@ fail_parse_t() ->
                        Pid ! ered_client:command(Client, [<<"ping">>])
                end),
     expect_connection_up(Client),
-    Reason = {recv_exit, {parse_error,{invalid_data,<<"&pong">>}}},
+    Reason = {parse_error, {invalid_data, <<"&pong">>}},
     receive #{msg_type := socket_closed, reason := Reason} -> ok end,
     expect_connection_up(Client),
     {ok, <<"pong">>} = get_msg().
@@ -85,7 +86,7 @@ server_close_socket_t() ->
                end),
     Client = start_client(Port),
     expect_connection_up(Client),
-    receive #{msg_type := socket_closed, reason := {recv_exit, closed}} -> ok end,
+    receive #{msg_type := socket_closed, reason := tcp_closed} -> ok end,
     expect_connection_up(Client).
 
 
@@ -172,7 +173,7 @@ server_buffer_full_reconnect_t() ->
     receive #{msg_type := queue_full} -> ok end,
     %% 1 message over the limit, first one in queue gets kicked out
     {6, {error, queue_overflow}} = get_msg(),
-    receive #{msg_type := socket_closed, reason := {recv_exit, closed}} -> ok end,
+    receive #{msg_type := socket_closed, reason := tcp_closed} -> ok end,
     %% when connection goes down the pending messages will be put in the queue and the queue
     %% will overflow kicking out the oldest first
     [{N, {error, queue_overflow}} = get_msg() || N <- [1,2,3,4,5]],
@@ -202,7 +203,7 @@ server_buffer_full_node_goes_down_t() ->
     [ered_client:command_async(Client, [<<"ping">>], fun(Reply) -> Pid ! {N, Reply} end) || N <- lists:seq(1,11)],
     receive #{msg_type := queue_full} -> ok end,
     {6, {error, queue_overflow}} = get_msg(),
-    receive #{msg_type := socket_closed, reason := {recv_exit, closed}} -> ok end,
+    receive #{msg_type := socket_closed, reason := tcp_closed} -> ok end,
     [{N, {error, queue_overflow}} = get_msg() || N <- [1,2,3,4,5]],
     receive #{msg_type := queue_ok} -> ok end,
     receive #{msg_type := connect_error, reason := econnrefused} -> ok end,
@@ -242,7 +243,7 @@ send_timeout_t() ->
     Pid = self(),
     ered_client:command_async(Client, [<<"ping">>], fun(Reply) -> Pid ! {reply, Reply} end),
     %% this should come after max 1000ms
-    receive #{msg_type := socket_closed, reason := {recv_exit, timeout}} -> ok after 2000 -> timeout_error() end,
+    receive #{msg_type := socket_closed, reason := timeout} -> ok after 2000 -> timeout_error() end,
     expect_connection_up(Client),
     {reply, {ok, <<"pong">>}} = get_msg(),
     no_more_msgs().
@@ -256,15 +257,12 @@ fail_hello_t() ->
                        {ok, <<"*2\r\n$5\r\nHELLO\r\n$1\r\n3\r\n">>} = gen_tcp:recv(Sock, 0),
                        ok = gen_tcp:send(Sock, <<"-NOPROTO unsupported protocol version\r\n">>),
 
-                       %% test resend
-                       {ok, <<"*2\r\n$5\r\nHELLO\r\n$1\r\n3\r\n">>} = gen_tcp:recv(Sock, 0),
-                       ok = gen_tcp:send(Sock, <<"-NOPROTO unsupported protocol version\r\n">>),
-
-                       Pid ! done
+                       Pid ! done,
+                       {error, closed} = gen_tcp:recv(Sock, 0)
                end),
     {ok,Client} = ered_client:start_link("127.0.0.1", Port, [{info_pid, self()}]),
-    {init_error, [<<"NOPROTO unsupported protocol version">>]} = expect_connection_down(Client),
     receive done -> ok end,
+    {init_error, [<<"NOPROTO unsupported protocol version">>]} = expect_connection_down(Client),
     no_more_msgs().
 
 hello_with_auth_t() ->

@@ -71,16 +71,21 @@ continue(NewData, State) ->
 %%%===================================================================
 
 parse(State=#parser_state{data=Data, next=Fun, bytes_needed=Bytes}) ->
-    case token(Data, Bytes) of
-        {need_more, LackingBytes} ->
-            {need_more, LackingBytes, State};
-        {Token, Rest} ->
-            case Fun(Token) of
-                {done, Result} ->
-                    {done, Result, #parser_state{data=Rest}};
-                {cont, NextFun, NextBytes} ->
-                    parse(#parser_state{data=Rest, next=NextFun, bytes_needed=NextBytes})
-            end
+    try
+        case token(Data, Bytes) of
+            {need_more, LackingBytes} ->
+                {need_more, LackingBytes, State};
+            {Token, Rest} ->
+                case Fun(Token) of
+                    {done, Result} ->
+                        {done, Result, #parser_state{data=Rest}};
+                    {cont, NextFun, NextBytes} ->
+                        parse(#parser_state{data=Rest, next=NextFun, bytes_needed=NextBytes})
+                end
+        end
+    catch
+        {parse_error, _Reason} = ParseError ->
+            ParseError
     end.
 
 token(Data, 0) ->

@@ -500,14 +500,18 @@ setopts(#st{opts = #opts{transport = ssl}, socket = Socket}, Opts) ->
     ssl:setopts(Socket, Opts).
 
 %% Data received from the server
-handle_data(Data, #st{parser_state = ParserState0} = State0) ->
-    handle_parser_result(ered_parser:continue(Data, ParserState0), State0).
+handle_data(Data, #st{parser_state = ParserState} = State) ->
+    handle_parser_result(ered_parser:continue(Data, ParserState), State).
 
 handle_parser_result({need_more, _BytesNeeded, ParserState}, State) ->
     State#st{parser_state = ParserState};
 handle_parser_result({done, Value, ParserState}, State0) ->
     State1 = handle_result(Value, State0),
-    handle_parser_result(ered_parser:next(ParserState), State1).
+    handle_parser_result(ered_parser:next(ParserState), State1);
+handle_parser_result({parse_error, Reason}, State) ->
+    Transport = State#st.opts#opts.transport,
+    Transport:close(State#st.socket),
+    connection_down({socket_closed, {parse_error, Reason}}, State#st{socket = none}).
 
 handle_result({push, Value = [Type|_]}, State) ->
     %% Pub/sub in RESP3 is a bit quirky. The push is supposed to be out of band
@@ -694,12 +698,12 @@ start_connect_loop(When0, State) ->
     ConnectedAt = State#st.connected_at,
     %% Don't reconnect immediately if the last connect was too recently.
     When = if
-                is_integer(ConnectedAt),
-                Now - ConnectedAt < State#st.opts#opts.reconnect_wait ->
-                    wait;
-                true ->
-                    When0
-            end,
+               is_integer(ConnectedAt),
+               Now - ConnectedAt < State#st.opts#opts.reconnect_wait ->
+                   wait;
+               true ->
+                   When0
+           end,
     ConnectPid = spawn_link(fun () -> connect_loop(When, Self, State#st.opts) end),
     State#st{connection_loop_pid = ConnectPid}.    
 
@@ -757,8 +761,10 @@ reply_command(#command{replyto = Fun} = _Command, Reply) ->
 -spec report_connection_status(status(), #st{}) -> #st{}.
 report_connection_status(Status, State = #st{last_status = Status}) ->
     State;
-report_connection_status({connection_down, {init_error, _}}, State) ->
-    %% Init error is an internal status. Don't report it.
+report_connection_status({connection_down, {init_error, Reason}},
+                         #st{last_status = node_deactivated} = State)
+  when Reason =:= node_deactivated; Reason =:= node_down ->
+    %% Silence additional init error when node is deactivated.
     State;
 report_connection_status(Status, State) ->
     send_info(Status, State),
@@ -810,8 +816,8 @@ connect_loop(now, OwnerPid,
              #opts{host = Host, port = Port, transport = Transport,
                    transport_opts = TransportOpts0,
                    connect_timeout = Timeout} = Opts) ->
-    TranportOpts = [{active, 100}, binary] ++ TransportOpts0,
-    case Transport:connect(Host, Port, TranportOpts, Timeout) of
+    TransportOpts = [{active, 100}, binary] ++ TransportOpts0,
+    case Transport:connect(Host, Port, TransportOpts, Timeout) of
         {ok, Socket} ->
             ok = Transport:controlling_process(Socket, OwnerPid),
             OwnerPid ! {connected, Socket};
