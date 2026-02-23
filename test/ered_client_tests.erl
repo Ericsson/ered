@@ -296,7 +296,8 @@ hello_with_auth_t() ->
                                                  "$6\r\nmaster\r\n"
                                                  "$7\r\nmodules\r\n"
                                                  "*0\r\n">>),
-                       Pid ! done
+                       Pid ! done,
+                       receive ok -> ok end
                end),
     {ok, Client} = ered_client:start_link("127.0.0.1", Port, [{info_pid, self()},
                                                               {auth, {<<"ali">>, <<"sesame">>}}]),
@@ -336,7 +337,8 @@ auth_t() ->
                               "$6\r\nsesame\r\n">>} = gen_tcp:recv(Sock, 0),
                        ok = gen_tcp:send(Sock, <<"+OK\r\n">>),
 
-                       Pid ! done
+                       Pid ! done,
+                       receive ok -> ok end
                end),
     {ok, Client} = ered_client:start_link("127.0.0.1", Port, [{info_pid, self()},
                                                               {resp_version, 2},
