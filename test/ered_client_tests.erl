@@ -298,9 +298,10 @@ hello_with_auth_t() ->
                                                  "*0\r\n">>),
                        Pid ! done
                end),
-    {ok, _Client} = ered_client:start_link("127.0.0.1", Port, [{info_pid, self()},
-                                                               {auth, {<<"ali">>, <<"sesame">>}}]),
+    {ok, Client} = ered_client:start_link("127.0.0.1", Port, [{info_pid, self()},
+                                                              {auth, {<<"ali">>, <<"sesame">>}}]),
     receive done -> ok end,
+    expect_connection_up(Client),
     no_more_msgs().
 
 hello_with_auth_fail_t() ->
@@ -337,10 +338,11 @@ auth_t() ->
 
                        Pid ! done
                end),
-    {ok, _Client} = ered_client:start_link("127.0.0.1", Port, [{info_pid, self()},
-                                                               {resp_version, 2},
-                                                               {auth, {<<"ali">>, <<"sesame">>}}]),
+    {ok, Client} = ered_client:start_link("127.0.0.1", Port, [{info_pid, self()},
+                                                              {resp_version, 2},
+                                                              {auth, {<<"ali">>, <<"sesame">>}}]),
     receive done -> ok end,
+    expect_connection_up(Client),
     no_more_msgs().
 
 auth_fail_t() ->
