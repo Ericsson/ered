@@ -766,8 +766,9 @@ report_connection_status({connection_down, {init_error, node_down}},
     %% Silence additional init error cased by connection down. The lost
     %% connection was already reported in another status message.
     State;
-report_connection_status({connection_down, {init_error, node_deactivated}},
-                         #st{last_status = node_deactivated} = State) ->
+report_connection_status({connection_down, {init_error, InitReason}},
+                         #st{last_status = node_deactivated} = State)
+  when InitReason =:= node_deactivated; InitReason =:= node_down  ->
     %% Silence additional init error when node is deactivated.
     State;
 report_connection_status(Status, State) ->
