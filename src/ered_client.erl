@@ -761,10 +761,13 @@ reply_command(#command{replyto = Fun} = _Command, Reply) ->
 -spec report_connection_status(status(), #st{}) -> #st{}.
 report_connection_status(Status, State = #st{last_status = Status}) ->
     State;
-report_connection_status({connection_down, {init_error, Reason}},
-                         #st{last_status = node_deactivated} = State)
-  when Reason =:= node_deactivated; Reason =:= node_down ->
-    %% Silence additional init error when node is deactivated.
+report_connection_status({connection_down, {init_error, InitReason}},
+                         #st{last_status = LastStatus} = State)
+  when (InitReason =:= node_deactivated orelse
+        InitReason =:= node_down),
+       (LastStatus =:= node_deactivated orelse
+        LastStatus =:= {connection_down, node_down_timeout}) ->
+    %% Silence additional init error when node is deactivated or down.
     State;
 report_connection_status(Status, State) ->
     send_info(Status, State),
@@ -819,8 +822,14 @@ connect_loop(now, OwnerPid,
     TransportOpts = [{active, 100}, binary] ++ TransportOpts0,
     case Transport:connect(Host, Port, TransportOpts, Timeout) of
         {ok, Socket} ->
-            ok = Transport:controlling_process(Socket, OwnerPid),
-            OwnerPid ! {connected, Socket};
+            case Transport:controlling_process(Socket, OwnerPid) of
+                ok ->
+                    OwnerPid ! {connected, Socket};
+                {error, Reason} ->
+                    OwnerPid ! {connect_error, Reason},
+                    Transport:close(Socket),
+                    connect_loop(wait, OwnerPid, Opts)
+            end;
         {error, Reason} ->
             OwnerPid ! {connect_error, Reason},
             connect_loop(wait, OwnerPid, Opts)

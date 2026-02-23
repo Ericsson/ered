@@ -192,4 +192,8 @@ t_expired_cert_tls_1_3(_) ->
     ?MSG(#{msg_type := socket_closed, addr := {"127.0.0.1", 31001},
            reason := {tls_alert, {certificate_expired, _}}}),
     ?MSG(#{msg_type := node_down_timeout, addr := {"127.0.0.1", 31001}}, 2500),
+    timer:sleep(10), % Wait for the optional messages.
+    ?OPTIONAL_MSG(#{msg_type := init_error, reason := node_down}),
+    ?OPTIONAL_MSG(#{msg_type := socket_closed,
+                    reason := {tls_alert, {certificate_expired, _}}}),
     no_more_msgs().

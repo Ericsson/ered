@@ -533,6 +533,9 @@ t_init_timeout(_) ->
     %% Does not work on  Redis before 6.2.0.
     ct:pal("~p\n", [os:cmd("redis-cli -p 30001 CLIENT UNPAUSE")]),
 
+    %% Maybe we were waiting for init commands when the node down timeout fired.
+    ?OPTIONAL_MSG(#{msg_type := init_error, reason := node_down}),
+
     ?MSG(#{msg_type := connected, addr := {localhost, 30001}}),
 
     ?MSG(#{msg_type := slot_map_updated}),

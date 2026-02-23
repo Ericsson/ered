@@ -76,18 +76,22 @@ fail_parse_t() ->
 server_close_socket_t() ->
     {ok, ListenSock} = gen_tcp:listen(0, [binary, {active , false}]),
     {ok, Port} = inet:port(ListenSock),
-    spawn_link(fun() ->
-                       {ok, Sock} = gen_tcp:accept(ListenSock),
-                       gen_tcp:close(Sock),
+    ServerPid =
+        spawn_link(fun() ->
+                           {ok, Sock} = gen_tcp:accept(ListenSock),
+                           receive continue -> ok end,
+                           gen_tcp:close(Sock),
 
-                       %% resend from client
-                       {ok, _Sock2} = gen_tcp:accept(ListenSock),
-                       receive ok -> ok end
-               end),
+                           %% resend from client
+                           {ok, _Sock2} = gen_tcp:accept(ListenSock),
+                           receive done -> ok end
+                   end),
     Client = start_client(Port),
     expect_connection_up(Client),
+    ServerPid ! continue,
     receive #{msg_type := socket_closed, reason := tcp_closed} -> ok end,
-    expect_connection_up(Client).
+    expect_connection_up(Client),
+    ServerPid ! done.
 
 
 %% Suppress warning from command 'bad_request'
