@@ -63,7 +63,7 @@
          socket = none,
          controlling_process :: pid(),
          last_status = none,
-         parser_state = none :: none | ered_parser:state(),
+         parser_state :: ered_parser:state(),
 
          waiting = q_new() :: command_queue(),
          pending = q_new() :: command_queue(),
@@ -488,7 +488,7 @@ terminate(Reason, State) ->
     ok.
 
 code_change(_OldVsn, State = #st{opts = #opts{}}, _Extra) ->
-    {ok, State, response_timeout(State)}.
+    {ok, State}.
 
 %%%===================================================================
 %%% Internal functions

@@ -26,10 +26,12 @@
 
 -type parse_result() :: binary() | {error, binary()} | integer() | undefined | [parse_result()] | inf | neg_inf | nan |
                         float() | true | false | #{parse_result() => parse_result()} | sets:set(parse_result()) |
-                        {attribute, parse_result(), parse_result()} | {push | parse_result()}.
+                        {attribute, parse_result(), parse_result()} | {push, parse_result()}.
 
 -opaque state() :: #parser_state{}.
--type parse_return() :: {done, parse_result(), #parser_state{}} | {need_more, bytes_needed(), #parser_state{}}.
+-type parse_return() :: {done, parse_result(), state()} |
+                        {need_more, bytes_needed(), state()} |
+                        {parse_error, any()}.
 
 -if(?OTP_RELEASE >= 24).
 -define(sets_new, sets:new([{version, 2}])).
@@ -42,7 +44,7 @@
 %%%===================================================================
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec init() -> #parser_state{}.
+-spec init() -> state().
 %%
 %% Init empty parser continuation
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -50,7 +52,7 @@ init() ->
     #parser_state{}.
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec next(#parser_state{}) -> parse_return().
+-spec next(state()) -> parse_return().
 %%
 %% Get next result or continuation.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -58,7 +60,7 @@ next(State) ->
     parse(State).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec continue(binary(), #parser_state{}) -> parse_return().
+-spec continue(binary(), state()) -> parse_return().
 %%
 %% Feed more data to the parser. Get next result or continuation.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
