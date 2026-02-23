@@ -761,13 +761,14 @@ reply_command(#command{replyto = Fun} = _Command, Reply) ->
 -spec report_connection_status(status(), #st{}) -> #st{}.
 report_connection_status(Status, State = #st{last_status = Status}) ->
     State;
-report_connection_status({connection_down, {init_error, InitReason}},
-                         #st{last_status = LastStatus} = State)
-  when (InitReason =:= node_deactivated orelse
-        InitReason =:= node_down),
-       (LastStatus =:= node_deactivated orelse
-        LastStatus =:= {connection_down, node_down_timeout}) ->
-    %% Silence additional init error when node is deactivated or down.
+report_connection_status({connection_down, {init_error, node_down}},
+                         #st{last_status = {connection_down, _}} = State) ->
+    %% Silence additional init error cased by connection down. The lost
+    %% connection was already reported in another status message.
+    State;
+report_connection_status({connection_down, {init_error, node_deactivated}},
+                         #st{last_status = node_deactivated} = State) ->
+    %% Silence additional init error when node is deactivated.
     State;
 report_connection_status(Status, State) ->
     send_info(Status, State),
