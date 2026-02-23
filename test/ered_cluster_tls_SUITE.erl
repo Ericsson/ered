@@ -190,8 +190,6 @@ t_expired_cert_tls_1_3(_) ->
                                     [{info_pid, [self()]}, {client_opts, ClientOpts}]),
 
     ?MSG(#{msg_type := socket_closed, addr := {"127.0.0.1", 31001},
-           reason := {recv_exit,
-                      {tls_alert,
-                       {certificate_expired, _}}}}),
+           reason := {tls_alert, {certificate_expired, _}}}),
     ?MSG(#{msg_type := node_down_timeout, addr := {"127.0.0.1", 31001}}, 2500),
     no_more_msgs().
