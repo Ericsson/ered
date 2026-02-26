@@ -67,6 +67,7 @@
 
          waiting = q_new() :: command_queue(),
          pending = q_new() :: command_queue(),
+         allow_new_pending_request = true :: boolean(),
 
          cluster_id = undefined :: undefined | binary(),
 
@@ -296,6 +297,7 @@ init({Host, Port, OptsList, User}) ->
              fun({connection_opts, Val}, S)   -> handle_connection_opts(S, Val);
                 ({max_waiting, Val}, S)       -> S#opts{max_waiting = Val};
                 ({max_pending, Val}, S)       -> S#opts{max_pending = Val};
+                ({batch_size, Val}, S)        -> S#opts{batch_size = Val};
                 ({queue_ok_level, Val}, S)    -> S#opts{queue_ok_level = Val};
                 ({reconnect_wait, Val}, S)    -> S#opts{reconnect_wait = Val};
                 ({info_pid, Val}, S)          -> S#opts{info_pid = Val};
@@ -637,9 +639,10 @@ cancel_node_down_timer(#st{node_down_timer = TimerRef} = State) ->
 %% instead.
 abort_pending_commands(State) ->
     PendingReqs = [Req#pending_req.command || Req <- q_to_list(State#st.pending)],
-    State#st{waiting = q_join(q_from_list(PendingReqs), State#st.waiting),
+    State#st{waiting = q_in_r(PendingReqs, State#st.waiting),
              pending = q_new(),
-             parser_state = ered_parser:init()}.
+             parser_state = ered_parser:init(),
+             allow_new_pending_request = true}.
 
 connection_down(Reason, State) ->
     State1 = abort_pending_commands(State),
@@ -652,29 +655,42 @@ connection_down(Reason, State) ->
 process_commands(State) ->
     NumWaiting = q_len(State#st.waiting),
     NumPending = q_len(State#st.pending),
+    BatchSize =  State#st.opts#opts.batch_size,
+
+    PendingLimit = max(State#st.opts#opts.max_pending - BatchSize, 1),
     if
         State#st.status =:= up, State#st.socket =/= none,
-        NumWaiting > 0, NumPending < State#st.opts#opts.max_pending ->
-            %% TODO: Pop multiple from queue and send them in a batch. Use the batch_size option.
-            %% Use q_split, q_join and q_to_list.
+        NumWaiting > 0,  State#st.allow_new_pending_request ->
             %% TODO: Add request timeout timestamp to PendingReq.
-            {Command, NewWaiting} = q_out(State#st.waiting),
-            RespCommand = Command#command.data,
-            Data = ered_command:get_data(RespCommand),
-            Class = ered_command:get_response_class(RespCommand),
+            {Commands, NewWaiting} = q_multi_out(BatchSize, State#st.waiting),
+            {BatchedData, PendingRequests} =
+                lists:foldr(fun(Command, {B, P}) ->
+                                    RespCommand = Command#command.data,
+                                    ResponseClass = ered_command:get_response_class(RespCommand),
+
+                                    NewBatchedData = ered_command:get_data(RespCommand),
+                                    NewPendingRequest = #pending_req{command = Command,
+                                                                     response_class = ResponseClass},
+                                    {[NewBatchedData | B], [NewPendingRequest | P]}
+                            end,
+                            {[], []},
+                            Commands),
             Transport = State#st.opts#opts.transport,
-            case Transport:send(State#st.socket, Data) of
+            case Transport:send(State#st.socket, BatchedData) of
                 ok ->
-                    PendingReq = #pending_req{command = Command,
-                                              response_class = Class},
-                    State1 = State#st{pending = q_in(PendingReq, State#st.pending),
-                                      waiting = NewWaiting},
-                    process_commands(State1);
+                    NewPending = q_in(PendingRequests, State#st.pending),
+                    NewState = State#st{waiting = NewWaiting,
+                                        pending = NewPending,
+                                        allow_new_pending_request = q_len(NewPending) < State#st.opts#opts.max_pending},
+                    process_commands(NewState);
                 {error, _Reason} ->
                     %% Send FIN and handle replies in fligh before reconnecting.
                     Transport:shutdown(State#st.socket, read_write),
                     start_connect_loop(now, State#st{status = init})
             end;
+
+        not State#st.allow_new_pending_request, NumPending < PendingLimit ->
+            process_commands(State#st{allow_new_pending_request = true});
 
         NumWaiting > State#st.opts#opts.max_waiting, State#st.queue_full_event_sent ->
             drop_commands(State);
@@ -705,7 +721,7 @@ start_connect_loop(When0, State) ->
                    When0
            end,
     ConnectPid = spawn_link(fun () -> connect_loop(When, Self, State#st.opts) end),
-    State#st{connection_loop_pid = ConnectPid}.    
+    State#st{connection_loop_pid = ConnectPid}.
 
 drop_commands(State) ->
     case q_len(State#st.waiting) > State#st.opts#opts.max_waiting of
@@ -721,14 +737,18 @@ drop_commands(State) ->
 q_new() ->
     {0, queue:new()}.
 
+q_in(Items, {Size, Q1}) when is_list(Items) ->
+    Q2 = queue:from_list(Items),
+    {Size + queue:len(Q2), queue:join(Q1, Q2)};
 q_in(Item, {Size, Q}) ->
     {Size+1, queue:in(Item, Q)}.
 
+
+q_in_r(Items, {Size, Q1}) when is_list(Items) ->
+    Q2 = queue:from_list(Items),
+    {Size + queue:len(Q2), queue:join(Q2, Q1)};
 q_in_r(Item, {Size, Q}) ->
     {Size + 1, queue:in_r(Item, Q)}.
-
-q_join({Size1, Q1}, {Size2, Q2}) ->
-    {Size1 + Size2, queue:join(Q1, Q2)}.
 
 q_out({Size, Q}) ->
     case queue:out(Q) of
@@ -736,15 +756,14 @@ q_out({Size, Q}) ->
         {{value, Val}, NewQ} -> {Val, {Size-1, NewQ}}
     end.
 
-%% q_split(N, {Size, Q}) when N =< Size ->
-%%     {A, B} = queue:split(N, Q),
-%%     {{N, A}, {Size - N, B}}.
+q_multi_out(N, {Size, Q}) when N =< Size ->
+    {Out, Rest} = queue:split(N, Q),
+    {queue:to_list(Out), {Size - N, Rest}};
+q_multi_out(_, {_, Q}) ->
+    {queue:to_list(Q), {0, queue:new()}}.
 
 q_to_list({_Size, Q}) ->
     queue:to_list(Q).
-
-q_from_list(List) ->
-    {length(List), queue:from_list(List)}.
 
 q_len({Size, _Q}) ->
     Size.
