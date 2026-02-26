@@ -118,7 +118,7 @@ server_buffer_full_t() ->
                        Expected = iolist_to_binary(lists:duplicate(5, Ping)),
                        {ok, Expected} = gen_tcp:recv(Sock, size(Expected)),
                        %% should be nothing more since only 5 pending
-                       {error, timeout} = gen_tcp:recv(Sock, 0, 0),
+                       ?assertEqual({error, timeout}, gen_tcp:recv(Sock, 0, 0)),
 
                        timer:sleep(500),
 
@@ -132,15 +132,15 @@ server_buffer_full_t() ->
 
                        receive ok -> ok end
                end),
-    Client = start_client(Port, [{max_waiting, 5}, {max_pending, 5}, {queue_ok_level,1}]),
+    Client = start_client(Port, [{batch_size, 16},{max_waiting, 5}, {max_pending, 5}, {queue_ok_level,1}]),
     expect_connection_up(Client),
 
     Pid = self(),
     [ered_client:command_async(Client, [<<"ping">>], fun(Reply) -> Pid ! {N, Reply} end) || N <- lists:seq(1,11)],
     receive #{msg_type := queue_full} -> ok end,
-    {6, {error, queue_overflow}} = get_msg(),
+    ?assertEqual({6, {error, queue_overflow}}, get_msg()),
     receive #{msg_type := queue_ok} -> ok end,
-    [{N, {ok, <<"pong">>}} = get_msg()|| N <- [1,2,3,4,5,7,8,9,10,11]],
+    [?assertEqual({N, {ok, <<"pong">>}} , get_msg()) || N <- [1,2,3,4,5,7,8,9,10,11]],
     no_more_msgs().
 
 
@@ -168,7 +168,7 @@ server_buffer_full_reconnect_t() ->
                        receive ok -> ok end
 
                end),
-    Client = start_client(Port, [{max_waiting, 5}, {max_pending, 5}, {queue_ok_level,1}]),
+    Client = start_client(Port, [{batch_size, 16}, {max_waiting, 5}, {max_pending, 5}, {queue_ok_level,1}]),
     expect_connection_up(Client),
 
     Pid = self(),
@@ -206,9 +206,9 @@ server_buffer_full_node_goes_down_t() ->
     Pid = self(),
     [ered_client:command_async(Client, [<<"ping">>], fun(Reply) -> Pid ! {N, Reply} end) || N <- lists:seq(1,11)],
     receive #{msg_type := queue_full} -> ok end,
-    {6, {error, queue_overflow}} = get_msg(),
+    ?assertEqual({6, {error, queue_overflow}}, get_msg()),
     receive #{msg_type := socket_closed, reason := tcp_closed} -> ok end,
-    [{N, {error, queue_overflow}} = get_msg() || N <- [1,2,3,4,5]],
+    [?assertEqual({N, {error, queue_overflow}}, get_msg()) || N <- [1,2,3,4,5]],
     receive #{msg_type := queue_ok} -> ok end,
     receive #{msg_type := connect_error, reason := econnrefused} -> ok end,
     receive #{msg_type := node_down_timeout} -> ok end,
