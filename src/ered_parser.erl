@@ -7,7 +7,8 @@
          continue/2]).
 
 -export_type([parse_return/0,
-              parse_result/0
+              parse_result/0,
+              state/0
              ]).
 
 %%%===================================================================
@@ -25,10 +26,12 @@
 
 -type parse_result() :: binary() | {error, binary()} | integer() | undefined | [parse_result()] | inf | neg_inf | nan |
                         float() | true | false | #{parse_result() => parse_result()} | sets:set(parse_result()) |
-                        {attribute, parse_result(), parse_result()} | {push | parse_result()}.
+                        {attribute, parse_result(), parse_result()} | {push, parse_result()}.
 
-
--type parse_return() :: {done, parse_result(), #parser_state{}} | {need_more, bytes_needed(), #parser_state{}}.
+-opaque state() :: #parser_state{}.
+-type parse_return() :: {done, parse_result(), state()} |
+                        {need_more, bytes_needed(), state()} |
+                        {parse_error, any()}.
 
 -if(?OTP_RELEASE >= 24).
 -define(sets_new, sets:new([{version, 2}])).
@@ -41,7 +44,7 @@
 %%%===================================================================
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec init() -> #parser_state{}.
+-spec init() -> state().
 %%
 %% Init empty parser continuation
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -49,7 +52,7 @@ init() ->
     #parser_state{}.
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec next(#parser_state{}) -> parse_return().
+-spec next(state()) -> parse_return().
 %%
 %% Get next result or continuation.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -57,7 +60,7 @@ next(State) ->
     parse(State).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec continue(binary(), #parser_state{}) -> parse_return().
+-spec continue(binary(), state()) -> parse_return().
 %%
 %% Feed more data to the parser. Get next result or continuation.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -70,16 +73,21 @@ continue(NewData, State) ->
 %%%===================================================================
 
 parse(State=#parser_state{data=Data, next=Fun, bytes_needed=Bytes}) ->
-    case token(Data, Bytes) of
-        {need_more, LackingBytes} ->
-            {need_more, LackingBytes, State};
-        {Token, Rest} ->
-            case Fun(Token) of
-                {done, Result} ->
-                    {done, Result, #parser_state{data=Rest}};
-                {cont, NextFun, NextBytes} ->
-                    parse(#parser_state{data=Rest, next=NextFun, bytes_needed=NextBytes})
-            end
+    try
+        case token(Data, Bytes) of
+            {need_more, LackingBytes} ->
+                {need_more, LackingBytes, State};
+            {Token, Rest} ->
+                case Fun(Token) of
+                    {done, Result} ->
+                        {done, Result, #parser_state{data=Rest}};
+                    {cont, NextFun, NextBytes} ->
+                        parse(#parser_state{data=Rest, next=NextFun, bytes_needed=NextBytes})
+                end
+        end
+    catch
+        {parse_error, _Reason} = ParseError ->
+            ParseError
     end.
 
 token(Data, 0) ->
