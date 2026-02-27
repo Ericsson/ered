@@ -85,12 +85,11 @@ parse_fail_test_() ->
 
 decode_err(In, Expected) ->
     fun() ->
-            try
-                A = ered_parser:continue(In, ered_parser:init()),
-                exit({unexpected_success, A})
-            catch
-                throw:{parse_error, Err} ->
-                    ?assertEqual(Expected, Err)
+            case ered_parser:continue(In, ered_parser:init()) of
+                {parse_error, Err} ->
+                    ?assertEqual(Expected, Err);
+                A ->
+                    exit({unexpected_success, A})
             end
     end.
 

@@ -272,7 +272,7 @@ t_hard_failover(_) ->
     ct:pal("~p\n", [ered_cluster:command_all(R, [<<"CLUSTER">>, <<"SLOTS">>])]),
     ct:pal(os:cmd("docker stop " ++ Pod)),
 
-    ?MSG(#{msg_type := socket_closed, addr := {"127.0.0.1", Port}, reason := {recv_exit, closed}}),
+    ?MSG(#{msg_type := socket_closed, addr := {"127.0.0.1", Port}, reason := tcp_closed}),
     ?MSG(#{msg_type := connect_error, addr := {"127.0.0.1", Port}, reason := econnrefused}),
 
     ?MSG(#{msg_type := node_down_timeout, addr := {"127.0.0.1", Port}}, 2500),
@@ -363,7 +363,7 @@ t_manual_failover_then_old_master_down(_) ->
     ?MSG(#{addr := {"127.0.0.1", Port},
            master := true,
            msg_type := socket_closed,
-           reason := {recv_exit, closed}}),
+           reason := tcp_closed}),
 
     %% Ered prefers the replica of the disconnected node for slot map update,
     %% since it is likely to know about a failover first; it is the new master.
@@ -420,7 +420,7 @@ t_blackhole(_) ->
     ered:command_async(ClientRef, [<<"PING">>],
                        fun(Reply) -> TestPid ! {ping_reply, Reply} end),
 
-    ?MSG(#{msg_type := socket_closed, reason := {recv_exit, timeout}, master := true},
+    ?MSG(#{msg_type := socket_closed, reason := timeout, master := true},
          ResponseTimeout + 1000),
     ?MSG({ping_reply, {error, _Reason}}, % node_down or node_deactivated
          NodeDownTimeout + 1000),
@@ -432,6 +432,8 @@ t_blackhole(_) ->
     ?OPTIONAL_MSG(#{msg_type := cluster_ok}),
     ?MSG(#{msg_type := client_stopped, reason := shutdown, master := false},
          CloseWait + 1000),
+    ?OPTIONAL_MSG(#{msg_type := node_down_timeout, addr := {"127.0.0.1", Port}}),
+    no_more_msgs(),
 
     ct:pal("Unpausing container: " ++ os:cmd("docker unpause " ++ Pod)),
     timer:sleep(500),
@@ -477,7 +479,7 @@ t_blackhole_all_nodes(_) ->
                                             fun(Reply) -> TestPid ! {ping_reply, Reply} end)
                  end, AddrToClient),
 
-    [?MSG(#{msg_type := socket_closed, reason := {recv_exit, timeout}, addr := {"127.0.0.1", Port}},
+    [?MSG(#{msg_type := socket_closed, reason := timeout, addr := {"127.0.0.1", Port}},
           ResponseTimeout + 1000) || Port <- ?PORTS],
     ?MSG({ping_reply, {error, _Reason1}}, NodeDownTimeout + 1000),
     ?MSG({ping_reply, {error, _Reason2}}, NodeDownTimeout + 1000),
@@ -526,10 +528,13 @@ t_init_timeout(_) ->
     ct:pal("~p\n", [os:cmd("redis-cli -p 30001 CLIENT PAUSE 10000")]),
     {ok, _P} = ered_cluster:connect([{localhost, 30001}], [{info_pid, [self()]}] ++ Opts),
 
-    ?MSG(#{msg_type := socket_closed, reason := {recv_exit, timeout}}, 3500),
+    ?MSG(#{msg_type := socket_closed, reason := timeout}, 3500),
     ?MSG(#{msg_type := node_down_timeout, addr := {localhost, 30001}}, 2500),
     %% Does not work on  Redis before 6.2.0.
     ct:pal("~p\n", [os:cmd("redis-cli -p 30001 CLIENT UNPAUSE")]),
+
+    %% Maybe we were waiting for init commands when the node down timeout fired.
+    ?OPTIONAL_MSG(#{msg_type := init_error, reason := node_down}),
 
     ?MSG(#{msg_type := connected, addr := {localhost, 30001}}),
 
@@ -760,8 +765,8 @@ t_kill_client(_) ->
     ct:pal("~p\n",[os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " CLIENT KILL TYPE NORMAL")]),
     ?MSG(#{msg_type := socket_closed, addr := {_, Port}}),
 
-    %% connection reestablished
-    ?MSG(#{msg_type := connected, addr := {_, Port}}),
+    %% Waits until 1000ms after the first connect before reconnecting.
+    ?MSG(#{msg_type := connected, addr := {_, Port}}, 2000),
     no_more_msgs().
 
 t_new_cluster_master(_) ->
