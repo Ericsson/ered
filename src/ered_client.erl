@@ -15,6 +15,9 @@
          command/2, command/3,
          command_async/3]).
 
+%% testing/debugging
+-export([state_to_map/1]).
+
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
@@ -67,7 +70,7 @@
 
          waiting = q_new() :: command_queue(),
          pending = q_new() :: command_queue(),
-         allow_new_pending_request = true :: boolean(),
+         filling_batch = true :: boolean(),
 
          cluster_id = undefined :: undefined | binary(),
 
@@ -288,6 +291,13 @@ command(ServerRef, Command, Timeout) ->
 command_async(ServerRef, Command, CallbackFun) ->
     gen_server:cast(ServerRef, #command{data = ered_command:convert_to(Command),
                                         replyto = CallbackFun}).
+
+%% Converts a state record to a map, for easier testing.
+%% Used in tests, after calling sys:get_state(EredClientPid).
+state_to_map(#st{} = State) ->
+    Fields = record_info(fields, st),
+    [st | Values] = tuple_to_list(State),
+    maps:from_list(lists:zip(Fields, Values)).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -639,10 +649,10 @@ cancel_node_down_timer(#st{node_down_timer = TimerRef} = State) ->
 %% instead.
 abort_pending_commands(State) ->
     PendingReqs = [Req#pending_req.command || Req <- q_to_list(State#st.pending)],
-    State#st{waiting = q_in_r(PendingReqs, State#st.waiting),
+    State#st{waiting = q_join(q_from_list(PendingReqs), State#st.waiting),
              pending = q_new(),
              parser_state = ered_parser:init(),
-             allow_new_pending_request = true}.
+             filling_batch = true}.
 
 connection_down(Reason, State) ->
     State1 = abort_pending_commands(State),
@@ -656,32 +666,32 @@ process_commands(State) ->
     NumWaiting = q_len(State#st.waiting),
     NumPending = q_len(State#st.pending),
     BatchSize =  State#st.opts#opts.batch_size,
+    LowWaterMark = max(State#st.opts#opts.max_pending - BatchSize, 1),
 
-    PendingLimit = max(State#st.opts#opts.max_pending - BatchSize, 1),
     if
         State#st.status =:= up, State#st.socket =/= none,
-        NumWaiting > 0,  State#st.allow_new_pending_request ->
+        NumWaiting > 0,  State#st.filling_batch ->
             %% TODO: Add request timeout timestamp to PendingReq.
-            {Commands, NewWaiting} = q_multi_out(BatchSize, State#st.waiting),
+            {CommandQueue, NewWaiting} = q_split(min(BatchSize, NumWaiting), State#st.waiting),
             {BatchedData, PendingRequests} =
-                lists:foldr(fun(Command, {B, P}) ->
+                lists:foldr(fun(Command, {DataAcc, PendingAcc}) ->
                                     RespCommand = Command#command.data,
                                     ResponseClass = ered_command:get_response_class(RespCommand),
 
                                     NewBatchedData = ered_command:get_data(RespCommand),
                                     NewPendingRequest = #pending_req{command = Command,
                                                                      response_class = ResponseClass},
-                                    {[NewBatchedData | B], [NewPendingRequest | P]}
+                                    {[NewBatchedData | DataAcc] , q_in_r(NewPendingRequest, PendingAcc)}
                             end,
-                            {[], []},
-                            Commands),
+                            {[], q_new()},
+                            q_to_list(CommandQueue)),
             Transport = State#st.opts#opts.transport,
             case Transport:send(State#st.socket, BatchedData) of
                 ok ->
-                    NewPending = q_in(PendingRequests, State#st.pending),
+                    NewPending = q_join(State#st.pending, PendingRequests),
                     NewState = State#st{waiting = NewWaiting,
                                         pending = NewPending,
-                                        allow_new_pending_request = q_len(NewPending) < State#st.opts#opts.max_pending},
+                                        filling_batch = q_len(NewPending) < State#st.opts#opts.max_pending},
                     process_commands(NewState);
                 {error, _Reason} ->
                     %% Send FIN and handle replies in fligh before reconnecting.
@@ -689,8 +699,8 @@ process_commands(State) ->
                     start_connect_loop(now, State#st{status = init})
             end;
 
-        not State#st.allow_new_pending_request, NumPending < PendingLimit ->
-            process_commands(State#st{allow_new_pending_request = true});
+        not State#st.filling_batch, NumPending < LowWaterMark ->
+            process_commands(State#st{filling_batch = true});
 
         NumWaiting > State#st.opts#opts.max_waiting, State#st.queue_full_event_sent ->
             drop_commands(State);
@@ -737,18 +747,14 @@ drop_commands(State) ->
 q_new() ->
     {0, queue:new()}.
 
-q_in(Items, {Size, Q1}) when is_list(Items) ->
-    Q2 = queue:from_list(Items),
-    {Size + queue:len(Q2), queue:join(Q1, Q2)};
 q_in(Item, {Size, Q}) ->
     {Size+1, queue:in(Item, Q)}.
 
-
-q_in_r(Items, {Size, Q1}) when is_list(Items) ->
-    Q2 = queue:from_list(Items),
-    {Size + queue:len(Q2), queue:join(Q2, Q1)};
 q_in_r(Item, {Size, Q}) ->
     {Size + 1, queue:in_r(Item, Q)}.
+
+q_join({Size1, Q1}, {Size2, Q2}) ->
+    {Size1 + Size2, queue:join(Q1, Q2)}.
 
 q_out({Size, Q}) ->
     case queue:out(Q) of
@@ -756,14 +762,15 @@ q_out({Size, Q}) ->
         {{value, Val}, NewQ} -> {Val, {Size-1, NewQ}}
     end.
 
-q_multi_out(N, {Size, Q}) when N =< Size ->
-    {Out, Rest} = queue:split(N, Q),
-    {queue:to_list(Out), {Size - N, Rest}};
-q_multi_out(_, {_, Q}) ->
-    {queue:to_list(Q), {0, queue:new()}}.
+q_split(N, {Size, Q}) when N =< Size ->
+    {A, B} = queue:split(N, Q),
+    {{N, A}, {Size - N, B}}.
 
 q_to_list({_Size, Q}) ->
     queue:to_list(Q).
+
+q_from_list(List) ->
+    {length(List), queue:from_list(List)}.
 
 q_len({Size, _Q}) ->
     Size.
