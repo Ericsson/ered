@@ -254,13 +254,16 @@ response_timeout_t() ->
     no_more_msgs().
 
 send_backoff_t() ->
+    %% Send a large command N times.
+    N = 10,
+
     %% Construct a large binary.
-    N = 1000 * 1000,
+    Size = 1000 * 1000,
     LargeBinary = (fun Loop(0, Acc) ->
                            Acc;
                        Loop(I, Acc) ->
                            Loop(I - 1, <<Acc/binary, "a">>)
-                   end)(N, <<>>),
+                   end)(Size, <<>>),
     LargeCommand = [<<"SET">>, <<"foo">>, LargeBinary],
     Resp = ered_command:get_data(
              ered_command:convert_to([<<"SET">>, <<"foo">>, LargeBinary])),
@@ -273,12 +276,10 @@ send_backoff_t() ->
         spawn_link(fun() ->
                            {ok, Sock} = gen_tcp:accept(ListenSock),
                            receive continue -> ok end,
-                           {ok, <<"*3\r\n$3\r\nSET\r", _/binary>>} = gen_tcp:recv(Sock, RespLen),
-                           ok = gen_tcp:send(Sock, <<"+OK\r\n">>),
-                           {ok, <<"*3\r\n$3\r\nSET\r", _/binary>>} = gen_tcp:recv(Sock, RespLen),
-                           ok = gen_tcp:send(Sock, <<"+OK\r\n">>),
-                           {ok, <<"*3\r\n$3\r\nSET\r", _/binary>>} = gen_tcp:recv(Sock, RespLen),
-                           ok = gen_tcp:send(Sock, <<"+OK\r\n">>),
+                           [begin
+                                {ok, <<"*3\r\n$3\r\nSET\r", _/binary>>} = gen_tcp:recv(Sock, RespLen),
+                                ok = gen_tcp:send(Sock, <<"+OK\r\n">>)
+                            end || _ <- lists:seq(1, N)],
                            {ok, <<"*1\r\n$4\r\nping\r\n">>} = gen_tcp:recv(Sock, 0),
                            ok = gen_tcp:send(Sock, <<"+PONG\r\n">>),
                            receive ok -> ok end
@@ -287,19 +288,18 @@ send_backoff_t() ->
     Client = start_client(Port, [{connection_opts, [{tcp_options, TcpOpts}]}]),
     expect_connection_up(Client),
     Pid = self(),
-    %% Send large command three times. In some cases, gen_tcp:send returns
-    %% {error, timeout} the second time, even if the data is really large. The
-    %% 3rd command is always kept waiting though.
-    ered_client:command_async(Client, LargeCommand, fun(Reply) -> Pid ! {reply, Reply} end),
-    ered_client:command_async(Client, LargeCommand, fun(Reply) -> Pid ! {reply, Reply} end),
-    ered_client:command_async(Client, LargeCommand, fun(Reply) -> Pid ! {reply, Reply} end),
+    %% Send the large command N times. In some cases, gen_tcp:send returns
+    %% {error, timeout} after a few times, even if the data is really large.
+    [ered_client:command_async(Client, LargeCommand, fun(Reply) -> Pid ! {reply, Reply} end)
+     || _ <- lists:seq(1, N)],
+
     #{backoff_send := BackoffSend,
       pending := {NumPending, _},
       waiting := {NumWaiting, _}} = ered_client:state_to_map(sys:get_state(Client)),
     ?assert(BackoffSend),
     ?assert(NumPending > 0),
     ?assert(NumWaiting > 0),
-    ?assertEqual(3, NumWaiting + NumPending),
+    ?assertEqual(N, NumWaiting + NumPending),
     ServerPid ! continue,
     {reply, {ok, <<"OK">>}} = get_msg(),
     {reply, {ok, <<"OK">>}} = get_msg(),
