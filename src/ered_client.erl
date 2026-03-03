@@ -15,6 +15,9 @@
          command/2, command/3,
          command_async/3]).
 
+%% testing/debugging
+-export([state_to_map/1]).
+
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
@@ -288,6 +291,13 @@ command(ServerRef, Command, Timeout) ->
 command_async(ServerRef, Command, CallbackFun) ->
     gen_server:cast(ServerRef, #command{data = ered_command:convert_to(Command),
                                         replyto = CallbackFun}).
+
+%% Converts a state record to a map, for easier testing.
+%% Used in tests, after calling sys:get_state(EredClientPid).
+state_to_map(#st{} = State) ->
+    Fields = record_info(fields, st),
+    [st | Values] = tuple_to_list(State),
+    maps:from_list(lists:zip(Fields, Values)).
 
 %%%===================================================================
 %%% gen_server callbacks

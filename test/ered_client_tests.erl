@@ -15,7 +15,8 @@ run_test_() ->
      {spawn, fun bad_connection_option_t/0},
      {spawn, fun server_buffer_full_reconnect_t/0},
      {spawn, fun server_buffer_full_node_goes_down_t/0},
-     {spawn, fun send_timeout_t/0},
+     {spawn, fun response_timeout_t/0},
+     {spawn, fun send_backoff_t/0},
      {spawn, fun fail_hello_t/0},
      {spawn, fun hello_with_auth_t/0},
      {spawn, fun hello_with_auth_fail_t/0},
@@ -229,7 +230,7 @@ bad_connection_option_t() ->
                                                               [{info_pid, self()},
                                                                {connection_opts, [bad_option]}])).
 
-send_timeout_t() ->
+response_timeout_t() ->
     {ok, ListenSock} = gen_tcp:listen(0, [binary, {active , false}]),
     {ok, Port} = inet:port(ListenSock),
     spawn_link(fun() ->
@@ -250,6 +251,61 @@ send_timeout_t() ->
     receive #{msg_type := socket_closed, reason := timeout} -> ok after 2000 -> timeout_error() end,
     expect_connection_up(Client),
     {reply, {ok, <<"pong">>}} = get_msg(),
+    no_more_msgs().
+
+send_backoff_t() ->
+    %% Construct a large binary.
+    N = 1000 * 1000,
+    LargeBinary = (fun Loop(0, Acc) ->
+                           Acc;
+                       Loop(I, Acc) ->
+                           Loop(I - 1, <<Acc/binary, "a">>)
+                   end)(N, <<>>),
+    LargeCommand = [<<"SET">>, <<"foo">>, LargeBinary],
+    Resp = ered_command:get_data(
+             ered_command:convert_to([<<"SET">>, <<"foo">>, LargeBinary])),
+    RespLen = byte_size(Resp),
+
+    %% Start server
+    {ok, ListenSock} = gen_tcp:listen(0, [binary, {active, false}]),
+    {ok, Port} = inet:port(ListenSock),
+    ServerPid =
+        spawn_link(fun() ->
+                           {ok, Sock} = gen_tcp:accept(ListenSock),
+                           receive continue -> ok end,
+                           {ok, <<"*3\r\n$3\r\nSET\r", _/binary>>} = gen_tcp:recv(Sock, RespLen),
+                           ok = gen_tcp:send(Sock, <<"+OK\r\n">>),
+                           {ok, <<"*3\r\n$3\r\nSET\r", _/binary>>} = gen_tcp:recv(Sock, RespLen),
+                           ok = gen_tcp:send(Sock, <<"+OK\r\n">>),
+                           {ok, <<"*3\r\n$3\r\nSET\r", _/binary>>} = gen_tcp:recv(Sock, RespLen),
+                           ok = gen_tcp:send(Sock, <<"+OK\r\n">>),
+                           {ok, <<"*1\r\n$4\r\nping\r\n">>} = gen_tcp:recv(Sock, 0),
+                           ok = gen_tcp:send(Sock, <<"+PONG\r\n">>),
+                           receive ok -> ok end
+                   end),
+    TcpOpts = [],
+    Client = start_client(Port, [{connection_opts, [{tcp_options, TcpOpts}]}]),
+    expect_connection_up(Client),
+    Pid = self(),
+    %% Send large command three times. In some cases, gen_tcp:send returns
+    %% {error, timeout} the second time, even if the data is really large. The
+    %% 3rd command is always kept waiting though.
+    ered_client:command_async(Client, LargeCommand, fun(Reply) -> Pid ! {reply, Reply} end),
+    ered_client:command_async(Client, LargeCommand, fun(Reply) -> Pid ! {reply, Reply} end),
+    ered_client:command_async(Client, LargeCommand, fun(Reply) -> Pid ! {reply, Reply} end),
+    #{backoff_send := BackoffSend,
+      pending := {NumPending, _},
+      waiting := {NumWaiting, _}} = ered_client:state_to_map(sys:get_state(Client)),
+    ?assert(BackoffSend),
+    ?assert(NumPending > 0),
+    ?assert(NumWaiting > 0),
+    ?assertEqual(3, NumWaiting + NumPending),
+    ServerPid ! continue,
+    {reply, {ok, <<"OK">>}} = get_msg(),
+    {reply, {ok, <<"OK">>}} = get_msg(),
+    {reply, {ok, <<"OK">>}} = get_msg(),
+    ered_client:command_async(Client, [<<"ping">>], fun(Reply) -> Pid ! {reply, Reply} end),
+    {reply, {ok, <<"PONG">>}} = get_msg(),
     no_more_msgs().
 
 fail_hello_t() ->
