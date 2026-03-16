@@ -39,7 +39,7 @@
          port :: inet:port_number(),
 
          %% From "connection opts"
-         batch_size = 16 :: non_neg_integer(),
+         batch_size = 16 :: pos_integer(),
          transport = gen_tcp :: gen_tcp | ssl,
          transport_opts = [] :: list(),
          connect_timeout = infinity :: timeout(),
@@ -152,7 +152,7 @@
 -type connection_opt() ::
         %% If commands are queued up in the process message queue this is the max
         %% amount of messages that will be received and sent in one call
-        {batch_size, non_neg_integer()} |
+        {batch_size, pos_integer()} |
         %% Timeout passed to gen_tcp:connect/4 or ssl:connect/4.
         {connect_timeout, timeout()} |
         %% Options passed to gen_tcp:connect/4.
