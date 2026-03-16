@@ -307,7 +307,6 @@ init({Host, Port, OptsList, User}) ->
              fun({connection_opts, Val}, S)   -> handle_connection_opts(S, Val);
                 ({max_waiting, Val}, S)       -> S#opts{max_waiting = Val};
                 ({max_pending, Val}, S)       -> S#opts{max_pending = Val};
-                ({batch_size, Val}, S)        -> S#opts{batch_size = Val};
                 ({queue_ok_level, Val}, S)    -> S#opts{queue_ok_level = Val};
                 ({reconnect_wait, Val}, S)    -> S#opts{reconnect_wait = Val};
                 ({info_pid, Val}, S)          -> S#opts{info_pid = Val};
