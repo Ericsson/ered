@@ -271,16 +271,16 @@ options are wrapped in `{client_opts, [...]}` and included in cluster options.
 
   Options passed to the connection module. See [Connection options](#connection-options) below.
 
-* `{max_waiting, non_neg_integer()}`
+* `{max_waiting, pos_integer()}`
 
   Max number of commands allowed to wait in queue. Default 5000.
 
-* `{max_pending, non_neg_integer()}`
+* `{max_pending, pos_integer()}`
 
   Max number of commands to be pending, i.e. sent to client
   and waiting for a response. Default 128.
 
-* `{queue_ok_level, non_neg_integer()}`
+* `{queue_ok_level, pos_integer()}`
 
   If the queue has been full then it is considered ok
   again when it reaches this level. Default 2000.
@@ -331,7 +331,7 @@ wrapped in `{connection_opts, [ered_connection:opt()]}`.
 For `ered_cluster:connect/2`, the connection options are included under client
 options, as `{client_opts, [{connection_opts, [...]}]}`.
 
-* `{batch_size, non_neg_integer()}`
+* `{batch_size, pos_integer()}`
 
   If commands are queued up in the process message queue, this is the maximum
   number of messages that will be received and sent in one call. Default 16.

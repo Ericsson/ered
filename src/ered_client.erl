@@ -54,10 +54,10 @@
 
          node_down_timeout = 2000 :: non_neg_integer(),
          info_pid = none :: none | pid(),
-         queue_ok_level = 2000 :: non_neg_integer(),
+         queue_ok_level = 2000 :: pos_integer(),
 
-         max_waiting = 5000 :: non_neg_integer(),
-         max_pending = 128 :: non_neg_integer()
+         max_waiting = 5000 :: pos_integer(),
+         max_pending = 128 :: pos_integer()
         }).
 
 -record(st,
@@ -70,6 +70,10 @@
 
          waiting = q_new() :: command_queue(),
          pending = q_new() :: command_queue(),
+
+         %% Batching. When pending queue is full,
+         %% set we don't send more until another
+         %% complete batch can fit in the pending queue.
          filling_batch = true :: boolean(),
 
          cluster_id = undefined :: undefined | binary(),

@@ -145,19 +145,23 @@ server_buffer_full_t() ->
     no_more_msgs().
 
 low_high_watermark_t() ->
-    {ok, ListenSock} = gen_tcp:listen(0, [binary, {active , false}]),
+    {ok, ListenSock} = gen_tcp:listen(0, [binary, {active, false}]),
     {ok, Port} = inet:port(ListenSock),
     ServerPid = spawn_link(fun() ->
                                    {ok, Sock} = gen_tcp:accept(ListenSock),
-                                   %% expect 5 ping
                                    Ping = <<"*1\r\n$4\r\nping\r\n">>,
-                                   Expected = iolist_to_binary(lists:duplicate(5, Ping)),
-                                   {ok, Expected} = gen_tcp:recv(Sock, size(Expected)),
+                                   FivePing = iolist_to_binary(lists:duplicate(5, Ping)),
+                                   {ok, FivePing} = gen_tcp:recv(Sock, size(FivePing)),
+
                                    %% should be nothing more since only 5 pending
                                    ?assertEqual({error, timeout}, gen_tcp:recv(Sock, 0, 0)),
+
                                    gen_tcp:send(Sock, lists:duplicate(4, <<"+pong\r\n">>)),
                                    receive send_one_more_pong -> ok end,
                                    gen_tcp:send(Sock, lists:duplicate(1, <<"+pong\r\n">>)),
+
+                                   {ok, FivePing} = gen_tcp:recv(Sock, 0),
+                                   gen_tcp:send(Sock, lists:duplicate(5, <<"+pong\r\n">>)),
                                    receive ok -> ok end
                            end),
     Client = start_client(Port, [{connection_opts, [{batch_size,5}]}, {max_waiting, 10}, {max_pending, 5}, {queue_ok_level,1}]),
@@ -172,13 +176,23 @@ low_high_watermark_t() ->
                    waiting := {5, _},
                    filling_batch := false},
                  ered_client:state_to_map(sys:get_state(Client))),
+
     ServerPid ! send_one_more_pong,
     [?assertEqual({N, {ok, <<"pong">>}}, get_msg()) || N <- [5]],
+
     %% low water mark reached, pending should now be filled.
     ?assertMatch(#{pending := {5, _},
                    waiting := {0, _},
                    filling_batch := false},
                  ered_client:state_to_map(sys:get_state(Client))),
+
+    [?assertEqual({N, {ok, <<"pong">>}}, get_msg()) || N <- [6,7,8,9,10]],
+
+    ?assertMatch(#{pending := {0, _},
+                   waiting := {0, _},
+                   filling_batch := true},
+                 ered_client:state_to_map(sys:get_state(Client))),
+
     no_more_msgs().
 
 
@@ -187,17 +201,16 @@ server_buffer_full_reconnect_t() ->
     {ok, Port} = inet:port(ListenSock),
     spawn_link(fun() ->
                        {ok, Sock} = gen_tcp:accept(ListenSock),
-                       %% expect 5 ping
                        Ping = <<"*1\r\n$4\r\nping\r\n">>,
-                       Expected = iolist_to_binary(lists:duplicate(5, Ping)),
-                       {ok, Expected} = gen_tcp:recv(Sock, size(Expected)),
+                       FivePing = iolist_to_binary(lists:duplicate(5, Ping)),
+                       {ok, FivePing} = gen_tcp:recv(Sock, size(FivePing)),
                        %% should be nothing more since only 5 pending
                        {error, timeout} = gen_tcp:recv(Sock, 0, 0),
 
                        gen_tcp:close(Sock),
 
                        {ok, Sock2} = gen_tcp:accept(ListenSock),
-                       {ok, Expected} = gen_tcp:recv(Sock2, size(Expected)),
+                       {ok, FivePing} = gen_tcp:recv(Sock2, size(FivePing)),
 
                        gen_tcp:send(Sock2, lists:duplicate(5, <<"+pong\r\n">>)),
                        %% should be nothing more since only 5 pending
@@ -229,10 +242,9 @@ server_buffer_full_node_goes_down_t() ->
     {ok, Port} = inet:port(ListenSock),
     spawn_link(fun() ->
                        {ok, Sock} = gen_tcp:accept(ListenSock),
-                       %% expect 5 ping
                        Ping = <<"*1\r\n$4\r\nping\r\n">>,
-                       Expected = iolist_to_binary(lists:duplicate(5, Ping)),
-                       {ok, Expected} = gen_tcp:recv(Sock, size(Expected)),
+                       FivePing = iolist_to_binary(lists:duplicate(5, Ping)),
+                       {ok, FivePing} = gen_tcp:recv(Sock, size(FivePing)),
                        %% should be nothing more since only 5 pending
                        {error, timeout} = gen_tcp:recv(Sock, 0, 0),
                        gen_tcp:close(ListenSock)
