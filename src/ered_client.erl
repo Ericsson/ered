@@ -15,6 +15,9 @@
          command/2, command/3,
          command_async/3]).
 
+%% testing/debugging
+-export([state_to_map/1]).
+
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
@@ -36,7 +39,7 @@
          port :: inet:port_number(),
 
          %% From "connection opts"
-         batch_size = 16 :: non_neg_integer(),
+         batch_size = 16 :: pos_integer(),
          transport = gen_tcp :: gen_tcp | ssl,
          transport_opts = [] :: list(),
          connect_timeout = infinity :: timeout(),
@@ -53,8 +56,8 @@
          info_pid = none :: none | pid(),
          queue_ok_level = 2000 :: non_neg_integer(),
 
-         max_waiting = 5000 :: non_neg_integer(),
-         max_pending = 128 :: non_neg_integer()
+         max_waiting = 5000 :: pos_integer(),
+         max_pending = 128 :: pos_integer()
         }).
 
 -record(st,
@@ -67,6 +70,11 @@
 
          waiting = q_new() :: command_queue(),
          pending = q_new() :: command_queue(),
+
+         %% Batching. When pending queue is full,
+         %% set we don't send more until another
+         %% complete batch can fit in the pending queue.
+         filling_batch = true :: boolean(),
 
          cluster_id = undefined :: undefined | binary(),
 
@@ -118,10 +126,10 @@
         %% Options passed to the connection module
         {connection_opts, [connection_opt()]} |
         %% Max number of commands allowed to wait in queue.
-        {max_waiting, non_neg_integer()} |
+        {max_waiting, pos_integer()} |
         %% Max number of commands to be pending, i.e. sent to client
         %% and waiting for a response.
-        {max_pending, non_neg_integer()} |
+        {max_pending, pos_integer()} |
         %% If the queue has been full then it is considered ok
         %% again when it reaches this level
         {queue_ok_level, non_neg_integer()} |
@@ -148,7 +156,7 @@
 -type connection_opt() ::
         %% If commands are queued up in the process message queue this is the max
         %% amount of messages that will be received and sent in one call
-        {batch_size, non_neg_integer()} |
+        {batch_size, pos_integer()} |
         %% Timeout passed to gen_tcp:connect/4 or ssl:connect/4.
         {connect_timeout, timeout()} |
         %% Options passed to gen_tcp:connect/4.
@@ -271,6 +279,13 @@ command(ServerRef, Command, Timeout) ->
 command_async(ServerRef, Command, CallbackFun) ->
     gen_server:cast(ServerRef, #command{data = ered_command:convert_to(Command),
                                         replyto = CallbackFun}).
+
+%% Converts a state record to a map, for easier testing.
+%% Used in tests, after calling sys:get_state(EredClientPid).
+state_to_map(#st{} = State) ->
+    Fields = record_info(fields, st),
+    [st | Values] = tuple_to_list(State),
+    maps:from_list(lists:zip(Fields, Values)).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -623,7 +638,8 @@ abort_pending_commands(State) ->
     PendingReqs = [Req#pending_req.command || Req <- q_to_list(State#st.pending)],
     State#st{waiting = q_join(q_from_list(PendingReqs), State#st.waiting),
              pending = q_new(),
-             parser_state = ered_parser:init()}.
+             parser_state = ered_parser:init(),
+             filling_batch = true}.
 
 connection_down(Reason, State) ->
     State1 = abort_pending_commands(State),
@@ -636,29 +652,42 @@ connection_down(Reason, State) ->
 process_commands(State) ->
     NumWaiting = q_len(State#st.waiting),
     NumPending = q_len(State#st.pending),
+    BatchSize =  State#st.opts#opts.batch_size,
+    LowWaterMark = max(State#st.opts#opts.max_pending - BatchSize, 1),
+
     if
         State#st.status =:= up, State#st.socket =/= none,
-        NumWaiting > 0, NumPending < State#st.opts#opts.max_pending ->
-            %% TODO: Pop multiple from queue and send them in a batch. Use the batch_size option.
-            %% Use q_split, q_join and q_to_list.
+        NumWaiting > 0,  State#st.filling_batch ->
             %% TODO: Add request timeout timestamp to PendingReq.
-            {Command, NewWaiting} = q_out(State#st.waiting),
-            RespCommand = Command#command.data,
-            Data = ered_command:get_data(RespCommand),
-            Class = ered_command:get_response_class(RespCommand),
+            {CommandQueue, NewWaiting} = q_split(min(BatchSize, NumWaiting), State#st.waiting),
+            {BatchedData, PendingRequests} =
+                lists:foldr(fun(Command, {DataAcc, PendingAcc}) ->
+                                    RespCommand = Command#command.data,
+                                    ResponseClass = ered_command:get_response_class(RespCommand),
+
+                                    NewBatchedData = ered_command:get_data(RespCommand),
+                                    NewPendingRequest = #pending_req{command = Command,
+                                                                     response_class = ResponseClass},
+                                    {[NewBatchedData | DataAcc] , q_in_r(NewPendingRequest, PendingAcc)}
+                            end,
+                            {[], q_new()},
+                            q_to_list(CommandQueue)),
             Transport = State#st.opts#opts.transport,
-            case Transport:send(State#st.socket, Data) of
+            case Transport:send(State#st.socket, BatchedData) of
                 ok ->
-                    PendingReq = #pending_req{command = Command,
-                                              response_class = Class},
-                    State1 = State#st{pending = q_in(PendingReq, State#st.pending),
-                                      waiting = NewWaiting},
-                    process_commands(State1);
+                    NewPending = q_join(State#st.pending, PendingRequests),
+                    NewState = State#st{waiting = NewWaiting,
+                                        pending = NewPending,
+                                        filling_batch = q_len(NewPending) < State#st.opts#opts.max_pending},
+                    process_commands(NewState);
                 {error, _Reason} ->
                     %% Send FIN and handle replies in fligh before reconnecting.
                     Transport:shutdown(State#st.socket, read_write),
                     start_connect_loop(now, State#st{status = init})
             end;
+
+        not State#st.filling_batch, NumPending < LowWaterMark ->
+            process_commands(State#st{filling_batch = true});
 
         NumWaiting > State#st.opts#opts.max_waiting, State#st.queue_full_event_sent ->
             drop_commands(State);
@@ -689,7 +718,7 @@ start_connect_loop(When0, State) ->
                    When0
            end,
     ConnectPid = spawn_link(fun () -> connect_loop(When, Self, State#st.opts) end),
-    State#st{connection_loop_pid = ConnectPid}.    
+    State#st{connection_loop_pid = ConnectPid}.
 
 drop_commands(State) ->
     case q_len(State#st.waiting) > State#st.opts#opts.max_waiting of
@@ -720,9 +749,9 @@ q_out({Size, Q}) ->
         {{value, Val}, NewQ} -> {Val, {Size-1, NewQ}}
     end.
 
-%% q_split(N, {Size, Q}) when N =< Size ->
-%%     {A, B} = queue:split(N, Q),
-%%     {{N, A}, {Size - N, B}}.
+q_split(N, {Size, Q}) when N =< Size ->
+    {A, B} = queue:split(N, Q),
+    {{N, A}, {Size - N, B}}.
 
 q_to_list({_Size, Q}) ->
     queue:to_list(Q).
