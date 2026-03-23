@@ -55,10 +55,13 @@ init_per_testcase(_Testcase, Config) ->
     generate_client_cert(),
 
     %% Quick check that cluster is OK; otherwise restart everything.
-    case catch ered_test_utils:check_consistent_cluster(?PORTS, ?CLIENT_OPTS) of
+    try ered_test_utils:check_consistent_cluster(?PORTS, ?CLIENT_OPTS) of
         ok ->
             [];
-        _ ->
+        _ -> % Cluster inconsistent but all nodes reachable.
+            ct:pal("Re-initialize the cluster"),
+            init_per_suite(Config)
+    catch _:_ -> % One or more nodes unreachable.
             ct:pal("Re-initialize the cluster"),
             init_per_suite(Config)
     end.

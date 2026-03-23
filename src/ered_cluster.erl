@@ -583,8 +583,10 @@ handle_info(_Ignore, State) ->
     {noreply, State}.
 
 terminate(Reason, State) ->
-    catch [ered_client_sup:stop_client(State#st.client_sup, Pid)
-           || Pid <- maps:values(State#st.nodes)],
+    try [ered_client_sup:stop_client(State#st.client_sup, Pid)
+         || Pid <- maps:values(State#st.nodes)]
+    catch _:_ -> ok
+    end,
     ered_info_msg:cluster_stopped(State#st.info_pid, Reason).
 
 code_change(_OldVsn, State = #st{}, _Extra) ->
