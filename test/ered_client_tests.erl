@@ -17,7 +17,8 @@ run_test_() ->
      {spawn, fun server_buffer_full_reconnect_t/0},
      {spawn, fun server_buffer_full_node_goes_down_t/0},
      {spawn, fun response_timeout_t/0},
-     {spawn, fun send_backoff_t/0},
+     {spawn, fun send_backoff_tcp_t/0},
+     {spawn, fun send_backoff_tls_t/0},
      {spawn, fun fail_hello_t/0},
      {spawn, fun hello_with_auth_t/0},
      {spawn, fun hello_with_auth_fail_t/0},
@@ -302,7 +303,22 @@ response_timeout_t() ->
     {reply, {ok, <<"pong">>}} = get_msg(),
     no_more_msgs().
 
-send_backoff_t() ->
+send_backoff_tcp_t() ->
+    send_backoff_t(gen_tcp).
+
+send_backoff_tls_t() ->
+    %% ssl with {send_timeout, 0} closes the socket on timeout in
+    %% OTP 28.0 .. 28.4 (ssl 11.2.0 .. 11.5.2). It was intentionally
+    %% broken and fixed in ssl-11.5.3 (OTP-20018).
+    %% It works in OTP 27 and earlier.
+    application:load(ssl),
+    {ok, SslVsn} = application:get_key(ssl, vsn),
+    case vsn_ge(SslVsn, "11.2.0") andalso not vsn_ge(SslVsn, "11.5.3") of
+        true -> ok; %% skip
+        false -> send_backoff_t(ssl)
+    end.
+
+send_backoff_t(Transport) ->
     %% Send a large command N times.
     N = 10,
 
@@ -315,22 +331,20 @@ send_backoff_t() ->
     RespLen = byte_size(Resp),
 
     %% Start server
-    {ok, ListenSock} = gen_tcp:listen(0, [binary, {active, false}]),
-    {ok, Port} = inet:port(ListenSock),
+    {ListenSock, Port, ConnOpts} = listen(Transport),
     ServerPid =
         spawn_link(fun() ->
-                           {ok, Sock} = gen_tcp:accept(ListenSock),
+                           Sock = accept(Transport, ListenSock),
                            receive continue -> ok end,
                            [begin
-                                {ok, <<"*3\r\n$3\r\nSET\r", _/binary>>} = gen_tcp:recv(Sock, RespLen),
-                                ok = gen_tcp:send(Sock, <<"+OK\r\n">>)
+                                {ok, <<"*3\r\n$3\r\nSET\r", _/binary>>} = Transport:recv(Sock, RespLen),
+                                ok = Transport:send(Sock, <<"+OK\r\n">>)
                             end || _ <- lists:seq(1, N)],
-                           {ok, <<"*1\r\n$4\r\nping\r\n">>} = gen_tcp:recv(Sock, 0),
-                           ok = gen_tcp:send(Sock, <<"+PONG\r\n">>),
+                           {ok, <<"*1\r\n$4\r\nping\r\n">>} = Transport:recv(Sock, 0),
+                           ok = Transport:send(Sock, <<"+PONG\r\n">>),
                            receive ok -> ok end
                    end),
-    TcpOpts = [],
-    Client = start_client(Port, [{connection_opts, [{tcp_options, TcpOpts}, {batch_size, 1}]}]),
+    Client = start_client(Port, [{connection_opts, ConnOpts ++ [{batch_size, 1}]}]),
     expect_connection_up(Client),
     Pid = self(),
     %% Send the large command N times. In some cases, gen_tcp:send returns
@@ -519,3 +533,30 @@ start_client(Port, Opt) ->
 timeout_error() ->
     error({timeout, erlang:process_info(self(), messages)}).
 
+listen(gen_tcp) ->
+    {ok, LSock} = gen_tcp:listen(0, [binary, {active, false}]),
+    {ok, Port} = inet:port(LSock),
+    {LSock, Port, [{tcp_options, []}]};
+listen(ssl) ->
+    ssl:start(),
+    CertFile = "/tmp/ered_test_cert.pem",
+    KeyFile = "/tmp/ered_test_key.pem",
+    os:cmd("openssl req -x509 -newkey rsa:2048 -keyout " ++ KeyFile ++
+           " -out " ++ CertFile ++ " -days 1 -nodes -subj '/CN=localhost' 2>/dev/null"),
+    {ok, LSock} = ssl:listen(0, [binary, {active, false},
+                                 {certfile, CertFile}, {keyfile, KeyFile}]),
+    {ok, {_, Port}} = ssl:sockname(LSock),
+    {LSock, Port, [{tls_options, [{verify, verify_none}]}]}.
+
+accept(gen_tcp, LSock) ->
+    {ok, Sock} = gen_tcp:accept(LSock),
+    Sock;
+accept(ssl, LSock) ->
+    {ok, TSock} = ssl:transport_accept(LSock),
+    {ok, Sock} = ssl:handshake(TSock),
+    Sock.
+
+
+vsn_ge(Vsn1, Vsn2) ->
+    lists:map(fun list_to_integer/1, string:tokens(Vsn1, ".")) >=
+    lists:map(fun list_to_integer/1, string:tokens(Vsn2, ".")).
