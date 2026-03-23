@@ -39,7 +39,7 @@
          port :: inet:port_number(),
 
          %% From "connection opts"
-         batch_size = 16 :: non_neg_integer(),
+         batch_size = 16 :: pos_integer(),
          transport = gen_tcp :: gen_tcp | ssl,
          transport_opts = [] :: list(),
          connect_timeout = infinity :: timeout(),
@@ -54,10 +54,10 @@
 
          node_down_timeout = 2000 :: non_neg_integer(),
          info_pid = none :: none | pid(),
-         queue_ok_level = 2000 :: non_neg_integer(),
+         queue_ok_level = 2000 :: pos_integer(),
 
-         max_waiting = 5000 :: non_neg_integer(),
-         max_pending = 128 :: non_neg_integer()
+         max_waiting = 5000 :: pos_integer(),
+         max_pending = 128 :: pos_integer()
         }).
 
 -record(st,
@@ -72,6 +72,11 @@
          pending = q_new() :: command_queue(),
 
          backoff_send = false :: boolean(), % true after a send timeout
+         %% Batching. When pending queue is full,
+         %% set we don't send more until another
+         %% complete batch can fit in the pending queue.
+         filling_batch = true :: boolean(),
+
          cluster_id = undefined :: undefined | binary(),
 
          queue_full_event_sent = false :: boolean(), % set to true when full, false when reaching queue_ok_level
@@ -152,7 +157,7 @@
 -type connection_opt() ::
         %% If commands are queued up in the process message queue this is the max
         %% amount of messages that will be received and sent in one call
-        {batch_size, non_neg_integer()} |
+        {batch_size, pos_integer()} |
         %% Timeout passed to gen_tcp:connect/4 or ssl:connect/4.
         {connect_timeout, timeout()} |
         %% Options passed to gen_tcp:connect/4.
@@ -677,7 +682,9 @@ abort_pending_commands(State) ->
     PendingReqs = [Req#pending_req.command || Req <- q_to_list(State#st.pending)],
     State#st{waiting = q_join(q_from_list(PendingReqs), State#st.waiting),
              pending = q_new(),
-             parser_state = ered_parser:init()}.
+             parser_state = ered_parser:init(),
+             filling_batch = true,
+             backoff_send = false}.
 
 connection_down(Reason, State) ->
     State1 = abort_pending_commands(State),
@@ -690,23 +697,32 @@ connection_down(Reason, State) ->
 process_commands(State) ->
     NumWaiting = q_len(State#st.waiting),
     NumPending = q_len(State#st.pending),
+    BatchSize =  State#st.opts#opts.batch_size,
+    LowWaterMark = max(State#st.opts#opts.max_pending - BatchSize, 1),
+
     if
         State#st.status =:= up, State#st.socket =/= none,
-        NumWaiting > 0, NumPending < State#st.opts#opts.max_pending,
-        not State#st.backoff_send ->
-            %% TODO: Pop multiple from queue and send them in a batch. Use the batch_size option.
-            %% Use q_split, q_join and q_to_list.
+        NumWaiting > 0, State#st.filling_batch, not State#st.backoff_send ->
             %% TODO: Add request timeout timestamp to PendingReq.
-            {Command, NewWaiting} = q_out(State#st.waiting),
-            RespCommand = Command#command.data,
-            Data = ered_command:get_data(RespCommand),
-            Class = ered_command:get_response_class(RespCommand),
-            PendingReq = #pending_req{command = Command,
-                                      response_class = Class},
-            StateAfterSend = State#st{pending = q_in(PendingReq, State#st.pending),
-                                      waiting = NewWaiting},
+            {CommandQueue, NewWaiting} = q_split(min(BatchSize, NumWaiting), State#st.waiting),
+            {BatchedData, PendingRequests} =
+                lists:foldr(fun(Command, {DataAcc, PendingAcc}) ->
+                                    RespCommand = Command#command.data,
+                                    ResponseClass = ered_command:get_response_class(RespCommand),
+
+                                    NewBatchedData = ered_command:get_data(RespCommand),
+                                    NewPendingRequest = #pending_req{command = Command,
+                                                                     response_class = ResponseClass},
+                                    {[NewBatchedData | DataAcc] , q_in_r(NewPendingRequest, PendingAcc)}
+                            end,
+                            {[], q_new()},
+                            q_to_list(CommandQueue)),
             Transport = State#st.opts#opts.transport,
-            case Transport:send(State#st.socket, Data) of
+            NewPending = q_join(State#st.pending, PendingRequests),
+            StateAfterSend = State#st{waiting = NewWaiting,
+                                      pending = NewPending,
+                                      filling_batch = q_len(NewPending) < State#st.opts#opts.max_pending},
+            case Transport:send(State#st.socket, BatchedData) of
                 ok ->
                     process_commands(StateAfterSend);
                 {error, timeout} ->
@@ -718,6 +734,9 @@ process_commands(State) ->
                     Transport:shutdown(State#st.socket, read_write),
                     start_connect_loop(now, State#st{status = init})
             end;
+
+        not State#st.filling_batch, NumPending < LowWaterMark ->
+            process_commands(State#st{filling_batch = true});
 
         NumWaiting > State#st.opts#opts.max_waiting, State#st.queue_full_event_sent ->
             drop_commands(State);
@@ -748,7 +767,7 @@ start_connect_loop(When0, State) ->
                    When0
            end,
     ConnectPid = spawn_link(fun () -> connect_loop(When, Self, State#st.opts) end),
-    State#st{connection_loop_pid = ConnectPid}.    
+    State#st{connection_loop_pid = ConnectPid}.
 
 drop_commands(State) ->
     case q_len(State#st.waiting) > State#st.opts#opts.max_waiting of
@@ -779,9 +798,9 @@ q_out({Size, Q}) ->
         {{value, Val}, NewQ} -> {Val, {Size-1, NewQ}}
     end.
 
-%% q_split(N, {Size, Q}) when N =< Size ->
-%%     {A, B} = queue:split(N, Q),
-%%     {{N, A}, {Size - N, B}}.
+q_split(N, {Size, Q}) when N =< Size ->
+    {A, B} = queue:split(N, Q),
+    {{N, A}, {Size - N, B}}.
 
 q_to_list({_Size, Q}) ->
     queue:to_list(Q).
