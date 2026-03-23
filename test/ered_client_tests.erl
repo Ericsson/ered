@@ -259,11 +259,7 @@ send_backoff_t() ->
 
     %% Construct a large binary.
     Size = 1000 * 1000,
-    LargeBinary = (fun Loop(0, Acc) ->
-                           Acc;
-                       Loop(I, Acc) ->
-                           Loop(I - 1, <<Acc/binary, "a">>)
-                   end)(Size, <<>>),
+    LargeBinary = binary:copy("a", Size),
     LargeCommand = [<<"SET">>, <<"foo">>, LargeBinary],
     Resp = ered_command:get_data(
              ered_command:convert_to([<<"SET">>, <<"foo">>, LargeBinary])),
