@@ -542,7 +542,7 @@ listen(ssl) ->
     CertFile = "/tmp/ered_test_cert.pem",
     KeyFile = "/tmp/ered_test_key.pem",
     os:cmd("openssl req -x509 -newkey rsa:2048 -keyout " ++ KeyFile ++
-           " -out " ++ CertFile ++ " -days 1 -nodes -subj '/CN=localhost' 2>/dev/null"),
+               " -out " ++ CertFile ++ " -days 1 -nodes -subj '/CN=localhost' 2>/dev/null"),
     {ok, LSock} = ssl:listen(0, [binary, {active, false},
                                  {certfile, CertFile}, {keyfile, KeyFile}]),
     {ok, {_, Port}} = ssl:sockname(LSock),
@@ -559,4 +559,4 @@ accept(ssl, LSock) ->
 
 vsn_ge(Vsn1, Vsn2) ->
     lists:map(fun list_to_integer/1, string:tokens(Vsn1, ".")) >=
-    lists:map(fun list_to_integer/1, string:tokens(Vsn2, ".")).
+        lists:map(fun list_to_integer/1, string:tokens(Vsn2, ".")).
