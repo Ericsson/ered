@@ -71,6 +71,7 @@
          waiting = q_new() :: command_queue(),
          pending = q_new() :: command_queue(),
 
+         backoff_send = false :: boolean(), % true after a send timeout
          %% Batching. When pending queue is full,
          %% set we don't send more until another
          %% complete batch can fit in the pending queue.
@@ -391,7 +392,7 @@ handle_info({Passive, Socket}, #st{socket = Socket} = State)
         {error, Reason} ->
             Transport = State#st.opts#opts.transport,
             Transport:close(Socket),
-            {noreply, connection_down({socket_closed, Reason}, State#st{socket = undefined})}
+            {noreply, connection_down({socket_closed, Reason}, State#st{socket = none})}
     end;
 
 handle_info({Error, Socket, Reason}, #st{socket = Socket} = State)
@@ -418,6 +419,7 @@ handle_info({connected, Socket}, State) ->
     State1 = abort_pending_commands(State),
     State2 = State1#st{socket = Socket,
                        connected_at = erlang:monotonic_time(millisecond),
+                       backoff_send = false,
                        status = init},
     State3 = init_connection(State2),
     {noreply, State3, response_timeout(State3)};
@@ -498,6 +500,31 @@ setopts(#st{opts = #opts{transport = gen_tcp}, socket = Socket}, Opts) ->
 setopts(#st{opts = #opts{transport = ssl}, socket = Socket}, Opts) ->
     ssl:setopts(Socket, Opts).
 
+getstat(#st{opts = #opts{transport = gen_tcp}, socket = Socket}, Opts) ->
+    inet:getstat(Socket, Opts);
+getstat(#st{opts = #opts{transport = ssl}, socket = Socket}, Opts) ->
+    ssl:getstat(Socket, Opts).
+
+update_backoff_send(State) when State#st.backoff_send ->
+    case q_len(State#st.pending) of
+        0 ->
+            %% No pending commands means nothing is waiting in the send buffer.
+            State#st{backoff_send = false};
+        1 ->
+            %% Pending queue almost empty, but maybe it was a huge command.
+            case getstat(State, [send_pend]) of
+                {ok, [{send_pend, SendPend}]} when SendPend < 1000 ->
+                    State#st{backoff_send = false};
+                _Otherwise ->
+                    State
+            end;
+        _ ->
+            %% There are still multiple pending commands. Don't send more yet.
+            State
+    end;
+update_backoff_send(State) ->
+    State.
+
 %% Data received from the server
 handle_data(Data, #st{parser_state = ParserState} = State) ->
     handle_parser_result(ered_parser:continue(Data, ParserState), State).
@@ -506,7 +533,8 @@ handle_parser_result({need_more, _BytesNeeded, ParserState}, State) ->
     State#st{parser_state = ParserState};
 handle_parser_result({done, Value, ParserState}, State0) ->
     State1 = handle_result(Value, State0),
-    handle_parser_result(ered_parser:next(ParserState), State1);
+    State2 = update_backoff_send(State1),
+    handle_parser_result(ered_parser:next(ParserState), State2);
 handle_parser_result({parse_error, Reason}, State) ->
     Transport = State#st.opts#opts.transport,
     Transport:close(State#st.socket),
@@ -639,7 +667,8 @@ abort_pending_commands(State) ->
     State#st{waiting = q_join(q_from_list(PendingReqs), State#st.waiting),
              pending = q_new(),
              parser_state = ered_parser:init(),
-             filling_batch = true}.
+             filling_batch = true,
+             backoff_send = false}.
 
 connection_down(Reason, State) ->
     State1 = abort_pending_commands(State),
@@ -657,7 +686,7 @@ process_commands(State) ->
 
     if
         State#st.status =:= up, State#st.socket =/= none,
-        NumWaiting > 0,  State#st.filling_batch ->
+        NumWaiting > 0, State#st.filling_batch, not State#st.backoff_send ->
             %% TODO: Add request timeout timestamp to PendingReq.
             {CommandQueue, NewWaiting} = q_split(min(BatchSize, NumWaiting), State#st.waiting),
             {BatchedData, PendingRequests} =
@@ -673,13 +702,17 @@ process_commands(State) ->
                             {[], q_new()},
                             q_to_list(CommandQueue)),
             Transport = State#st.opts#opts.transport,
+            NewPending = q_join(State#st.pending, PendingRequests),
+            StateAfterSend = State#st{waiting = NewWaiting,
+                                      pending = NewPending,
+                                      filling_batch = q_len(NewPending) < State#st.opts#opts.max_pending},
             case Transport:send(State#st.socket, BatchedData) of
                 ok ->
-                    NewPending = q_join(State#st.pending, PendingRequests),
-                    NewState = State#st{waiting = NewWaiting,
-                                        pending = NewPending,
-                                        filling_batch = q_len(NewPending) < State#st.opts#opts.max_pending},
-                    process_commands(NewState);
+                    process_commands(StateAfterSend);
+                {error, timeout} ->
+                    %% The send succeeded, but we should back off before sending
+                    %% more. The data is queued in inet's send buffer.
+                    process_commands(StateAfterSend#st{backoff_send = true});
                 {error, _Reason} ->
                     %% Send FIN and handle replies in fligh before reconnecting.
                     Transport:shutdown(State#st.socket, read_write),
@@ -834,7 +867,7 @@ connect_loop(now, OwnerPid,
              #opts{host = Host, port = Port, transport = Transport,
                    transport_opts = TransportOpts0,
                    connect_timeout = Timeout} = Opts) ->
-    TransportOpts = [{active, 100}, binary] ++ TransportOpts0,
+    TransportOpts = [{send_timeout, 0}, {active, 100}, binary] ++ TransportOpts0,
     case Transport:connect(Host, Port, TransportOpts, Timeout) of
         {ok, Socket} ->
             case Transport:controlling_process(Socket, OwnerPid) of
