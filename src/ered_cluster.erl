@@ -22,7 +22,7 @@
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-         terminate/2, code_change/3]).
+         terminate/2, code_change/3, format_status/1]).
 
 
 -export_type([cluster_ref/0,
@@ -590,6 +590,19 @@ terminate(Reason, State) ->
 code_change(_OldVsn, State = #st{}, _Extra) ->
     {ok, State}.
 
+format_status(Status) ->
+    maps:map(
+      fun (state, State) ->
+              %% Convert record to map.
+              Fields = record_info(fields, st),
+              [st | Values] = tuple_to_list(State),
+              StateMap = maps:from_list(lists:zip(Fields, Values)),
+              %% Replace the huge slots binary with a readable representation.
+              maps:update(slots, format_slotmap(State#st.slots), StateMap);
+          (_, Value) ->
+              Value
+      end, Status).
+
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
@@ -947,6 +960,26 @@ all_slots_covered(State) ->
                     State#st.slot_map),
     %% check so last slot is ok
     R == 16384.
+
+%% A more readable representation of the large binary slot map for use in crash
+%% reports. Input: <<1,1,1,...,2,2,2,...,3,3,3>>. Returns a list of ranges on
+%% the form [{{0, 5000}, 1}, {{5001, 10000}, 2}, {{10001, 16383}, 3}].
+format_slotmap(Binary) ->
+    format_slotmap_helper(Binary, 0, []).
+
+format_slotmap_helper(Binary, I, Acc) when I >= byte_size(Binary) ->
+    lists:reverse(Acc);
+format_slotmap_helper(Binary, I, [{{From, To}, PrevValue} | Acc]) ->
+    NewAcc = case binary:at(Binary, I) of
+                 PrevValue ->
+                     [{{From, I}, PrevValue} | Acc];
+                 OtherValue ->
+                     [{{I, I}, OtherValue}, {{From, To}, PrevValue} | Acc]
+             end,
+    format_slotmap_helper(Binary, I + 1, NewAcc);
+format_slotmap_helper(Binary, 0, []) ->
+    FirstValue = binary:at(Binary, 0),
+    format_slotmap_helper(Binary, 1, [{{0, 0}, FirstValue}]).
 
 check_replica_count(#st{min_replicas = 0}) ->
     true;
