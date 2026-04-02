@@ -124,7 +124,7 @@ connect_async(Addr, Port, Opts) ->
     spawn_link(
       fun() ->
               SendPid = self(),
-              case catch Transport:connect(Addr, Port, [{active, false}, binary] ++ Options, Timeout) of
+              try Transport:connect(Addr, Port, [{active, false}, binary] ++ Options, Timeout) of
                   {ok, Socket} ->
                       Master ! {connected, SendPid},
                       Pid = spawn_link(fun() ->
@@ -135,9 +135,12 @@ connect_async(Addr, Port, Opts) ->
                       ExitReason = send_loop(Transport, Socket, Pid, BatchSize),
                       Master ! {socket_closed, SendPid, ExitReason};
                   {error, Reason} ->
-                      Master ! {connect_error, SendPid, Reason};
-                  Other -> % {'EXIT',_}
-                      Master ! {connect_error, SendPid, Other}
+                      Master ! {connect_error, SendPid, Reason}
+              catch
+                  exit:Reason ->
+                      Master ! {connect_error, SendPid, {'EXIT', Reason}};
+                  error:Reason:Stacktrace ->
+                      Master ! {connect_error, SendPid, {'EXIT', {Reason, Stacktrace}}}
               end
       end).
 
