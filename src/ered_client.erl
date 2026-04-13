@@ -183,6 +183,7 @@
          command :: #command{},
          response_class :: ered_command:response_class() |
                            [ered_command:response_class()],
+         sent_at :: integer(), % erlang:monotonic_time(millisecond)
          reply_acc = []
         }).
 
@@ -687,8 +688,8 @@ process_commands(State) ->
     if
         State#st.status =:= up, State#st.socket =/= none,
         NumWaiting > 0, State#st.filling_batch, not State#st.backoff_send ->
-            %% TODO: Add request timeout timestamp to PendingReq.
             {CommandQueue, NewWaiting} = q_split(min(BatchSize, NumWaiting), State#st.waiting),
+            Now = erlang:monotonic_time(millisecond),
             {BatchedData, PendingRequests} =
                 lists:foldr(fun(Command, {DataAcc, PendingAcc}) ->
                                     RespCommand = Command#command.data,
@@ -696,7 +697,8 @@ process_commands(State) ->
 
                                     NewBatchedData = ered_command:get_data(RespCommand),
                                     NewPendingRequest = #pending_req{command = Command,
-                                                                     response_class = ResponseClass},
+                                                                     response_class = ResponseClass,
+                                                                     sent_at = Now},
                                     {[NewBatchedData | DataAcc] , q_in_r(NewPendingRequest, PendingAcc)}
                             end,
                             {[], q_new()},
@@ -782,6 +784,9 @@ q_out({Size, Q}) ->
         {{value, Val}, NewQ} -> {Val, {Size-1, NewQ}}
     end.
 
+q_get({_Size, Q}) ->
+    queue:get(Q).
+
 q_split(N, {Size, Q}) when N =< Size ->
     {A, B} = queue:split(N, Q),
     {{N, A}, {Size - N, B}}.
@@ -796,8 +801,9 @@ q_len({Size, _Q}) ->
     Size.
 
 response_timeout(State) when not ?q_is_empty(State#st.pending) ->
-    %% FIXME: Store req timeout in each pending item
-    State#st.opts#opts.timeout;
+    #pending_req{sent_at = SentAt} = q_get(State#st.pending),
+    Elapsed = erlang:monotonic_time(millisecond) - SentAt,
+    max(0, State#st.opts#opts.timeout - Elapsed);
 response_timeout(_State) ->
     infinity.
 
@@ -915,7 +921,8 @@ init_connection(State) ->
             Data = ered_command:get_data(RespCommand),
             Command = #command{data = RespCommand, replyto = ReplyFun},
             Class = ered_command:get_response_class(RespCommand),
-            PendingReq = #pending_req{command = Command, response_class = Class},
+            PendingReq = #pending_req{command = Command, response_class = Class,
+                                      sent_at = erlang:monotonic_time(millisecond)},
             Transport = State#st.opts#opts.transport,
             case Transport:send(State#st.socket, Data) of
                 ok ->
