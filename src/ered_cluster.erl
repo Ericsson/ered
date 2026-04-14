@@ -9,7 +9,7 @@
 
 %% API
 -export([connect/2, close/1,
-         command/3, command/4, command_async/4,
+         command/3, command/4, command_async/4, command_async/5,
          command_all/2, command_all/3,
          get_clients/1,
          get_addr_to_client_map/1,
@@ -176,7 +176,7 @@ close(ClusterRef) ->
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec command(cluster_ref(), command(), key()) -> reply().
--spec command(cluster_ref(), command(), key(), timeout()) -> reply().
+-spec command(cluster_ref(), command(), key(), timeout() | ered:req_opts()) -> reply().
 %%
 %% Send a command to the cluster. The command will be routed to
 %% the correct cluster node client based on the provided key.
@@ -191,20 +191,28 @@ close(ClusterRef) ->
 command(ClusterRef, Command, Key) ->
     command(ClusterRef, Command, Key, infinity).
 
-command(ClusterRef, Command, Key, Timeout) when is_binary(Key) ->
+command(ClusterRef, Command, Key, Opts) when is_map(Opts) ->
     C = ered_command:convert_to(Command),
-    gen_server:call(ClusterRef, {command, C, Key}, Timeout).
+    Timeout = maps:get(timeout, Opts, infinity),
+    gen_server:call(ClusterRef, {command, C, Key, Opts}, Timeout);
+command(ClusterRef, Command, Key, Timeout) ->
+    C = ered_command:convert_to(Command),
+    gen_server:call(ClusterRef, {command, C, Key, #{}}, Timeout).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec command_async(cluster_ref(), command(), key(), fun((reply()) -> any())) -> ok.
+-spec command_async(cluster_ref(), command(), key(), fun((reply()) -> any()), ered:req_opts()) -> ok.
 %%
 %% Like command/4 but asynchronous. Instead of returning the reply, the reply
 %% function is applied to the reply when it is available. The reply function
 %% runs in an unspecified process.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 command_async(ServerRef, Command, Key, ReplyFun) when is_function(ReplyFun, 1) ->
+    command_async(ServerRef, Command, Key, ReplyFun, #{}).
+
+command_async(ServerRef, Command, Key, ReplyFun, Opts) when is_function(ReplyFun, 1), is_map(Opts) ->
     C = ered_command:convert_to(Command),
-    gen_server:cast(ServerRef, {command_async, C, Key, ReplyFun}).
+    gen_server:cast(ServerRef, {command_async, C, Key, ReplyFun, Opts}).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec command_all(cluster_ref(), command()) -> [reply()].
@@ -317,9 +325,9 @@ init({Addrs, Opts, ClientSup, User}) ->
     process_flag(trap_exit, true),
     {ok, start_clients(Addrs, State)}.
 
-handle_call({command, Command, Key}, From, State) ->
+handle_call({command, Command, Key, Opts}, From, State) ->
     Slot = ered_lib:hash(Key),
-    State1 = send_command_to_slot(Command, Slot, From, State, State#st.redirect_attempts),
+    State1 = send_command_to_slot(Command, Slot, From, Opts, State, State#st.redirect_attempts),
     {noreply, State1};
 
 handle_call(get_clients, _From, State) ->
@@ -334,26 +342,26 @@ handle_call({connect_node, Addr}, _From, State) ->
     ClientPid = maps:get(Addr, State1#st.nodes),
     {reply, ClientPid, State1}.
 
-handle_cast({command_async, Command, Key, ReplyFun}, State) ->
+handle_cast({command_async, Command, Key, ReplyFun, Opts}, State) ->
     Slot = ered_lib:hash(Key),
-    State1 = send_command_to_slot(Command, Slot, ReplyFun, State, State#st.redirect_attempts),
+    State1 = send_command_to_slot(Command, Slot, ReplyFun, Opts, State, State#st.redirect_attempts),
     {noreply, State1};
 
 handle_cast({replied, To}, State) ->
     {noreply, State#st{pending_commands = maps:remove(To, State#st.pending_commands)}};
 
-handle_cast({forward_command, Command, Slot, From, Addr, AttemptsLeft}, State) ->
+handle_cast({forward_command, Command, Slot, From, Opts, Addr, AttemptsLeft}, State) ->
     {Client, State1} = connect_addr(Addr, State),
-    Fun = create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft),
-    ered_client:command_async(Client, Command, Fun),
+    Fun = create_reply_fun(Command, Slot, Client, From, Opts, State, AttemptsLeft),
+    ered_client:command_async(Client, Command, Fun, Opts),
     {noreply, State1};
 
-handle_cast({forward_command_asking, Command, Slot, From, Addr, AttemptsLeft, OldReply}, State) ->
+handle_cast({forward_command_asking, Command, Slot, From, Opts, Addr, AttemptsLeft, OldReply}, State) ->
     {Client, State1} = connect_addr(Addr, State),
     Command1 = ered_command:add_asking(OldReply, Command),
-    HandleReplyFun = create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft),
+    HandleReplyFun = create_reply_fun(Command, Slot, Client, From, Opts, State, AttemptsLeft),
     Fun = fun(Reply) -> HandleReplyFun(ered_command:fix_ask_reply(OldReply, Reply)) end,
-    ered_client:command_async(Client, Command1, Fun),
+    ered_client:command_async(Client, Command1, Fun, Opts),
     {noreply, State1};
 
 handle_cast({trigger_map_update, SlotMapVersion, Node}, State)
@@ -373,8 +381,8 @@ handle_cast({trigger_map_update, SlotMapVersion, Node}, State)
 handle_cast({trigger_map_update, _SlotMapVersion, _Node}, State) ->
     {noreply, State}.
 
-handle_info({command_try_again, Command, Slot, From, AttemptsLeft}, State) ->
-    State1 = send_command_to_slot(Command, Slot, From, State, AttemptsLeft),
+handle_info({command_try_again, Command, Slot, From, Opts, AttemptsLeft}, State) ->
+    State1 = send_command_to_slot(Command, Slot, From, Opts, State, AttemptsLeft),
     {noreply, State1};
 
 handle_info(Msg = #{msg_type := MsgType, client_id := _Pid, addr := Addr}, State) ->
@@ -619,15 +627,15 @@ new_set(List) ->
 %%% Command handling
 %%%-------------------------------------------------------------------
 
-send_command_to_slot(Command, Slot, From, State, AttemptsLeft) ->
+send_command_to_slot(Command, Slot, From, Opts, State, AttemptsLeft) ->
     case binary:at(State#st.slots, Slot) of
         0 ->
             reply(From, {error, unmapped_slot}, none),
             State;
         Ix ->
             Client = element(Ix, State#st.clients),
-            Fun = create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft),
-            ered_client:command_async(Client, Command, Fun),
+            Fun = create_reply_fun(Command, Slot, Client, From, Opts, State, AttemptsLeft),
+            ered_client:command_async(Client, Command, Fun, Opts),
             put_pending_command(From, Client, State)
     end.
 
@@ -638,10 +646,10 @@ put_pending_command(ReplyFun, _Client, State) when is_function(ReplyFun) ->
     %% Cast with reply fun. We don't keep track of those.
     State.
 
-create_reply_fun(_Command, _Slot, _Client, From, _State, 0) ->
+create_reply_fun(_Command, _Slot, _Client, From, _Opts, _State, 0) ->
     Pid = self(),
     fun(Reply) -> reply(From, Reply, Pid) end;
-create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft) ->
+create_reply_fun(Command, Slot, Client, From, Opts, State, AttemptsLeft) ->
     Pid = self(),
     %% Avoid binding the #st record inside the fun since the fun will be
     %% copied to another process
@@ -653,11 +661,11 @@ create_reply_fun(Command, Slot, Client, From, State, AttemptsLeft) ->
                     reply(From, Reply, Pid);
                 {moved, Addr} ->
                     update_slots(Pid, SlotMapVersion, Client),
-                    gen_server:cast(Pid, {forward_command, Command, Slot, From, Addr, AttemptsLeft-1});
+                    gen_server:cast(Pid, {forward_command, Command, Slot, From, Opts, Addr, AttemptsLeft-1});
                 {ask, Addr} ->
-                    gen_server:cast(Pid, {forward_command_asking, Command, Slot, From, Addr, AttemptsLeft-1, Reply});
+                    gen_server:cast(Pid, {forward_command_asking, Command, Slot, From, Opts, Addr, AttemptsLeft-1, Reply});
                 try_again ->
-                    erlang:send_after(TryAgainDelay, Pid, {command_try_again, Command, Slot, From, AttemptsLeft-1});
+                    erlang:send_after(TryAgainDelay, Pid, {command_try_again, Command, Slot, From, Opts, AttemptsLeft-1});
                 cluster_down ->
                     update_slots(Pid, SlotMapVersion, Client),
                     reply(From, Reply, Pid)

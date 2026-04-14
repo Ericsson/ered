@@ -83,6 +83,7 @@ Closes the connection.
 ```Erlang
 ered:command(client_ref(), command()) -> reply().
 ered:command(client_ref(), command(), timeout()) -> reply().
+ered:command(client_ref(), command(), req_opts()) -> reply().
 ```
 
 Send a command and return the reply.
@@ -95,10 +96,14 @@ work as expected.
 For cluster clients, a key must be provided.
 Omitting timeout is the same as setting the timeout to infinity.
 
-### `ered:command_async/3`
+The third argument can be a timeout or a map of request options. See [Request
+options](#request-options) below.
+
+### `ered:command_async/3,4`
 
 ```Erlang
 ered:command_async(client_ref(), command(), fun((reply()) -> any())) -> ok.
+ered:command_async(client_ref(), command(), fun((reply()) -> any()), req_opts()) -> ok.
 ```
 
 Like command/2,3 but asynchronous. Instead of returning the reply, the reply
@@ -142,6 +147,7 @@ cluster.
 ```Erlang
 ered_cluster:command(cluster_ref(), command(), key()) -> reply().
 ered_cluster:command(cluster_ref(), command(), key(), timeout()) -> reply().
+ered_cluster:command(cluster_ref(), command(), key(), req_opts()) -> reply().
 ```
 
 Send a command. The command is routed to
@@ -154,10 +160,14 @@ then they need to all map to the same slot for things to
 work as expected.
 Omitting timeout is the same as setting the timeout to infinity.
 
-### `ered_cluster:command_async/4`
+The fourth argument can be a timeout or a map of request options. See [Request
+options](#request-options) below.
+
+### `ered_cluster:command_async/4,5`
 
 ```Erlang
 ered_cluster:command_async(cluster_ref(), command(), key(), fun((reply()) -> any())) -> ok.
+ered_cluster:command_async(cluster_ref(), command(), key(), fun((reply()) -> any()), req_opts()) -> ok.
 ```
 
 Like command/3,4 but asynchronous. Instead of returning the reply, the reply
@@ -369,6 +379,29 @@ options, as `{client_opts, [{connection_opts, [...]}]}`.
 
   When a timeout happens, the connection is closed and the client attempts to
   set up a new connection. See the client option `node_down_timeout` above.
+
+Request options
+---------------
+
+The command functions accept an optional map of request options instead of a
+plain timeout. The following keys are recognized:
+
+* `timeout => timeout()`
+
+  Timeout for the `gen_server:call`. Same as passing a timeout directly.
+  Default infinity.
+
+* `buffer_time => non_neg_integer()`
+
+  Buffer time in milliseconds. When non-zero, the command is not sent
+  immediately but buffered. A timer is started and the buffered commands are
+  flushed when the timer fires. If a command with `buffer_time => 0` (the
+  default) arrives while there are buffered commands, all buffered commands are
+  flushed immediately together with the new command. This can be used to
+  coalesce multiple commands into fewer TCP packets and TLS records.
+
+  If multiple buffered commands arrive with different buffer times, the shortest
+  remaining time is used.
 
 Info messages
 -------------
