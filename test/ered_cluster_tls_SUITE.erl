@@ -58,11 +58,11 @@ init_per_testcase(_Testcase, Config) ->
     try ered_test_utils:check_consistent_cluster(?PORTS, ?CLIENT_OPTS) of
         ok ->
             [];
-        _ -> % Cluster inconsistent but all nodes reachable.
-            ct:pal("Re-initialize the cluster"),
+        _ ->
+            ct:pal("Cluster inconsistent but all nodes reachable. Re-initialize the cluster."),
             init_per_suite(Config)
-    catch _:_ -> % One or more nodes unreachable.
-            ct:pal("Re-initialize the cluster"),
+    catch _:_ ->
+            ct:pal("One or more nodes unreachable. Re-initialize the cluster."),
             init_per_suite(Config)
     end.
 
