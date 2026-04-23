@@ -13,7 +13,7 @@
          connect/3, close/1,
          deactivate/1, reactivate/1,
          command/2, command/3,
-         command_async/3]).
+         command_async/3, command_async/4]).
 
 %% testing/debugging
 -export([state_to_map/1]).
@@ -83,6 +83,8 @@
          status :: init | up | node_down | node_deactivated,
          node_down_timer = none :: none | reference(),
          connected_at = none :: none | integer(), % erlang:monotonic_time(millisecond)
+         buffer_until = none :: none | integer(), % erlang:monotonic_time(millisecond)
+         buffer_timer = none :: none | reference(),
          opts = #opts{}
 
         }).
@@ -258,7 +260,7 @@ reactivate(ServerRef) ->
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec command(pid(), ered_command:command()) -> reply().
--spec command(pid(), ered_command:command(), timeout()) -> reply().
+-spec command(pid(), ered_command:command(), timeout() | ered:req_opts()) -> reply().
 %%
 %% Send a command to the connected node. The argument can be a
 %% single command as a list of binaries, a pipeline of command as a
@@ -267,11 +269,16 @@ reactivate(ServerRef) ->
 command(ServerRef, Command) ->
     command(ServerRef, Command, infinity).
 
-command(ServerRef, Command, Timeout) ->
-    gen_server:call(ServerRef, {command, ered_command:convert_to(Command)}, Timeout).
+command(ServerRef, Command, Timeout) when is_integer(Timeout); Timeout =:= infinity ->
+    gen_server:call(ServerRef, {command, ered_command:convert_to(Command), 0}, Timeout);
+command(ServerRef, Command, Opts) when is_map(Opts) ->
+    Timeout = maps:get(timeout, Opts, infinity),
+    BufferTime = maps:get(buffer_time, Opts, 0),
+    gen_server:call(ServerRef, {command, ered_command:convert_to(Command), BufferTime}, Timeout).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec command_async(pid(), ered_command:command(), reply_fun()) -> ok.
+-spec command_async(pid(), ered_command:command(), reply_fun(), ered:req_opts()) -> ok.
 %%
 %% Send a command to the connected node in asynchronous
 %% fashion. The provided callback function will be called with the
@@ -279,8 +286,13 @@ command(ServerRef, Command, Timeout) ->
 %% client process and should not hang or perform any lengthy task.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 command_async(ServerRef, Command, CallbackFun) ->
-    gen_server:cast(ServerRef, #command{data = ered_command:convert_to(Command),
-                                        replyto = CallbackFun}).
+    command_async(ServerRef, Command, CallbackFun, #{}).
+
+command_async(ServerRef, Command, CallbackFun, Opts) when is_map(Opts) ->
+    BufferTime = maps:get(buffer_time, Opts, 0),
+    gen_server:cast(ServerRef, {#command{data = ered_command:convert_to(Command),
+                                         replyto = CallbackFun},
+                                BufferTime}).
 
 %% Converts a state record to a map, for easier testing.
 %% Used in tests, after calling sys:get_state(EredClientPid).
@@ -347,16 +359,16 @@ handle_connection_opts(OptsRecord, Opts) ->
                     timeout = ResponseTimeout,
                     push_cb = PushCb}.
 
-handle_call({command, Command}, From, State) ->
+handle_call({command, Command, BufferTime}, From, State) ->
     Fun = fun(Reply) -> gen_server:reply(From, Reply) end,
-    handle_cast(#command{data = Command, replyto = Fun}, State).
+    handle_cast({#command{data = Command, replyto = Fun}, BufferTime}, State).
 
 
-handle_cast(Command = #command{}, State) ->
+handle_cast({Command = #command{}, BufferTime}, State) ->
     case State#st.status of
         Up when Up =:= up; Up =:= init ->
             State1 = State#st{waiting = q_in(Command, State#st.waiting)},
-            State2 = process_commands(State1),
+            State2 = maybe_buffer(BufferTime, State1),
             {noreply, State2, response_timeout(State2)};
         NodeProblem when NodeProblem =:= node_down; NodeProblem =:= node_deactivated ->
             reply_command(Command, {error, NodeProblem}),
@@ -455,6 +467,11 @@ handle_info({timeout, TimerRef, node_down}, State) when TimerRef == State#st.nod
     State1 = report_connection_status({connection_down, node_down_timeout}, State),
     State2 = reply_all({error, node_down}, State1),
     {noreply, process_commands(State2#st{status = node_down})};
+
+handle_info({timeout, Ref, flush_buffer}, #st{buffer_timer = Ref} = State) ->
+    State1 = State#st{buffer_timer = none, buffer_until = none},
+    State2 = process_commands(State1),
+    {noreply, State2, response_timeout(State2)};
 
 handle_info(timeout, #st{socket = Socket} = State) when Socket =/= none ->
     %% Request timeout
@@ -806,6 +823,32 @@ response_timeout(State) when not ?q_is_empty(State#st.pending) ->
     max(0, State#st.opts#opts.timeout - Elapsed);
 response_timeout(_State) ->
     infinity.
+
+maybe_buffer(0, State) ->
+    cancel_buffer_timer(process_commands(State));
+maybe_buffer(BufferTime, State) ->
+    Now = erlang:monotonic_time(millisecond),
+    Until = Now + BufferTime,
+    case State#st.buffer_until of
+        none ->
+            start_buffer_timer(Until, State);
+        Existing when Until < Existing ->
+            erlang:cancel_timer(State#st.buffer_timer),
+            start_buffer_timer(Until, State);
+        _Later ->
+            State
+    end.
+
+start_buffer_timer(Until, State) ->
+    Ms = max(1, Until - erlang:monotonic_time(millisecond)),
+    Ref = erlang:start_timer(Ms, self(), flush_buffer),
+    State#st{buffer_timer = Ref, buffer_until = Until}.
+
+cancel_buffer_timer(#st{buffer_timer = none} = State) ->
+    State;
+cancel_buffer_timer(#st{buffer_timer = Ref} = State) ->
+    erlang:cancel_timer(Ref),
+    State#st{buffer_timer = none, buffer_until = none}.
 
 reply_command(#command{replyto = Fun} = _Command, Reply) ->
     Fun(Reply).

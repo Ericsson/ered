@@ -7,7 +7,7 @@
 -export([connect/3,
          close/1,
          command/2, command/3,
-         command_async/3]).
+         command_async/3, command_async/4]).
 
 -export_type([opt/0,
               addr/0,
@@ -15,6 +15,7 @@
               command/0,
               reply/0,
               reply_fun/0,
+              req_opts/0,
               client_ref/0]).
 
 %%%===================================================================
@@ -27,6 +28,7 @@
 -type command()     :: ered_command:command().
 -type reply()       :: ered_client:reply() | {error, unmapped_slot | client_down}.
 -type reply_fun()   :: ered_client:reply_fun().
+-type req_opts()    :: #{timeout => timeout(), buffer_time => non_neg_integer()}.
 -type client_ref()  :: gen_server:server_ref().
 
 %%%===================================================================
@@ -51,7 +53,7 @@ close(Pid) ->
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec command(client_ref(), command()) -> reply().
--spec command(client_ref(), command(), timeout()) -> reply().
+-spec command(client_ref(), command(), timeout() | req_opts()) -> reply().
 %%
 %% Send a command.
 %% If the command is a single command then it is represented as a
@@ -64,10 +66,13 @@ close(Pid) ->
 command(Pid, Command) ->
     ered_client:command(Pid, Command, infinity).
 command(Pid, Command, Timeout) when is_integer(Timeout); Timeout =:= infinity ->
-    ered_client:command(Pid, Command, Timeout).
+    ered_client:command(Pid, Command, Timeout);
+command(Pid, Command, Opts) when is_map(Opts) ->
+    ered_client:command(Pid, Command, Opts).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec command_async(client_ref(), command(), fun((reply()) -> any())) -> ok.
+-spec command_async(client_ref(), command(), fun((reply()) -> any()), req_opts()) -> ok.
 %%
 %% Like command/2,3 but asynchronous. Instead of returning the reply,
 %% the reply function is applied to the reply when it is available.
@@ -76,3 +81,6 @@ command(Pid, Command, Timeout) when is_integer(Timeout); Timeout =:= infinity ->
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 command_async(Pid, Command, ReplyFun) when is_function(ReplyFun, 1) ->
     ered_client:command_async(Pid, Command, ReplyFun).
+
+command_async(Pid, Command, ReplyFun, Opts) when is_function(ReplyFun, 1), is_map(Opts) ->
+    ered_client:command_async(Pid, Command, ReplyFun, Opts).
