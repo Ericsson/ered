@@ -391,7 +391,10 @@ handle_info({Type, Socket, Data}, #st{socket = Socket} = State)
   when Type =:= tcp; Type =:= ssl ->
     %% Receive data from current socket.
     State1 = handle_data(Data, State),
-    State2 = process_commands(State1),
+    State2 = case State1#st.buffer_timer of
+                 none -> process_commands(State1);
+                 _Ref -> State1
+             end,
     {noreply, State2, response_timeout(State2)};
 
 handle_info({Passive, Socket}, #st{socket = Socket} = State)

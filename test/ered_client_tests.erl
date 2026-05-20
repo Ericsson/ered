@@ -19,6 +19,7 @@ run_test_() ->
      {spawn, fun response_timeout_t/0},
      {spawn, fun buffer_time_t/0},
      {spawn, fun buffer_time_flush_on_unbuffered_t/0},
+     {spawn, fun buffer_time_not_flushed_by_reply_t/0},
      {spawn, fun send_backoff_tcp_t/0},
      {spawn, fun send_backoff_tls_t/0},
      {spawn, fun fail_hello_t/0},
@@ -330,7 +331,7 @@ buffer_time_t() ->
     no_more_msgs().
 
 buffer_time_flush_on_unbuffered_t() ->
-    {ok, ListenSock} = gen_tcp:listen(0, [binary, {active , false}]),
+    {ok, ListenSock} = gen_tcp:listen(0, [binary, {active, false}]),
     {ok, Port} = inet:port(ListenSock),
     spawn_link(fun() ->
                        {ok, Sock} = gen_tcp:accept(ListenSock),
@@ -351,6 +352,54 @@ buffer_time_flush_on_unbuffered_t() ->
                               fun(Reply) -> Pid ! {2, Reply} end),
     {1, {ok, <<"pong">>}} = get_msg(1000),
     {2, {ok, <<"pong">>}} = get_msg(1000),
+    no_more_msgs().
+
+buffer_time_not_flushed_by_reply_t() ->
+    {ok, ListenSock} = gen_tcp:listen(0, [binary, {active, false}]),
+    {ok, Port} = inet:port(ListenSock),
+    Ping = <<"*1\r\n$4\r\nping\r\n">>,
+    Pid = self(),
+    ServerPid = spawn_link(
+                  fun() ->
+                          {ok, Sock} = gen_tcp:accept(ListenSock),
+                          %% First: the unbuffered ping arrives
+                          {ok, Ping} = gen_tcp:recv(Sock, size(Ping)),
+                          %% Wait for the test to send the buffered command
+                          receive send_reply -> ok end,
+                          %% Reply to it; this should NOT flush the buffered command
+                          ok = gen_tcp:send(Sock, <<"+pong1\r\n">>),
+                          %% Nothing more should arrive yet (buffered cmd still waiting)
+                          {error, timeout} = gen_tcp:recv(Sock, 0, 100),
+                          Pid ! server_recv_timeout,
+                          %% The third (unbuffered) ping flushes the buffered one
+                          TwoPings = <<Ping/binary, Ping/binary>>,
+                          {ok, TwoPings} = gen_tcp:recv(Sock, size(TwoPings)),
+                          ok = gen_tcp:send(Sock, <<"+pong2\r\n+pong3\r\n">>),
+                          receive ok -> ok end
+                  end),
+    Client = start_client(Port),
+    expect_connection_up(Client),
+    %% Send an unbuffered command; it is sent immediately
+    ered_client:command_async(Client, [<<"ping">>],
+                              fun(Reply) -> Pid ! {1, Reply} end),
+    %% Send a buffered command; it stays in the waiting queue
+    ered_client:command_async(Client, [<<"ping">>],
+                              fun(Reply) -> Pid ! {2, Reply} end,
+                              #{buffer_time => 60000}),
+    %% Sync call to ensure both casts have been processed, so the
+    %% buffered command is in the waiting queue when the reply arrives.
+    _ = sys:get_state(Client),
+    %% Now let the server reply; the reply must not flush the buffered command
+    ServerPid ! send_reply,
+    %% Receive reply to first command
+    {1, {ok, <<"pong1">>}} = get_msg(1000),
+    %% Wait for the server to confirm nothing else was received
+    server_recv_timeout = get_msg(2000),
+    %% Send an unbuffered command to flush the buffer
+    ered_client:command_async(Client, [<<"ping">>],
+                              fun(Reply) -> Pid ! {3, Reply} end),
+    {2, {ok, <<"pong2">>}} = get_msg(1000),
+    {3, {ok, <<"pong3">>}} = get_msg(1000),
     no_more_msgs().
 
 send_backoff_tcp_t() ->
