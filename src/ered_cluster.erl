@@ -24,11 +24,11 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3, format_status/1]).
 
-
 -export_type([cluster_ref/0,
               client_ref/0,
               opt/0,
               addr/0,
+              req_opts/0,
               command/0,
               reply/0,
               key/0]).
@@ -109,6 +109,7 @@
 -type addr_set()    :: sets:set(addr()).
 -type cluster_ref() :: gen_server:server_ref().
 -type client_ref()  :: pid().
+-type req_opts()    :: ered:req_opts().
 -type command()     :: ered_command:command().
 -type reply()       :: ered_client:reply() | {error, unmapped_slot | client_down}.
 -type key()         :: binary().
@@ -176,7 +177,7 @@ close(ClusterRef) ->
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec command(cluster_ref(), command(), key()) -> reply().
--spec command(cluster_ref(), command(), key(), timeout() | ered:req_opts()) -> reply().
+-spec command(cluster_ref(), command(), key(), timeout() | req_opts()) -> reply().
 %%
 %% Send a command to the cluster. The command will be routed to
 %% the correct cluster node client based on the provided key.
@@ -201,7 +202,7 @@ command(ClusterRef, Command, Key, Timeout) ->
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec command_async(cluster_ref(), command(), key(), fun((reply()) -> any())) -> ok.
--spec command_async(cluster_ref(), command(), key(), fun((reply()) -> any()), ered:req_opts()) -> ok.
+-spec command_async(cluster_ref(), command(), key(), fun((reply()) -> any()), req_opts()) -> ok.
 %%
 %% Like command/4 but asynchronous. Instead of returning the reply, the reply
 %% function is applied to the reply when it is available. The reply function
