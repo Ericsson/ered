@@ -13,7 +13,8 @@
          connect/3, close/1,
          deactivate/1, reactivate/1,
          command/2, command/3,
-         command_async/3, command_async/4]).
+         command_async/3, command_async/4,
+         change_mode/2]).
 
 %% testing/debugging
 -export([state_to_map/1]).
@@ -78,6 +79,7 @@
          filling_batch = true :: boolean(),
 
          cluster_id = undefined :: undefined | binary(),
+         mode = readwrite :: readwrite | readonly,
 
          queue_full_event_sent = false :: boolean(), % set to true when full, false when reaching queue_ok_level
          status :: init | up | node_down | node_deactivated,
@@ -294,6 +296,16 @@ command_async(ServerRef, Command, CallbackFun, Opts) when is_map(Opts) ->
                                          replyto = CallbackFun},
                                 BufferTime}).
 
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec change_mode(pid(), readwrite | readonly) -> ok.
+%%
+%% Set the Redis Cluster client mode. This is used internally by the cluster
+%% manager when a node is assigned a primary or replica role. Replica clients
+%% enter READONLY mode, while primary clients use the default READWRITE mode.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+change_mode(ServerRef, Mode) when Mode =:= readwrite; Mode =:= readonly ->
+    gen_server:cast(ServerRef, {change_mode, Mode}).
+
 %% Converts a state record to a map, for easier testing.
 %% Used in tests, after calling sys:get_state(EredClientPid).
 state_to_map(#st{} = State) ->
@@ -383,6 +395,14 @@ handle_cast(deactivate, State) ->
 
 handle_cast(reactivate, #st{socket = none} = State) ->
     {noreply, start_node_down_timer(State)};
+
+handle_cast({change_mode, Mode}, #st{mode = Mode} = State) ->
+    {noreply, State};
+handle_cast({change_mode, Mode}, State) ->
+    Command = #command{data = ered_command:convert_to(mode_command(Mode)),
+                       replyto = fun(_) -> ok end},
+    {noreply, process_commands(State#st{mode = Mode,
+                                        waiting = q_in(Command, State#st.waiting)})};
 
 handle_cast(reactivate, State) ->
     {noreply, State#st{status = up}}.
@@ -954,7 +974,13 @@ init_connection(State) ->
            end,
     Cmd3 = [[<<"SELECT">>, integer_to_binary(Opts#opts.select_db)] ||
                Opts#opts.select_db > 0],
-    case Cmd1 ++ Cmd2 ++ Cmd3 of
+    %% READWRITE is the Redis default, so only replica connections need an
+    %% explicit initialization command.
+    Cmd4 = case State#st.mode of
+               readonly -> mode_command(readonly);
+               readwrite -> []
+           end,
+    case Cmd1 ++ Cmd2 ++ Cmd3 ++ Cmd4 of
         [] ->
             self() ! {init_command_reply, {ok, []}},
             State;
@@ -983,3 +1009,8 @@ init_connection(State) ->
                     start_connect_loop(wait, State)
             end
     end.
+
+mode_command(readonly) ->
+    [[<<"READONLY">>]];
+mode_command(readwrite) ->
+    [[<<"READWRITE">>]].

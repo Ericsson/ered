@@ -174,6 +174,20 @@ Like command/3,4 but asynchronous. Instead of returning the reply, the reply
 function is applied to the reply when it is available. The reply function runs
 in an unspecified process and should not hang or perform any lengthy task.
 
+### `ered_cluster:command_replica/3,4`
+
+```Erlang
+ered_cluster:command_replica(cluster_ref(), command(), key()) -> reply().
+ered_cluster:command_replica(cluster_ref(), command(), key(), timeout()) -> reply().
+ered_cluster:command_replica(cluster_ref(), command(), key(), req_opts()) -> reply().
+```
+
+Send a command to a connected replica of the primary responsible for the key.
+Replica connections are put in Redis Cluster `READONLY` mode. Callers are
+responsible for using only commands that are safe to execute on replicas, such
+as reads. Returns `{error, no_replica}` when the slot's primary has no
+replicas, and `{error, client_down}` when its replicas are unavailable.
+
 ### `ered_cluster:command_all/2,3`
 
 ```Erlang
