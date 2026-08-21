@@ -73,8 +73,12 @@ generate_tls_certs() ->
     cmd_log("openssl req -x509 -new -nodes -sha256 -key tls/ca.key -days 3650 -subj '/O=Test/CN=Certificate Authority' -out tls/ca.crt"),
     %% Generate server certificate.
     cmd_log("openssl genrsa -out tls/server.key 2048"),
+    %% OTP 28 no longer falls back to the certificate common name when
+    %% hostname verification is enabled. The TLS client uses \"Server\" as
+    %% its SNI value, so include it in the server certificate SAN extension.
+    cmd_log("echo 'subjectAltName = DNS:Server' > tls/server.ext"),
     cmd_log("openssl req -new -sha256 -key tls/server.key -subj '/O=Test/CN=Server' | "
-            "openssl x509 -req -sha256 -CA tls/ca.crt -CAkey tls/ca.key -CAserial tls/ca.txt -CAcreateserial -days 1 -out tls/server.crt"),
+            "openssl x509 -req -sha256 -CA tls/ca.crt -CAkey tls/ca.key -CAserial tls/ca.txt -CAcreateserial -days 1 -extfile tls/server.ext -out tls/server.crt"),
     %% Generate client key and cert.
     cmd_log("openssl genrsa -out tls/client.key 2048"),
     generate_client_cert(),
