@@ -26,7 +26,7 @@
 -type addr()        :: {host(), inet:port_number()}.
 -type host()        :: inet:socket_address() | inet:hostname().
 -type command()     :: ered_command:command().
--type reply()       :: ered_client:reply() | {error, unmapped_slot | no_replica | client_down}.
+-type reply()       :: ered_client:reply() | {error, unmapped_slot | client_down}.
 -type reply_fun()   :: ered_client:reply_fun().
 -type req_opts()    :: #{timeout => timeout(), buffer_time => non_neg_integer()}.
 -type client_ref()  :: gen_server:server_ref().

@@ -299,7 +299,7 @@ command_async(ServerRef, Command, CallbackFun, Opts) when is_map(Opts) ->
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec change_mode(pid(), readwrite | readonly) -> ok.
 %%
-%% Set the Redis Cluster client mode. This is used internally by the cluster
+%% Set the cluster client mode. This is used internally by the cluster
 %% manager when a node is assigned a primary or replica role. Replica clients
 %% enter READONLY mode, while primary clients use the default READWRITE mode.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -

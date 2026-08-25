@@ -85,7 +85,7 @@ slotmap_master_nodes(ClusterSlotsReply) ->
 slotmap_replica_nodes(ClusterSlotsReply) ->
     maps:from_list(
       [{node_info(Master), [node_info(Replica) || Replica = [_ReplicaIp, Port | _] <- Replicas,
-                                                 Port > 0]}
+                                                  Port > 0]}
        || [_Start, _End, Master = [_Ip, MasterPort | _] | Replicas] <- ClusterSlotsReply,
           MasterPort > 0]).
 
