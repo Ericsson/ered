@@ -31,7 +31,8 @@ all() ->
      t_new_cluster_master,
      t_ask_redirect,
      t_missing_slot,
-     t_client_map
+     t_client_map,
+     t_primary_by_key
     ].
 
 -define(PORTS, [30001, 30002, 30003, 30004, 30005, 30006]).
@@ -999,6 +1000,26 @@ t_client_map(_) ->
     Expected = [{"127.0.0.1", Port} || Port <- [30001, 30002, 30003, 30004, 30005, 30006]],
     Map = ered_cluster:get_addr_to_client_map(R),
     Expected = lists:sort(maps:keys(Map)).
+
+t_primary_by_key(_) ->
+    R = start_cluster(),
+    Keys = [integer_to_binary(N) || N <- lists:seq(1, 100)],
+    [Client | _] = ered_cluster:get_clients(R),
+    {ok, ClusterSlots} = ered:command(Client, [<<"CLUSTER">>, <<"SLOTS">>]),
+    SlotMap = ered_lib:slotmap_master_slots(ClusterSlots),
+    AddrToClient = ered_cluster:get_addr_to_client_map(R),
+    ExpectedRoutingKeys = [routing_client(ered_lib:hash(Key), SlotMap, AddrToClient)
+                           || Key <- Keys],
+    Clients = ered_cluster:primaries_by_keys(R, Keys),
+    ExpectedRoutingKeys = Clients,
+    Clients = [ered_cluster:primary_by_key(R, Key) || Key <- Keys],
+    [] = ered_cluster:primaries_by_keys(R, []).
+
+routing_client(Slot, SlotMap, AddrToClient) ->
+    [Addr] = [Addr || {Start, End, Addr} <- SlotMap,
+                      Start =< Slot,
+                      Slot =< End],
+    maps:get(Addr, AddrToClient).
 
 
 move_key(SourcePort, DestPort, Key) ->
