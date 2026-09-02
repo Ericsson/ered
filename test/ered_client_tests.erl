@@ -22,6 +22,7 @@ run_test_() ->
      {spawn, fun buffer_time_not_flushed_by_reply_t/0},
      {spawn, fun send_backoff_tcp_t/0},
      {spawn, fun send_backoff_tls_t/0},
+     {spawn, fun readonly_mode_t/0},
      {spawn, fun fail_hello_t/0},
      {spawn, fun hello_with_auth_t/0},
      {spawn, fun hello_with_auth_fail_t/0},
@@ -50,6 +51,29 @@ fail_connect_t() ->
     true = Reason =:= econnrefused orelse Reason =:= eaddrnotavail,
     %% make sure there are no more connection down messages
     timeout = receive M -> M after 500 -> timeout end.
+
+
+readonly_mode_t() ->
+    {ok, ListenSock} = gen_tcp:listen(0, [binary, {active, false}]),
+    {ok, Port} = inet:port(ListenSock),
+    TestPid = self(),
+    Expected = <<"*1\r\n$8\r\nREADONLY\r\n"
+                 "*1\r\n$9\r\nREADWRITE\r\n">>,
+    ServerPid = spawn_link(fun() ->
+                                   {ok, Sock} = gen_tcp:accept(ListenSock),
+                                   {ok, Expected} = gen_tcp:recv(Sock, byte_size(Expected)),
+                                   ok = gen_tcp:send(Sock, <<"+OK\r\n+OK\r\n">>),
+                                   TestPid ! modes_changed,
+                                   receive done -> ok end
+                           end),
+    Client = start_client(Port),
+    expect_connection_up(Client),
+    ered_client:set_readonly_mode(Client),
+    ered_client:set_readwrite_mode(Client),
+    receive modes_changed -> ok end,
+    ?assertMatch(#{readonly := false},
+                 ered_client:state_to_map(sys:get_state(Client))),
+    ServerPid ! done.
 
 
 fail_parse_t() ->

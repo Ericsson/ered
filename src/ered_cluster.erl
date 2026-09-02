@@ -54,11 +54,9 @@
              slots :: binary(),                 % The byte at offset N is an
                                                 % index into the clients tuple
                                                 % for slot N.
-             clients = {} :: tuple(),           % Tuple of pid(), or addr() as
-                                                % placeholder when the process
-                                                % is gone.
+             clients = {} :: tuple(),           % Tuple of client pids.
              %% Tuple aligned with clients; each element contains the replica
-             %% client pids for the corresponding primary.
+             %% client pid and address pairs for the corresponding primary.
              replica_clients = {} :: tuple(),
 
              %% Pending synchronous commands
@@ -507,14 +505,14 @@ handle_info({slot_info, Version, Response, FromAddr}, State) ->
                     Clients = create_client_pid_tuple(MasterAddrToPid, AddrToIx),
                     ReplicaClients = create_replica_client_tuple(NewMap, AddrToPid, AddrToIx),
 
-                    %% Redis Cluster accepts slot reads on replicas only after
+                    %% The cluster replica accepts slot reads on replicas only after
                     %% the connection has entered READONLY mode. Restore the
                     %% default mode for nodes that have become primaries.
-                    [ered_client:change_mode(Client, readwrite)
+                    [ered_client:set_readwrite_mode(Client)
                      || Client <- tuple_to_list(Clients)],
-                    [ered_client:change_mode(Client, readonly)
+                    [ered_client:set_readonly_mode(Client)
                      || Replicas <- tuple_to_list(ReplicaClients),
-                        Client <- Replicas],
+                        {Client, _Addr} <- Replicas],
 
                     cancel_convergence_check(State1),
                     State2 = State1#st{slots = Slots,
@@ -616,7 +614,7 @@ handle_info({{'DOWN', Addr}, _Mon, process, Pid, ExitReason}, State)
                      ReplicaClients = replace_replica_client(Pid, NewPid,
                                                              State#st.replica_clients),
                      case ReplicaClients =/= State#st.replica_clients of
-                         true -> ered_client:change_mode(NewPid, readonly);
+                         true -> ered_client:set_readonly_mode(NewPid);
                          false -> ok
                      end,
                      State#st{clients = Clients,
@@ -713,14 +711,28 @@ send_command_to_slot_replica(Command, Slot, From, Opts, State, AttemptsLeft) ->
             end
     end.
 
+connected_replica([], _State) ->
+    none;
+%% Avoid random selection when there is only one replica.
+connected_replica([{Client, Addr}], State) ->
+    connected_replica(Client, Addr, [], State);
 connected_replica(ReplicaClients, State) ->
-    AvailableAddrs = sets:subtract(sets:subtract(State#st.up, State#st.reconnecting),
-                                   new_set(maps:keys(State#st.closing))),
-    AvailableClients = maps:values(maps:with(sets:to_list(AvailableAddrs), State#st.nodes)),
-    case [Client || Client <- ReplicaClients, lists:member(Client, AvailableClients)] of
-        [] -> none;
-        Clients -> lists:nth(rand:uniform(length(Clients)), Clients)
+    Client = lists:nth(rand:uniform(length(ReplicaClients)), ReplicaClients),
+    connected_replica(Client, ReplicaClients -- [Client], State).
+
+connected_replica({Client, Addr}, Remaining, State) ->
+    connected_replica(Client, Addr, Remaining, State).
+
+connected_replica(Client, Addr, Remaining, State) ->
+    case replica_available(Addr, State) of
+        true -> Client;
+        false -> connected_replica(Remaining, State)
     end.
+
+replica_available(Addr, State) ->
+    sets:is_element(Addr, State#st.up) andalso
+        not sets:is_element(Addr, State#st.reconnecting) andalso
+        not maps:is_key(Addr, State#st.closing).
 
 put_pending_command(From = {_, _}, Client, State) ->
     %% Gen_server call. Store so we can reply if Client crashes.
@@ -774,17 +786,17 @@ create_client_pid_tuple(AddrToPid, AddrToIx) ->
 
 create_replica_client_tuple(ClusterMap, AddrToPid, AddrToIx) ->
     ReplicaMap = ered_lib:slotmap_replica_nodes(ClusterMap),
-    IndexedReplicas = [{Ix, replica_client_pids(Master, ReplicaMap, AddrToPid)}
+    IndexedReplicas = [{Ix, replica_clients(Master, ReplicaMap, AddrToPid)}
                        || {Master, Ix} <- maps:to_list(AddrToIx)],
     list_to_tuple([Replicas || {_Ix, Replicas} <- lists:keysort(1, IndexedReplicas)]).
 
-replica_client_pids(Master, ReplicaMap, AddrToPid) ->
+replica_clients(Master, ReplicaMap, AddrToPid) ->
     ReplicaAddrs = maps:get(Master, ReplicaMap, []),
-    [maps:get(ReplicaAddr, AddrToPid) || ReplicaAddr <- ReplicaAddrs].
+    [{maps:get(ReplicaAddr, AddrToPid), ReplicaAddr} || ReplicaAddr <- ReplicaAddrs].
 
 replace_replica_client(OldPid, NewPid, ReplicaClients) ->
-    list_to_tuple([[case Client of OldPid -> NewPid; _ -> Client end
-                    || Client <- Replicas]
+    list_to_tuple([[case Client of OldPid -> {NewPid, Addr}; _ -> Replica end
+                    || Replica = {Client, Addr} <- Replicas]
                    || Replicas <- tuple_to_list(ReplicaClients)]).
 
 create_lookup_table(ClusterMap, AddrToIx) ->

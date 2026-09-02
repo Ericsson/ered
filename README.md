@@ -183,7 +183,7 @@ ered_cluster:command_replica(cluster_ref(), command(), key(), req_opts()) -> rep
 ```
 
 Send a command to a connected replica of the primary responsible for the key.
-Replica connections are put in Redis Cluster `READONLY` mode. Callers are
+Replica connections are put in `READONLY` mode. Callers are
 responsible for using only commands that are safe to execute on replicas, such
 as reads. Returns `{error, no_replica}` when the slot's primary has no
 replicas, and `{error, client_down}` when its replicas are unavailable.

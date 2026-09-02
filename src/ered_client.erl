@@ -14,7 +14,7 @@
          deactivate/1, reactivate/1,
          command/2, command/3,
          command_async/3, command_async/4,
-         change_mode/2]).
+         set_readonly_mode/1, set_readwrite_mode/1]).
 
 %% testing/debugging
 -export([state_to_map/1]).
@@ -79,7 +79,7 @@
          filling_batch = true :: boolean(),
 
          cluster_id = undefined :: undefined | binary(),
-         mode = readwrite :: readwrite | readonly,
+         readonly = false :: boolean(),
 
          queue_full_event_sent = false :: boolean(), % set to true when full, false when reaching queue_ok_level
          status :: init | up | node_down | node_deactivated,
@@ -297,14 +297,22 @@ command_async(ServerRef, Command, CallbackFun, Opts) when is_map(Opts) ->
                                 BufferTime}).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
--spec change_mode(pid(), readwrite | readonly) -> ok.
+-spec set_readonly_mode(pid()) -> ok.
 %%
-%% Set the cluster client mode. This is used internally by the cluster
-%% manager when a node is assigned a primary or replica role. Replica clients
-%% enter READONLY mode, while primary clients use the default READWRITE mode.
+%% Set a cluster client to accept reads from a replica. This is used internally
+%% by the cluster manager when a node is assigned a replica role.
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-change_mode(ServerRef, Mode) when Mode =:= readwrite; Mode =:= readonly ->
-    gen_server:cast(ServerRef, {change_mode, Mode}).
+set_readonly_mode(ServerRef) ->
+    gen_server:cast(ServerRef, set_readonly_mode).
+
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec set_readwrite_mode(pid()) -> ok.
+%%
+%% Set a cluster client to its default read-write mode. This is used internally
+%% by the cluster manager when a node is assigned a primary role.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+set_readwrite_mode(ServerRef) ->
+    gen_server:cast(ServerRef, set_readwrite_mode).
 
 %% Converts a state record to a map, for easier testing.
 %% Used in tests, after calling sys:get_state(EredClientPid).
@@ -396,16 +404,21 @@ handle_cast(deactivate, State) ->
 handle_cast(reactivate, #st{socket = none} = State) ->
     {noreply, start_node_down_timer(State)};
 
-handle_cast({change_mode, Mode}, #st{mode = Mode} = State) ->
-    {noreply, State};
-handle_cast({change_mode, Mode}, State) ->
-    Command = #command{data = ered_command:convert_to(mode_command(Mode)),
-                       replyto = fun(_) -> ok end},
-    {noreply, process_commands(State#st{mode = Mode,
-                                        waiting = q_in(Command, State#st.waiting)})};
+handle_cast(set_readonly_mode, State) ->
+    {noreply, set_readonly_mode(true, State)};
+handle_cast(set_readwrite_mode, State) ->
+    {noreply, set_readonly_mode(false, State)};
 
 handle_cast(reactivate, State) ->
     {noreply, State#st{status = up}}.
+
+set_readonly_mode(Enabled, #st{readonly = Enabled} = State) ->
+    State;
+set_readonly_mode(Enabled, State) ->
+    Command = #command{data = ered_command:convert_to(readonly_mode_command(Enabled)),
+                       replyto = fun(_) -> ok end},
+    process_commands(State#st{readonly = Enabled,
+                              waiting = q_in(Command, State#st.waiting)}).
 
 handle_info({Type, Socket, Data}, #st{socket = Socket} = State)
   when Type =:= tcp; Type =:= ssl ->
@@ -974,11 +987,11 @@ init_connection(State) ->
            end,
     Cmd3 = [[<<"SELECT">>, integer_to_binary(Opts#opts.select_db)] ||
                Opts#opts.select_db > 0],
-    %% READWRITE is the Redis default, so only replica connections need an
+    %% READWRITE is the default, so only replica connections need an
     %% explicit initialization command.
-    Cmd4 = case State#st.mode of
-               readonly -> mode_command(readonly);
-               readwrite -> []
+    Cmd4 = case State#st.readonly of
+               true -> readonly_mode_command(true);
+               false -> []
            end,
     case Cmd1 ++ Cmd2 ++ Cmd3 ++ Cmd4 of
         [] ->
@@ -1010,7 +1023,8 @@ init_connection(State) ->
             end
     end.
 
-mode_command(readonly) ->
+readonly_mode_command(true) ->
     [[<<"READONLY">>]];
-mode_command(readwrite) ->
+
+readonly_mode_command(false) ->
     [[<<"READWRITE">>]].
