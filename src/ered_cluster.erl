@@ -599,24 +599,26 @@ handle_info({{'DOWN', Addr}, _Mon, process, Pid, ExitReason}, State)
                  false ->
                      %% Restart it.
                      NewPid = start_client(Addr, State),
-                     Clients = case sets:is_element(Addr, State#st.masters) of
-                                   true ->
-                                       %% Replace pid in slot-to-pid lookup
-                                       List = tuple_to_list(State#st.clients),
-                                       NewList = [case P of
-                                                      Pid -> NewPid;
-                                                      Other -> Other
-                                                  end || P <- List],
-                                       list_to_tuple(NewList);
-                                   false ->
-                                       State#st.clients
-                               end,
-                     ReplicaClients = replace_replica_client(Pid, NewPid,
-                                                             State#st.replica_clients),
-                     case ReplicaClients =/= State#st.replica_clients of
-                         true -> ered_client:set_readonly_mode(NewPid);
-                         false -> ok
-                     end,
+                     {Clients, ReplicaClients} =
+                         case sets:is_element(Addr, State#st.masters) of
+                             true ->
+                                 %% Replace pid in slot-to-pid lookup.
+                                 List = tuple_to_list(State#st.clients),
+                                 NewList = [case P of
+                                                Pid -> NewPid;
+                                                Other -> Other
+                                            end || P <- List],
+                                 {list_to_tuple(NewList), State#st.replica_clients};
+                             false ->
+                                 NewReplicaClients =
+                                     replace_replica_client(Pid, NewPid,
+                                                            State#st.replica_clients),
+                                 case State#st.replica_clients of
+                                     NewReplicaClients -> ok;
+                                     _ -> ered_client:set_readonly_mode(NewPid)
+                                 end,
+                                 {State#st.clients, NewReplicaClients}
+                         end,
                      State#st{clients = Clients,
                               replica_clients = ReplicaClients,
                               nodes = maps:put(Addr, NewPid, State#st.nodes),
@@ -715,18 +717,16 @@ connected_replica([], _State) ->
     none;
 %% Avoid random selection when there is only one replica.
 connected_replica([{Client, Addr}], State) ->
-    connected_replica(Client, Addr, [], State);
-connected_replica(ReplicaClients, State) ->
-    Client = lists:nth(rand:uniform(length(ReplicaClients)), ReplicaClients),
-    connected_replica(Client, ReplicaClients -- [Client], State).
-
-connected_replica({Client, Addr}, Remaining, State) ->
-    connected_replica(Client, Addr, Remaining, State).
-
-connected_replica(Client, Addr, Remaining, State) ->
     case replica_available(Addr, State) of
         true -> Client;
-        false -> connected_replica(Remaining, State)
+        false -> none
+    end;
+connected_replica(ReplicaClients, State) ->
+    Selected = lists:nth(rand:uniform(length(ReplicaClients)), ReplicaClients),
+    {Client, Addr} = Selected,
+    case replica_available(Addr, State) of
+        true -> Client;
+        false -> connected_replica(ReplicaClients -- [Selected], State)
     end.
 
 replica_available(Addr, State) ->
