@@ -13,7 +13,8 @@
          connect/3, close/1,
          deactivate/1, reactivate/1,
          command/2, command/3,
-         command_async/3, command_async/4]).
+         command_async/3, command_async/4,
+         set_readonly_mode/1, set_readwrite_mode/1]).
 
 %% testing/debugging
 -export([state_to_map/1]).
@@ -78,6 +79,7 @@
          filling_batch = true :: boolean(),
 
          cluster_id = undefined :: undefined | binary(),
+         readonly = false :: boolean(),
 
          queue_full_event_sent = false :: boolean(), % set to true when full, false when reaching queue_ok_level
          status :: init | up | node_down | node_deactivated,
@@ -294,6 +296,24 @@ command_async(ServerRef, Command, CallbackFun, Opts) when is_map(Opts) ->
                                          replyto = CallbackFun},
                                 BufferTime}).
 
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec set_readonly_mode(pid()) -> ok.
+%%
+%% Set a cluster client to accept reads from a replica. This is used internally
+%% by the cluster manager when a node is assigned a replica role.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+set_readonly_mode(ServerRef) ->
+    gen_server:cast(ServerRef, set_readonly_mode).
+
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec set_readwrite_mode(pid()) -> ok.
+%%
+%% Set a cluster client to its default read-write mode. This is used internally
+%% by the cluster manager when a node is assigned a primary role.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+set_readwrite_mode(ServerRef) ->
+    gen_server:cast(ServerRef, set_readwrite_mode).
+
 %% Converts a state record to a map, for easier testing.
 %% Used in tests, after calling sys:get_state(EredClientPid).
 state_to_map(#st{} = State) ->
@@ -384,8 +404,21 @@ handle_cast(deactivate, State) ->
 handle_cast(reactivate, #st{socket = none} = State) ->
     {noreply, start_node_down_timer(State)};
 
+handle_cast(set_readonly_mode, State) ->
+    {noreply, set_readonly_mode(true, State)};
+handle_cast(set_readwrite_mode, State) ->
+    {noreply, set_readonly_mode(false, State)};
+
 handle_cast(reactivate, State) ->
     {noreply, State#st{status = up}}.
+
+set_readonly_mode(Enabled, #st{readonly = Enabled} = State) ->
+    State;
+set_readonly_mode(Enabled, State) ->
+    Command = #command{data = ered_command:convert_to(readonly_mode_command(Enabled)),
+                       replyto = fun(_) -> ok end},
+    process_commands(State#st{readonly = Enabled,
+                              waiting = q_in(Command, State#st.waiting)}).
 
 handle_info({Type, Socket, Data}, #st{socket = Socket} = State)
   when Type =:= tcp; Type =:= ssl ->
@@ -954,7 +987,13 @@ init_connection(State) ->
            end,
     Cmd3 = [[<<"SELECT">>, integer_to_binary(Opts#opts.select_db)] ||
                Opts#opts.select_db > 0],
-    case Cmd1 ++ Cmd2 ++ Cmd3 of
+    %% READWRITE is the default, so only replica connections need an
+    %% explicit initialization command.
+    Cmd4 = case State#st.readonly of
+               true -> readonly_mode_command(true);
+               false -> []
+           end,
+    case Cmd1 ++ Cmd2 ++ Cmd3 ++ Cmd4 of
         [] ->
             self() ! {init_command_reply, {ok, []}},
             State;
@@ -983,3 +1022,9 @@ init_connection(State) ->
                     start_connect_loop(wait, State)
             end
     end.
+
+readonly_mode_command(true) ->
+    [[<<"READONLY">>]];
+
+readonly_mode_command(false) ->
+    [[<<"READWRITE">>]].

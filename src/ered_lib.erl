@@ -3,6 +3,7 @@
 -export([slotmap_sort/1,
          slotmap_master_slots/1,
          slotmap_master_nodes/1,
+         slotmap_replica_nodes/1,
          slotmap_all_nodes/1,
          slotmap_replicas_of/2,
          hash/1]).
@@ -74,6 +75,19 @@ slotmap_master_nodes(ClusterSlotsReply) ->
     Nodes = [node_info(Master) || [_Start, _End, Master = [_Ip, Port | _] | _] <- ClusterSlotsReply,
                                   Port > 0],
     lists:usort(Nodes).
+
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec slotmap_replica_nodes(slot_map()) -> #{addr() => [addr()]}.
+%%
+%% Get replica addresses grouped by primary address, skipping nodes with an
+%% unknown address (port 0).
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+slotmap_replica_nodes(ClusterSlotsReply) ->
+    maps:from_list(
+      [{node_info(Master), [node_info(Replica) || Replica = [_ReplicaIp, Port | _] <- Replicas,
+                                                  Port > 0]}
+       || [_Start, _End, Master = [_Ip, MasterPort | _] | Replicas] <- ClusterSlotsReply,
+          MasterPort > 0]).
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec slotmap_all_nodes(slot_map()) -> [addr()].

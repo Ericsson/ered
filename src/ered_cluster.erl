@@ -11,6 +11,7 @@
 -export([connect/2, close/1,
          command/3, command/4, command_async/4, command_async/5,
          command_all/2, command_all/3,
+         command_replica/3, command_replica/4,
          get_clients/1,
          get_addr_to_client_map/1,
          update_slots/1, update_slots/2,
@@ -53,9 +54,10 @@
              slots :: binary(),                 % The byte at offset N is an
                                                 % index into the clients tuple
                                                 % for slot N.
-             clients = {} :: tuple(),           % Tuple of pid(), or addr() as
-                                                % placeholder when the process
-                                                % is gone.
+             clients = {} :: tuple(),           % Tuple of client pids.
+             %% Tuple aligned with clients; each element contains the replica
+             %% client pid and address pairs for the corresponding primary.
+             replica_clients = {} :: tuple(),
 
              %% Pending synchronous commands
              pending_commands = #{} :: #{gen_server:from() => pid()},
@@ -111,7 +113,7 @@
 -type client_ref()  :: pid().
 -type req_opts()    :: ered:req_opts().
 -type command()     :: ered_command:command().
--type reply()       :: ered_client:reply() | {error, unmapped_slot | client_down}.
+-type reply()       :: ered_client:reply() | {error, unmapped_slot | no_replica | client_down}.
 -type key()         :: binary().
 
 -type opt() ::
@@ -231,6 +233,25 @@ command_all(ServerRef, Command, Timeout) ->
     [ered_client:command(ClientRef, Cmd, Timeout) || ClientRef <- get_clients(ServerRef)].
 
 %% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+-spec command_replica(cluster_ref(), command(), key()) -> reply().
+-spec command_replica(cluster_ref(), command(), key(), timeout() | req_opts()) -> reply().
+%%
+%% Send a command to a connected replica of the primary responsible for Key.
+%% This function is intended for commands that are safe to execute on a
+%% replica, such as reads.
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+command_replica(ClusterRef, Command, Key) ->
+    command_replica(ClusterRef, Command, Key, infinity).
+
+command_replica(ClusterRef, Command, Key, Opts) when is_map(Opts) ->
+    C = ered_command:convert_to(Command),
+    Timeout = maps:get(timeout, Opts, infinity),
+    gen_server:call(ClusterRef, {command_replica, C, Key, Opts}, Timeout);
+command_replica(ClusterRef, Command, Key, Timeout) ->
+    C = ered_command:convert_to(Command),
+    gen_server:call(ClusterRef, {command_replica, C, Key, #{}}, Timeout).
+
+%% - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 -spec get_clients(cluster_ref()) -> [client_ref()].
 %%
 %% Get all primary node clients
@@ -329,6 +350,12 @@ init({Addrs, Opts, ClientSup, User}) ->
 handle_call({command, Command, Key, Opts}, From, State) ->
     Slot = ered_lib:hash(Key),
     State1 = send_command_to_slot(Command, Slot, From, Opts, State, State#st.redirect_attempts),
+    {noreply, State1};
+
+handle_call({command_replica, Command, Key, Opts}, From, State) ->
+    Slot = ered_lib:hash(Key),
+    State1 = send_command_to_slot_replica(Command, Slot, From, Opts, State,
+                                          State#st.redirect_attempts),
     {noreply, State1};
 
 handle_call(get_clients, _From, State) ->
@@ -476,10 +503,21 @@ handle_info({slot_info, Version, Response, FromAddr}, State) ->
                     AddrToIx = maps:from_list(lists:zip(maps:keys(MasterAddrToPid), Ixs)),
                     Slots = create_lookup_table(NewMap, AddrToIx),
                     Clients = create_client_pid_tuple(MasterAddrToPid, AddrToIx),
+                    ReplicaClients = create_replica_client_tuple(NewMap, AddrToPid, AddrToIx),
+
+                    %% The cluster replica accepts slot reads on replicas only after
+                    %% the connection has entered READONLY mode. Restore the
+                    %% default mode for nodes that have become primaries.
+                    [ered_client:set_readwrite_mode(Client)
+                     || Client <- tuple_to_list(Clients)],
+                    [ered_client:set_readonly_mode(Client)
+                     || Replicas <- tuple_to_list(ReplicaClients),
+                        {Client, _Addr} <- Replicas],
 
                     cancel_convergence_check(State1),
                     State2 = State1#st{slots = Slots,
                                        clients = Clients,
+                                       replica_clients = ReplicaClients,
                                        slot_map_version = Version + 1,
                                        slot_map = NewMap,
                                        slot_map_from = FromAddr,
@@ -561,19 +599,28 @@ handle_info({{'DOWN', Addr}, _Mon, process, Pid, ExitReason}, State)
                  false ->
                      %% Restart it.
                      NewPid = start_client(Addr, State),
-                     Clients = case sets:is_element(Addr, State#st.masters) of
-                                   true ->
-                                       %% Replace pid in slot-to-pid lookup
-                                       List = tuple_to_list(State#st.clients),
-                                       NewList = [case P of
-                                                      Pid -> NewPid;
-                                                      Other -> Other
-                                                  end || P <- List],
-                                       list_to_tuple(NewList);
-                                   false ->
-                                       State#st.clients
-                               end,
+                     {Clients, ReplicaClients} =
+                         case sets:is_element(Addr, State#st.masters) of
+                             true ->
+                                 %% Replace pid in slot-to-pid lookup.
+                                 List = tuple_to_list(State#st.clients),
+                                 NewList = [case P of
+                                                Pid -> NewPid;
+                                                Other -> Other
+                                            end || P <- List],
+                                 {list_to_tuple(NewList), State#st.replica_clients};
+                             false ->
+                                 NewReplicaClients =
+                                     replace_replica_client(Pid, NewPid,
+                                                            State#st.replica_clients),
+                                 case State#st.replica_clients of
+                                     NewReplicaClients -> ok;
+                                     _ -> ered_client:set_readonly_mode(NewPid)
+                                 end,
+                                 {State#st.clients, NewReplicaClients}
+                         end,
                      State#st{clients = Clients,
+                              replica_clients = ReplicaClients,
                               nodes = maps:put(Addr, NewPid, State#st.nodes),
                               pending = sets:add_element(Addr, State#st.pending)}
              end,
@@ -642,6 +689,51 @@ send_command_to_slot(Command, Slot, From, Opts, State, AttemptsLeft) ->
             put_pending_command(From, Client, State)
     end.
 
+send_command_to_slot_replica(Command, Slot, From, Opts, State, AttemptsLeft) ->
+    case binary:at(State#st.slots, Slot) of
+        0 ->
+            reply(From, {error, unmapped_slot}, none),
+            State;
+        Ix ->
+            ReplicaClients = element(Ix, State#st.replica_clients),
+            case ReplicaClients of
+                [] ->
+                    reply(From, {error, no_replica}, none),
+                    State;
+                _ ->
+                    case connected_replica(ReplicaClients, State) of
+                        none ->
+                            reply(From, {error, client_down}, none),
+                            State;
+                        Client ->
+                            Fun = create_reply_fun(Command, Slot, Client, From, Opts, State, AttemptsLeft),
+                            ered_client:command_async(Client, Command, Fun, Opts),
+                            put_pending_command(From, Client, State)
+                    end
+            end
+    end.
+
+connected_replica([], _State) ->
+    none;
+%% Avoid random selection when there is only one replica.
+connected_replica([{Client, Addr}], State) ->
+    case replica_available(Addr, State) of
+        true -> Client;
+        false -> none
+    end;
+connected_replica(ReplicaClients, State) ->
+    Selected = lists:nth(rand:uniform(length(ReplicaClients)), ReplicaClients),
+    {Client, Addr} = Selected,
+    case replica_available(Addr, State) of
+        true -> Client;
+        false -> connected_replica(ReplicaClients -- [Selected], State)
+    end.
+
+replica_available(Addr, State) ->
+    sets:is_element(Addr, State#st.up) andalso
+        not sets:is_element(Addr, State#st.reconnecting) andalso
+        not maps:is_key(Addr, State#st.closing).
+
 put_pending_command(From = {_, _}, Client, State) ->
     %% Gen_server call. Store so we can reply if Client crashes.
     State#st{pending_commands = maps:put(From, Client, State#st.pending_commands)};
@@ -691,6 +783,21 @@ create_client_pid_tuple(AddrToPid, AddrToIx) ->
     %% Sort the list and remove the index to get the pids in the right order
     Pids = [Pid || {_Ix, Pid} <- lists:sort(IxPid)],
     list_to_tuple(Pids).
+
+create_replica_client_tuple(ClusterMap, AddrToPid, AddrToIx) ->
+    ReplicaMap = ered_lib:slotmap_replica_nodes(ClusterMap),
+    IndexedReplicas = [{Ix, replica_clients(Master, ReplicaMap, AddrToPid)}
+                       || {Master, Ix} <- maps:to_list(AddrToIx)],
+    list_to_tuple([Replicas || {_Ix, Replicas} <- lists:keysort(1, IndexedReplicas)]).
+
+replica_clients(Master, ReplicaMap, AddrToPid) ->
+    ReplicaAddrs = maps:get(Master, ReplicaMap, []),
+    [{maps:get(ReplicaAddr, AddrToPid), ReplicaAddr} || ReplicaAddr <- ReplicaAddrs].
+
+replace_replica_client(OldPid, NewPid, ReplicaClients) ->
+    list_to_tuple([[case Client of OldPid -> {NewPid, Addr}; _ -> Replica end
+                    || Replica = {Client, Addr} <- Replicas]
+                   || Replicas <- tuple_to_list(ReplicaClients)]).
 
 create_lookup_table(ClusterMap, AddrToIx) ->
     %% Replace the Addr in the slot map with the index using the lookup

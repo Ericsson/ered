@@ -7,6 +7,7 @@
 all() ->
     [
      t_command,
+     t_command_replica,
      t_command_async,
      t_command_all,
      t_command_client,
@@ -17,6 +18,7 @@ all() ->
      t_scan_delete_keys,
      t_hard_failover,
      t_manual_failover,
+     t_command_replica_after_failover,
      t_manual_failover_then_old_master_down,
      t_blackhole,
      t_blackhole_all_nodes,
@@ -31,7 +33,8 @@ all() ->
      t_new_cluster_master,
      t_ask_redirect,
      t_missing_slot,
-     t_client_map
+     t_client_map,
+     t_command_replica_without_replicas
     ].
 
 -define(PORTS, [30001, 30002, 30003, 30004, 30005, 30006]).
@@ -77,12 +80,15 @@ init_per_testcase(_Testcase, Config) ->
     end.
 
 create_cluster() ->
+    create_cluster(1).
+
+create_cluster(ReplicaCount) ->
     Image = os:getenv("SERVER_DOCKER_IMAGE", ?DEFAULT_SERVER_DOCKER_IMAGE),
     Hosts = [io_lib:format("127.0.0.1:~p ", [P]) || P <- ?PORTS],
     Cmd = io_lib:format("echo 'yes' | "
                         "docker run --name redis-cluster --rm --net=host -i ~s "
-                        "redis-cli --cluster-replicas 1 --cluster create ~s",
-                        [Image, Hosts]),
+                        "redis-cli --cluster-replicas ~p --cluster create ~s",
+                        [Image, ReplicaCount, Hosts]),
     cmd_log(Cmd).
 
 reset_cluster() ->
@@ -118,6 +124,17 @@ t_command(_) ->
                           {ok, <<"OK">>} = ered_cluster:command(R, [<<"SET">>, N, N], N)
                   end,
                   [integer_to_binary(N) || N <- lists:seq(1,100)]),
+    no_more_msgs().
+
+
+t_command_replica(_) ->
+    R = start_cluster(),
+    Key = <<"replica-key">>,
+    Value = <<"replica-value">>,
+    {ok, <<"OK">>} = ered_cluster:command(R, [<<"SET">>, Key, Value], Key),
+    {ok, Value} = ered_cluster:command_replica(R, [<<"GET">>, Key], Key),
+    {ok, Info} = ered_cluster:command_replica(R, [<<"CLIENT">>, <<"INFO">>], Key),
+    {_, _} = binary:match(Info, <<"flags=r">>),
     no_more_msgs().
 
 
@@ -349,6 +366,24 @@ t_manual_failover(_) ->
     ct:pal("~p\n", [os:cmd("redis-cli -p " ++ integer_to_list(Port) ++ " ROLE")]),
 
     ?MSG(#{msg_type := slot_map_updated}),
+    no_more_msgs().
+
+
+t_command_replica_after_failover(_) ->
+    R = start_cluster(),
+    [Client|_] = ered_cluster:get_clients(R),
+    {ok, [[Start, End | _] | _]} = ered:command(Client, [<<"CLUSTER">>, <<"SLOTS">>]),
+    Key = key_in_slot_range(Start, End, 0),
+    {ok, <<"OK">>} = ered_cluster:command(R, [<<"SET">>, Key, <<"before">>], Key),
+    {ok, <<"before">>} = ered_cluster:command_replica(R, [<<"GET">>, Key], Key),
+
+    {_OldMasterPort, _NewMasterPort} = do_manual_failover(R),
+    %% The first primary-routed command receives MOVED and refreshes the slot map.
+    {ok, <<"OK">>} = ered_cluster:command(R, [<<"SET">>, Key, <<"after">>], Key),
+    ?MSG(#{msg_type := slot_map_updated}),
+    {ok, <<"after">>} = ered_cluster:command_replica(R, [<<"GET">>, Key], Key),
+    {ok, Info} = ered_cluster:command_replica(R, [<<"CLIENT">>, <<"INFO">>], Key),
+    {_, _} = binary:match(Info, <<"flags=r">>),
     no_more_msgs().
 
 t_manual_failover_then_old_master_down(_) ->
@@ -1001,6 +1036,20 @@ t_client_map(_) ->
     Expected = lists:sort(maps:keys(Map)).
 
 
+t_command_replica_without_replicas(_) ->
+    %% start_cluster/0 clears all primary databases, which is required before
+    %% CLUSTER RESET can turn the primary nodes into a replica-free cluster.
+    R0 = start_cluster(),
+    ered_cluster:close(R0),
+    ?MSG(#{msg_type := cluster_stopped, reason := normal}),
+    reset_cluster(),
+    create_cluster(0),
+    wait_for_consistent_cluster(),
+    R = start_cluster(),
+    {error, no_replica} = ered_cluster:command_replica(R, [<<"GET">>, <<"key">>], <<"key">>),
+    no_more_msgs().
+
+
 move_key(SourcePort, DestPort, Key) ->
     Slot = integer_to_list(ered_lib:hash(Key)),
     SourceNodeId = string:trim(cmd_log("redis-cli -p " ++ SourcePort ++ " CLUSTER MYID")),
@@ -1067,6 +1116,13 @@ get_master_from_key(R, Key) ->
     hd([Port || [SlotStart, SlotEnd, [_Ip, Port| _] | _] <- get_slot_map(R),
                 SlotStart =< Slot,
                 Slot =< SlotEnd]).
+
+key_in_slot_range(Start, End, N) ->
+    Key = integer_to_binary(N),
+    case ered_lib:hash(Key) of
+        Slot when Slot >= Start, Slot =< End -> Key;
+        _ -> key_in_slot_range(Start, End, N + 1)
+    end.
 
 
 get_slot_map(R) ->
